@@ -1,0 +1,233 @@
+name: Build Computer Use Runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'runtime/requirements.txt'
+      - 'runtime/requirements-win.txt'
+      - 'runtime/requirements-linux.txt'
+      - 'runtime/linux_helper.py'
+      - '.github/workflows/computer-use-runtime.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: computer-use-runtime-v1
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+  RUNTIME_RELEASE_TAG: computer-use-runtime-v1
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            runtime_key: win32-x64
+            requirements: runtime/requirements-win.txt
+          - runner: macos-latest
+            runtime_key: darwin-arm64
+            requirements: runtime/requirements.txt
+          - runner: macos-15-intel
+            runtime_key: darwin-x64
+            requirements: runtime/requirements.txt
+          - runner: ubuntu-22.04
+            runtime_key: linux-x64
+            requirements: runtime/requirements-linux.txt
+
+    runs-on: ${{ matrix.runner }}
+    name: Runtime (${{ matrix.runtime_key }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Build relocatable runtime
+        shell: bash
+        env:
+          RUNTIME_KEY: ${{ matrix.runtime_key }}
+          REQUIREMENTS: ${{ matrix.requirements }}
+        run: |
+          set -euo pipefail
+
+          WORK="$RUNNER_TEMP/computer-use-runtime"
+          INSTALL_DIR="$WORK/managed-python"
+          BUNDLE_DIR="$WORK/bundle"
+          OUT_DIR="$RUNNER_TEMP/computer-use-runtime-assets"
+          RUNTIME_VERSION="v1-${GITHUB_SHA:0:12}"
+          ASSET_NAME="computer-use-runtime-${RUNTIME_KEY}-${RUNTIME_VERSION}.tar.gz"
+
+          rm -rf "$WORK" "$OUT_DIR"
+          mkdir -p "$INSTALL_DIR" "$BUNDLE_DIR" "$OUT_DIR"
+
+          export UV_PYTHON_INSTALL_DIR="$INSTALL_DIR"
+          uv python install "$PYTHON_VERSION" --install-dir "$INSTALL_DIR"
+          PYTHON_BIN="$(uv python find "$PYTHON_VERSION" --managed-python | tr -d '\r')"
+          if [[ "$RUNTIME_KEY" == win32-* ]]; then
+            PYTHON_BIN="$(cygpath -u "$PYTHON_BIN")"
+          fi
+          PYTHON_BIN="$(realpath "$PYTHON_BIN")"
+
+          uv pip install \
+            --python "$PYTHON_BIN" \
+            --system \
+            --break-system-packages \
+            -r "$REQUIREMENTS"
+
+          if [[ "$RUNTIME_KEY" == win32-* ]]; then
+            "$PYTHON_BIN" -c 'import mss; from PIL import Image; import pyautogui, win32api, psutil, pyperclip, screeninfo'
+            PYTHON_ROOT="$(dirname "$PYTHON_BIN")"
+          elif [[ "$RUNTIME_KEY" == linux-* ]]; then
+            "$PYTHON_BIN" -c 'import mss; from PIL import Image; import psutil, pyperclip, screeninfo'
+            PYTHON_ROOT="$(dirname "$(dirname "$PYTHON_BIN")")"
+          else
+            "$PYTHON_BIN" -c 'import mss; from PIL import Image; import pyautogui, Quartz, AppKit'
+            PYTHON_ROOT="$(dirname "$(dirname "$PYTHON_BIN")")"
+          fi
+
+          cp -a "$PYTHON_ROOT" "$BUNDLE_DIR/python"
+          PYTHON_RELATIVE="${PYTHON_BIN#"$PYTHON_ROOT"/}"
+          BUNDLED_PYTHON="$BUNDLE_DIR/python/$PYTHON_RELATIVE"
+          if [ ! -f "$BUNDLED_PYTHON" ]; then
+            echo "::error::Bundled Python path is missing: $BUNDLED_PYTHON"
+            find "$BUNDLE_DIR" -maxdepth 4 -type f | sort | head -200
+            exit 1
+          fi
+
+          cat > "$BUNDLE_DIR/THIRD_PARTY_NOTICES.txt" <<'NOTICE'
+          This runtime contains CPython from Astral's python-build-standalone
+          distributions and the Python packages declared in CyberCode's
+          runtime requirements files. Package license metadata remains in the
+          bundled distribution and site-packages directories.
+          NOTICE
+
+          tar -czf "$OUT_DIR/$ASSET_NAME" -C "$BUNDLE_DIR" .
+          tar -tzf "$OUT_DIR/$ASSET_NAME" >/dev/null
+
+          export ASSET_PATH="$OUT_DIR/$ASSET_NAME"
+          export ASSET_NAME
+          export PYTHON_PATH="python/$PYTHON_RELATIVE"
+          export RUNTIME_KEY
+          export RUNTIME_VERSION
+          node <<'NODE'
+          const crypto = require('node:crypto')
+          const fs = require('node:fs')
+          const path = require('node:path')
+
+          const assetPath = process.env.ASSET_PATH
+          const bytes = fs.readFileSync(assetPath)
+          const metadata = {
+            runtimeVersion: process.env.RUNTIME_VERSION,
+            key: process.env.RUNTIME_KEY,
+            asset: {
+              filename: process.env.ASSET_NAME,
+              sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+              size: bytes.length,
+              pythonPath: process.env.PYTHON_PATH.split(path.sep).join('/'),
+            },
+          }
+          fs.writeFileSync(
+            path.join(path.dirname(assetPath), `asset-${metadata.key}.json`),
+            `${JSON.stringify(metadata, null, 2)}\n`,
+          )
+          NODE
+
+          ls -lh "$OUT_DIR"
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-use-runtime-${{ matrix.runtime_key }}
+          path: ${{ runner.temp }}/computer-use-runtime-assets/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    name: Publish Runtime
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download runtime artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: computer-use-runtime-*
+          path: runtime-assets
+          merge-multiple: true
+
+      - name: Generate runtime manifest
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs')
+          const path = require('node:path')
+
+          const root = 'runtime-assets'
+          const metadataFiles = fs.readdirSync(root)
+            .filter(name => name.startsWith('asset-') && name.endsWith('.json'))
+            .sort()
+          const metadata = metadataFiles.map(name =>
+            JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')),
+          )
+          const required = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64']
+          for (const key of required) {
+            if (!metadata.some(item => item.key === key)) {
+              throw new Error(`Missing runtime metadata for ${key}`)
+            }
+          }
+
+          const versions = new Set(metadata.map(item => item.runtimeVersion))
+          if (versions.size !== 1) throw new Error('Runtime matrix produced different versions')
+          const manifest = {
+            schemaVersion: 1,
+            runtimeVersion: [...versions][0],
+            assets: Object.fromEntries(metadata.map(item => [item.key, item.asset])),
+          }
+          fs.writeFileSync(
+            path.join(root, 'computer-use-runtime-manifest.json'),
+            `${JSON.stringify(manifest, null, 2)}\n`,
+          )
+          NODE
+
+          for archive in runtime-assets/*.tar.gz; do
+            test -s "$archive"
+            tar -tzf "$archive" >/dev/null
+          done
+          cat runtime-assets/computer-use-runtime-manifest.json
+
+      - name: Publish stable runtime release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$RUNTIME_RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RUNTIME_RELEASE_TAG" \
+              --title 'CyberCode Computer Use Runtime v1' \
+              --notes 'Platform-specific private runtimes downloaded automatically by CyberCode. Users do not need to install Python.' \
+              --prerelease \
+              --latest=false
+          else
+            gh release edit "$RUNTIME_RELEASE_TAG" --prerelease
+          fi
+
+          # Archives are immutable and versioned. Publish them before switching
+          # the manifest so a client can never observe a new checksum while the
+          # corresponding archive is still unavailable.
+          gh release upload "$RUNTIME_RELEASE_TAG" runtime-assets/*.tar.gz --clobber
+          gh release upload "$RUNTIME_RELEASE_TAG" \
+            runtime-assets/computer-use-runtime-manifest.json --clobber

@@ -137,6 +137,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           normalizeSelectedProjects(state.selectedProjects, availableProjects),
         ),
         isLoading: false,
+        error: null,
       }))
     } catch (err) {
       set({ error: (err as Error).message, isLoading: false })

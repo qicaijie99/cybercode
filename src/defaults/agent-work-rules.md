@@ -29,6 +29,7 @@ These default rules keep CyberCode coding sessions focused and verifiable. Apply
 ## 5. Efficient Codebase Exploration
 
 - When `CodeGraph` is available, use it for symbol discovery, architecture context, and change-impact analysis before broad file scans. For exact UI text, config, CSS, Markdown, or error strings, use `Grep` first, then map the owning symbol and dependents with `CodeGraph` before broad reads. Keep graph queries within the smallest useful token budget.
+- For websites and local web applications, prefer the `agent-browser` tools for DOM inspection, interaction, and screenshots. They capture browser content directly without desktop screen-recording permission. Use Computer Use only when the task requires another desktop application, the full desktop, or the user's existing signed-in browser session.
 - Treat an injected `<codegraph_context>` block as source context that has already been read. Continue with graph tools or targeted file reads instead of repeating a broad scan, and verify inferred or unknown-confidence relationships before editing.
 - Use direct search and file reads for exact known paths or when graph results are insufficient, and verify important findings against source before editing.
 

@@ -10,6 +10,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import type { PairedUser, PairingState } from './config.js'
+import type { ImPlatform } from './platform.js'
 import {
   getAdapterConfigPath,
   getExistingAdapterConfigPath,
@@ -64,9 +65,12 @@ function readConfigFile(): Record<string, any> {
 function writeConfigFile(data: Record<string, any>): void {
   const filePath = getConfigWritePath()
   const dir = path.dirname(filePath)
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const tmp = `${filePath}.tmp.${Date.now()}`
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', {
+    encoding: 'utf-8',
+    mode: 0o600,
+  })
   fs.renameSync(tmp, filePath)
 }
 
@@ -80,7 +84,7 @@ export function generatePairingCode(): string {
 
 /** 检查用户是否已配对（pairedUsers + allowedUsers 并集） */
 export function isPaired(
-  platform: 'telegram' | 'feishu',
+  platform: ImPlatform,
   userId: string | number,
   config: Record<string, any>,
 ): boolean {
@@ -103,7 +107,7 @@ export function isPaired(
 export function tryPair(
   messageText: string,
   senderInfo: { userId: string | number; displayName: string },
-  platform: 'telegram' | 'feishu',
+  platform: ImPlatform,
 ): boolean {
   const file = readConfigFile()
   const pairing: PairingState = file.pairing ?? { code: null, expiresAt: null, createdAt: null }
@@ -145,7 +149,7 @@ export function tryPair(
 }
 
 /** 统一的用户授权检查（供各 adapter 调用） */
-export function isAllowedUser(platform: 'telegram' | 'feishu', userId: string | number): boolean {
+export function isAllowedUser(platform: ImPlatform, userId: string | number): boolean {
   try {
     const cfgFile = readConfigFile()
     return isPaired(platform, userId, cfgFile)

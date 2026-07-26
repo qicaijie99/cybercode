@@ -4,7 +4,11 @@ import { Sidebar } from './Sidebar'
 import { ContentRouter } from './ContentRouter'
 import { ToastContainer } from '../shared/Toast'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { useUIStore, type SettingsTab } from '../../stores/uiStore'
+import {
+  COMPACT_APP_LAYOUT_QUERY,
+  useUIStore,
+  type SettingsTab,
+} from '../../stores/uiStore'
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { initializeDesktopServerUrl } from '../../lib/desktopRuntime'
 import { TabBar } from './TabBar'
@@ -12,6 +16,7 @@ import { StartupErrorView } from './StartupErrorView'
 import { SettingsPanel } from './SettingsPanel'
 import { useTabStore } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useSessionStore } from '../../stores/sessionStore'
 import { ChatModeSidebar } from '../chat/ChatModeSidebar'
 import { useTranslation } from '../../i18n'
 
@@ -33,6 +38,8 @@ function dismissBootSplash() {
 export function AppShell() {
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
+  const syncSidebarForViewport = useUIStore((s) => s.syncSidebarForViewport)
   const settingsOpen = useUIStore((s) => s.settingsOpen)
   const closeSettings = useUIStore((s) => s.closeSettings)
   const activeTabId = useTabStore((s) => s.activeTabId)
@@ -42,14 +49,43 @@ export function AppShell() {
   const t = useTranslation()
   const [ready, setReady] = useState(false)
   const [startupError, setStartupError] = useState<string | null>(null)
+  const [compactLayout, setCompactLayout] = useState(() => (
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(COMPACT_APP_LAYOUT_QUERY).matches
+  ))
 
   useEffect(() => {
     if (settingsOpen) closeSettings()
+    if (compactLayout) useUIStore.setState({ sidebarOpen: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId])
 
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const media = window.matchMedia(COMPACT_APP_LAYOUT_QUERY)
+    const update = (compact: boolean) => {
+      setCompactLayout(compact)
+      syncSidebarForViewport(compact)
+    }
+    const onChange = (event: MediaQueryListEvent) => update(event.matches)
+
+    update(media.matches)
+    media.addEventListener?.('change', onChange)
+    return () => media.removeEventListener?.('change', onChange)
+  }, [syncSidebarForViewport])
+
+  useEffect(() => {
     let cancelled = false
+
+    const loadStartupSessions = async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await useSessionStore.getState().fetchSessions()
+        if (!useSessionStore.getState().error) return
+        await new Promise((resolve) => setTimeout(resolve, 800))
+      }
+      console.warn('[desktop] Failed to load startup sessions:', useSessionStore.getState().error)
+    }
 
     const bootstrap = async () => {
       try {
@@ -68,6 +104,7 @@ export function AppShell() {
         useTabStore.getState().restoreTabs().catch((error) => {
           console.warn('[desktop] Failed to restore startup tabs:', error)
         }),
+        loadStartupSessions(),
       ])
 
       const { activeTabId: activeId, tabs } = useTabStore.getState()
@@ -117,11 +154,24 @@ export function AppShell() {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-transparent font-sans text-[var(--color-text-primary)]">
+    <div
+      className="flex h-screen w-screen overflow-hidden bg-transparent font-sans text-[var(--color-text-primary)]"
+      data-compact-layout={compactLayout ? 'true' : 'false'}
+    >
       <div className="relative flex h-full w-full overflow-hidden bg-transparent">
         <IconRail />
+        {compactLayout && sidebarOpen && (
+          <button
+            type="button"
+            className="app-sidebar-backdrop"
+            aria-label={t('sidebar.collapse')}
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
         <div
-          className={`relative z-20 flex h-full shrink-0 overflow-hidden border-r border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] transition-[width] duration-[var(--motion-sidebar-duration)] ease-[var(--motion-sidebar-easing)] ${sidebarOpen ? 'w-[var(--sidebar-width)]' : 'w-0'}`}
+          data-testid="app-sidebar-shell"
+          data-state={sidebarOpen ? 'open' : 'closed'}
+          className={`app-sidebar-shell relative z-20 flex h-full shrink-0 overflow-hidden border-r border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] transition-[width] duration-[var(--motion-sidebar-duration)] ease-[var(--motion-sidebar-easing)] ${sidebarOpen ? 'w-[var(--sidebar-width)]' : 'w-0'}`}
         >
           <Sidebar />
         </div>

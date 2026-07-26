@@ -44,7 +44,7 @@ type InsightFile = { entries: string[] }
 
 type InsightLog = {
   timestamp: string
-  trigger: 'explicit' | 'interval'
+  trigger: 'explicit' | 'interval' | 'meta'
   target: 'user' | 'brief'
   changed: boolean
   content?: string

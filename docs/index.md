@@ -41,7 +41,7 @@ features:
     details: 接入 OpenAI、DeepSeek、Ollama 等任意兼容模型
     link: /guide/third-party-models
   - title: IM 接入
-    details: 在桌面端 webapp 配置 Telegram / 飞书，并通过独立 adapter 进程远程对话 CyberCode
+    details: 微信与 QQ 扫码即用，同时支持飞书和 Telegram，无需公网回调
     link: /im/
   - title: Computer Use
     details: 桌面控制功能 — 截屏、鼠标、键盘操作（Python Bridge 实现）

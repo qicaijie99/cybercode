@@ -23,6 +23,13 @@ Fontshare. Attribution and license details are included in
 `ca96624a56bd078437bca8184e78163e5039ad19`. Natural Earth map data is in
 the public domain.
 
+## Apache ECharts China Map Data
+
+`assets/china.geojson` is derived from the China map data distributed with
+Apache ECharts 4.0.2. Province names were normalized to the full names returned
+by CyberCode's analytics API. The source data is available under the Apache
+License 2.0.
+
 ## DB-IP Lite
 
 The deployed service downloads the monthly DB-IP City Lite database under

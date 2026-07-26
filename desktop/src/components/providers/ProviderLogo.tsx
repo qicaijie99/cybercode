@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import {
   resolveProviderIdentity,
   type ProviderLogoIdentity,
@@ -19,10 +19,10 @@ type ProviderLogoProps = {
 }
 
 const SIZE_CLASS_NAMES: Record<ProviderLogoSize, string> = {
-  xs: 'h-[22px] w-[22px] rounded-[7px]',
-  sm: 'h-[30px] w-[30px] rounded-[9px]',
-  md: 'h-[40px] w-[40px] rounded-[11px]',
-  lg: 'h-[50px] w-[50px] rounded-[13px]',
+  xs: 'h-[22px] w-[22px] rounded-[6px]',
+  sm: 'h-[30px] w-[30px] rounded-[7px]',
+  md: 'h-[40px] w-[40px] rounded-[8px]',
+  lg: 'h-[50px] w-[50px] rounded-[9px]',
 }
 
 const GLYPH_SIZE: Record<ProviderLogoSize, number> = {
@@ -44,16 +44,20 @@ export function ProviderLogo({
 }: ProviderLogoProps) {
   const identity = resolveProviderIdentity({ providerId, name, baseUrl, modelId })
   const label = name.trim() || identity.label
-  const usesAsset = Boolean(identity.assetSrc)
+  const [assetFailed, setAssetFailed] = useState(false)
+  const usesAsset = Boolean(identity.assetSrc) && !assetFailed
+
+  useEffect(() => {
+    setAssetFailed(false)
+  }, [identity.assetSrc])
+
   const style = {
     '--provider-accent': identity.accent,
     borderColor: active ? identity.accent : hexToRgba(identity.accent, 0.2),
-    background: active
-      ? `linear-gradient(145deg, ${hexToRgba(identity.accent, 0.16)} 0%, rgba(255,255,255,0) 100%), var(--color-surface-container-lowest)`
-      : `linear-gradient(145deg, ${hexToRgba(identity.accent, 0.09)} 0%, rgba(255,255,255,0) 100%), var(--color-surface-container-lowest)`,
+    background: identity.assetBackground ?? '#ffffff',
     boxShadow: active
-      ? `0 0 0 1px ${hexToRgba(identity.accent, 0.15)}, 0 10px 24px ${hexToRgba(identity.accent, 0.13)}`
-      : `0 1px 2px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.45)`,
+      ? `0 0 0 1px ${hexToRgba(identity.accent, 0.14)}, 0 5px 14px ${hexToRgba(identity.accent, 0.12)}`
+      : '0 1px 2px rgba(15, 23, 42, 0.06)',
   } as CSSProperties
   const assetScale = `${Math.round((identity.assetScale ?? 0.7) * 100)}%`
 
@@ -66,10 +70,6 @@ export function ProviderLogo({
       className={`relative flex shrink-0 items-center justify-center overflow-hidden border transition-[border-color,box-shadow,transform] duration-150 ${SIZE_CLASS_NAMES[size]} ${className}`}
       style={style}
     >
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-[2px] rounded-[inherit] border border-white/35 dark:border-white/10"
-      />
       {usesAsset ? (
         <img
           src={identity.assetSrc}
@@ -78,6 +78,7 @@ export function ProviderLogo({
           className="relative z-[1] block select-none"
           decoding="async"
           draggable={false}
+          onError={() => setAssetFailed(true)}
           style={{
             width: assetScale,
             height: assetScale,

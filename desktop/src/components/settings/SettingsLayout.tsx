@@ -3,22 +3,29 @@ import type { ReactNode } from 'react'
 export function SettingsPage({
   title,
   description,
+  layout = 'centered',
   children,
 }: {
   title?: string
   description?: string
   /** Kept for existing callsites; settings page headers intentionally render text only. */
   icon?: string
+  layout?: 'centered' | 'workspace'
   children: ReactNode
 }) {
   const hasHeader = !!(title || description)
   return (
-    <div className="mx-auto flex w-full max-w-[896px] flex-col gap-[24px]">
+    <div
+      data-settings-layout={layout}
+      className={`settings-page flex w-full flex-col gap-[20px] ${
+        layout === 'workspace' ? 'max-w-none' : 'mx-auto max-w-[896px]'
+      }`}
+    >
       {hasHeader && (
-        <header className="flex min-h-[72px] flex-col justify-center gap-[6px] pb-[4px]">
+        <header className="settings-page-header flex min-h-[60px] flex-col justify-center gap-[6px] pb-[4px]">
           <div className="flex items-center">
             {title && (
-              <h1 className="text-[22px] font-bold tracking-normal text-[var(--color-text-primary)]">
+              <h1 className="settings-page-title text-[22px] font-bold tracking-normal text-[var(--color-text-primary)]">
                 {title}
               </h1>
             )}
@@ -145,11 +152,13 @@ export function Switch({
   onChange,
   ariaLabel,
   disabled = false,
+  accent = false,
 }: {
   checked: boolean
   onChange: (next: boolean) => void
   ariaLabel?: string
   disabled?: boolean
+  accent?: boolean
 }) {
   return (
     <button
@@ -162,13 +171,17 @@ export function Switch({
       className={`relative inline-flex h-[26px] w-[44px] items-center rounded-full transition-colors duration-200 focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60 ${
         disabled ? '' : 'cursor-pointer'
       } ${
-        checked ? 'bg-black dark:bg-white' : 'bg-black/15 dark:bg-white/20'
+        checked
+          ? accent
+            ? 'bg-[#1473e6] dark:bg-[#64a8ff]'
+            : 'bg-black dark:bg-white'
+          : 'bg-black/15 dark:bg-white/20'
       }`}
     >
       <span
         className={`inline-block h-[22px] w-[22px] rounded-full shadow-[0_2px_4px_rgba(0,0,0,0.20),0_1px_1px_rgba(0,0,0,0.04)] transition-transform duration-200 ${
           checked ? 'translate-x-[20px]' : 'translate-x-[2px]'
-        } ${checked ? 'bg-white dark:bg-black' : 'bg-white'}`}
+        } ${checked ? (accent ? 'bg-white' : 'bg-white dark:bg-black') : 'bg-white'}`}
       />
     </button>
   )

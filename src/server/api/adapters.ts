@@ -6,16 +6,29 @@
  */
 
 import { adapterService } from '../services/adapterService.js'
+import { adapterLoginService, type AdapterLoginPlatform } from '../services/adapterLoginService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
-const ALLOWED_TOP_KEYS = new Set(['serverUrl', 'defaultProjectDir', 'telegram', 'feishu', 'pairing'])
+const ALLOWED_TOP_KEYS = new Set([
+  'serverUrl',
+  'defaultProjectDir',
+  'telegram',
+  'feishu',
+  'weixin',
+  'qq',
+  'pairing',
+])
 
 export async function handleAdaptersApi(
   req: Request,
   _url: URL,
-  _segments: string[],
+  segments: string[],
 ): Promise<Response> {
   try {
+    if (segments[2] === 'login') {
+      return await handleAdapterLoginApi(req, segments)
+    }
+
     if (req.method === 'GET') {
       const config = await adapterService.getConfig()
       return Response.json(config)
@@ -38,4 +51,38 @@ export async function handleAdaptersApi(
   } catch (error) {
     return errorResponse(error)
   }
+}
+
+async function handleAdapterLoginApi(req: Request, segments: string[]): Promise<Response> {
+  const target = segments[3]
+  if (req.method === 'POST' && (target === 'weixin' || target === 'qq') && !segments[4]) {
+    return Response.json(await adapterLoginService.start(target as AdapterLoginPlatform), { status: 201 })
+  }
+
+  if (target === 'session' && segments[4]) {
+    const sessionId = decodeURIComponent(segments[4])
+    if (req.method === 'GET' && !segments[5]) {
+      const state = adapterLoginService.get(sessionId)
+      if (!state) throw ApiError.notFound('Login session not found')
+      return Response.json(state)
+    }
+    if (req.method === 'POST' && segments[5] === 'verify') {
+      const body = await req.json().catch(() => ({})) as { code?: unknown }
+      if (typeof body.code !== 'string') throw ApiError.badRequest('Verification code is required')
+      try {
+        const state = adapterLoginService.submitVerification(sessionId, body.code)
+        if (!state) throw ApiError.notFound('Login session not found or not awaiting verification')
+        return Response.json(state)
+      } catch (error) {
+        if (error instanceof ApiError) throw error
+        throw ApiError.badRequest(error instanceof Error ? error.message : String(error))
+      }
+    }
+    if (req.method === 'DELETE' && !segments[5]) {
+      if (!adapterLoginService.cancel(sessionId)) throw ApiError.notFound('Login session not found')
+      return new Response(null, { status: 204 })
+    }
+  }
+
+  throw ApiError.notFound('Adapter login route not found')
 }

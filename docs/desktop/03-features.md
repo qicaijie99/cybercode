@@ -172,13 +172,17 @@
 
 ## IM 适配器
 
-设置 → Adapters 标签页，配置 Telegram / 飞书接入。
+设置 → IM 接入，配置微信 / QQ / Telegram / 飞书。
 
 ### 配置
 
 **Telegram**: Bot Token + 允许的用户 ID
 
 **飞书**: App ID + App Secret + 加密密钥 + 验证 Token + 允许的用户 open_id + 流式卡片开关
+
+**微信**: 官方 iLink 扫码连接，无需公网回调
+
+**QQ**: 扫码绑定，AppID/App Secret 兜底，官方 WebSocket 直连
 
 ### 用户配对
 

@@ -1,5 +1,6 @@
 import base64
 import http.client
+import json
 import os
 import sqlite3
 import tempfile
@@ -77,7 +78,11 @@ class UsageAnalyticsTest(unittest.TestCase):
         self.assertEqual(result["d1RetainedUsers"], 1)
         self.assertEqual(result["d1RetentionRate"], 100.0)
         self.assertIsNone(result["d7RetentionRate"])
-        self.assertEqual(result["trend"][-1], {"day": "2026-07-18", "active": 2, "new": 1})
+        self.assertEqual(
+            result["trend"][-1],
+            {"day": "2026-07-18", "active": 2, "new": 1, "cumulative": 2},
+        )
+        self.assertEqual(result["trend"][-2]["cumulative"], 1)
 
     def test_growth_periods_and_retention_use_mature_cohorts(self):
         now = datetime(2026, 7, 18, 8, 0, tzinfo=timezone.utc)
@@ -435,6 +440,44 @@ class UsageAnalyticsTest(unittest.TestCase):
         self.assertNotIn("https://cdn.", dashboard)
         self.assertIn("/cybercode-stats/assets/gsap.min.js", dashboard)
         self.assertIn("/cybercode-stats/assets/satoshi-regular.woff2", dashboard)
+        self.assertIn("/cybercode-stats/assets/china.geojson", dashboard)
+        self.assertIn('id="heroTotalUsers"', dashboard)
+        self.assertIn("Number(data.totalUsers || 0)", dashboard)
+        self.assertIn("projection: chinaProjection", dashboard)
+        self.assertIn("chinaProvinceNames.map", dashboard)
+        self.assertIn("formatter.format(value)", dashboard)
+        self.assertIn("color: '#ffffff'", dashboard)
+        self.assertIn("fontWeight: 700", dashboard)
+        self.assertIn("provinceLabelOffset(name, isCompact)", dashboard)
+        self.assertIn("香港特别行政区: [26, 2]", dashboard)
+        self.assertNotIn('class="china-map-panel media-reveal"', dashboard)
+        self.assertNotIn('class="map-panel media-reveal"', dashboard)
+        self.assertLess(
+            dashboard.index('id="chinaProvinceMap"'),
+            dashboard.index('id="chart"'),
+        )
+        self.assertLess(
+            dashboard.index('id="chart"'),
+            dashboard.index('id="geoMap"'),
+        )
+        self.assertIn("05 / 全球分布", dashboard)
+        self.assertIn("06 / 构成观察", dashboard)
+        self.assertIn("name: '日活用户'", dashboard)
+        self.assertIn("name: '新增用户'", dashboard)
+        self.assertIn("name: '累计用户'", dashboard)
+        self.assertIn("yAxisIndex: 1", dashboard)
+        self.assertIn("type: 'line'", dashboard)
+        china_map = json.loads(
+            (root / "assets" / "china.geojson").read_text(encoding="utf-8")
+        )
+        province_names = {
+            feature.get("properties", {}).get("name")
+            for feature in china_map.get("features", [])
+        }
+        self.assertTrue(
+            {"北京市", "广东省", "台湾省", "香港特别行政区", "澳门特别行政区"}
+            <= province_names
+        )
         login = (root / "login.html").read_text(encoding="utf-8")
         self.assertIn("/api/cybercode-usage/login", login)
         self.assertNotIn("https://cdn.", login)

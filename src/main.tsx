@@ -1594,10 +1594,30 @@ async function run(): Promise<CommanderCommand> {
       }
     }
 
+    // agent-browser is bundled with CyberCode desktop and exposed as a compact
+    // MCP server. Browser-page automation stays independent from Computer Use,
+    // so ordinary DOM inspection and page screenshots need no OS capture grant.
+    try {
+      const {
+        setupAgentBrowserMCP
+      } = await import('src/utils/agentBrowser/setup.js');
+      const agentBrowser = setupAgentBrowserMCP();
+      if (agentBrowser) {
+        dynamicMcpConfig = {
+          ...dynamicMcpConfig,
+          ...agentBrowser.mcpConfig
+        };
+        allowedTools.push(...agentBrowser.allowedTools);
+        appendSystemPrompt = appendSystemPrompt ? `${appendSystemPrompt}\n\n${agentBrowser.systemPrompt}` : agentBrowser.systemPrompt;
+      }
+    } catch (error) {
+      logForDebugging(`[agent-browser MCP] Setup failed: ${errorMessage(error)}`);
+    }
+
     // chicago MCP: guarded Computer Use (app allowlist + frontmost gate +
     // SCContentFilter screenshots). Ant-only, GrowthBook-gated — failures
     // are silent (this is dogfooding). Platform + interactive checks inline
-    // so non-macOS / print-mode ants skip the heavy @ant/computer-use-mcp
+    // so unsupported platforms / print-mode ants skip the Computer Use
     // import entirely. gates.js is light (type-only package import).
     //
     // Placed AFTER the enterprise-MCP-config check: that check rejects any
@@ -1605,7 +1625,11 @@ async function run(): Promise<CommanderCommand> {
     // `type: 'stdio'`. An enterprise-config ant with the GB gate on would
     // otherwise process.exit(1). Chrome has the same latent issue but has
     // shipped without incident; chicago places itself correctly.
-    if (process.platform === 'darwin' || process.platform === 'win32') {
+    if (
+      process.platform === 'darwin' ||
+      process.platform === 'win32' ||
+      (process.platform === 'linux' && process.arch === 'x64')
+    ) {
       try {
         const {
           getChicagoEnabled

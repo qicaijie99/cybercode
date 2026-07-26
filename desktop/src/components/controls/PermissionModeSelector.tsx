@@ -50,6 +50,7 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
   const isControlled = value !== undefined
   const currentMode = isControlled ? value : storeMode
   const isIconVariant = variant === 'icon'
+  const permissionSettingsLabel = t('permMode.settings')
 
   const PERMISSION_ITEMS: Array<{
     value: PermissionMode
@@ -119,8 +120,8 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        aria-label={MODE_LABELS[currentMode]}
-        title={isIconVariant ? MODE_LABELS[currentMode] : undefined}
+        aria-label={isIconVariant ? permissionSettingsLabel : MODE_LABELS[currentMode]}
+        title={isIconVariant ? permissionSettingsLabel : undefined}
         className={isIconVariant
           ? `group relative flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border transition-colors duration-100 ${
               open
@@ -133,7 +134,7 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
         {isIconVariant ? (
           !open && (
             <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-1.5 whitespace-nowrap rounded-md bg-[var(--color-inverse-surface)] px-2.5 py-1 text-[12px] font-medium text-[var(--color-inverse-on-surface)] opacity-0 shadow-[0_8px_20px_rgba(0,0,0,0.12)] transition-opacity duration-100 group-hover:opacity-100">
-              {MODE_LABELS[currentMode]}
+              {permissionSettingsLabel}
             </span>
           )
         ) : (
@@ -146,21 +147,7 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
 
       {open && (
         <div className="absolute bottom-full left-0 z-[140] mb-[10px] w-[320px] overflow-hidden rounded-[24px] border-2 border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-[8px] shadow-[var(--shadow-dropdown)]">
-          <div className="flex items-center gap-[10px] px-[10px] py-[8px]">
-            <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border-separator)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
-              <ShieldCheck size={16} strokeWidth={2.1} />
-            </div>
-            <div className="min-w-0">
-              <div className="text-[13px] font-semibold leading-tight text-[var(--color-text-primary)]">
-                {t('permMode.executionPermissions')}
-              </div>
-              <div className="mt-[2px] text-[11px] font-medium leading-tight text-[var(--color-text-tertiary)]">
-                {MODE_LABELS[currentMode]}
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-[4px]">
+          <div data-testid="permission-mode-options" className="space-y-[4px]">
             {PERMISSION_ITEMS.map((item) => {
               const ItemIcon = item.icon
               const isSelected = item.value === currentMode

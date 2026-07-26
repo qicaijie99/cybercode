@@ -14,15 +14,19 @@ function jsonResponse(body: unknown) {
   })
 }
 
-function memoryFile(target: 'soul' | 'brief' | 'user', content = '') {
+function memoryFile(
+  target: 'soul' | 'brief' | 'user',
+  content = '',
+  entries = content ? [content] : [],
+) {
   return {
     target,
     filename: `${target.toUpperCase()}.md`,
     path: `/tmp/${target.toUpperCase()}.md`,
     exists: Boolean(content),
     content,
-    entries: content ? [content] : [],
-    format: content ? 'plain' : 'empty',
+    entries,
+    format: entries.length > 1 ? 'entries' : content ? 'plain' : 'empty',
     charCount: content.length,
     limit: 3000,
     overLimit: false,
@@ -30,12 +34,12 @@ function memoryFile(target: 'soul' | 'brief' | 'user', content = '') {
 }
 
 describe('MemorySettings evolution profile', () => {
-  let removed: boolean
+  let userEntries: string[]
   let injectionEnabled: boolean
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    removed = false
+    userEntries = [userEntry]
     injectionEnabled = true
     useSettingsStore.setState({ locale: 'en' })
     useUIStore.setState({ toasts: [] })
@@ -43,21 +47,22 @@ describe('MemorySettings evolution profile', () => {
       const url = new URL(input)
       if (url.pathname === '/api/prompt-memory/insights') {
         return Promise.resolve(jsonResponse({
-          insights: removed ? [] : [
-            {
-              id: 'identity-1',
+          insights: userEntries.map((raw, index) => {
+            const tag = raw.match(/^\[([a-z-]+)\]\s*/)
+            return {
+              id: `user-${index}`,
               target: 'user',
-              category: 'identity',
-              content: userEntry,
-              raw: userEntry,
+              category: tag?.[1] ?? 'identity',
+              content: raw.replace(/^\[[a-z-]+\]\s*/, ''),
+              raw,
               source: 'manual',
-            },
-          ],
+            }
+          }),
           stats: {
-            total: removed ? 0 : 1,
-            user: removed ? 0 : 1,
+            total: userEntries.length,
+            user: userEntries.length,
             methods: 0,
-            dimensions: removed ? 0 : 1,
+            dimensions: userEntries.length ? 1 : 0,
             automaticUpdates: 0,
           },
         }))
@@ -69,8 +74,25 @@ describe('MemorySettings evolution profile', () => {
         url.pathname === '/api/prompt-memory/user/entries' &&
         init?.method === 'POST'
       ) {
-        removed = true
-        return Promise.resolve(jsonResponse({ changed: true }))
+        const body = JSON.parse(String(init.body)) as {
+          action: 'add' | 'replace' | 'remove'
+          content?: string
+          oldText?: string
+        }
+        let changed = false
+        if (body.action === 'add' && body.content) {
+          changed = !userEntries.includes(body.content)
+          if (changed) userEntries.push(body.content)
+        } else if (body.action === 'replace' && body.content && body.oldText) {
+          changed = body.content !== body.oldText
+          userEntries = userEntries.map(entry =>
+            entry === body.oldText ? body.content! : entry,
+          )
+        } else if (body.action === 'remove' && body.oldText) {
+          changed = userEntries.includes(body.oldText)
+          userEntries = userEntries.filter(entry => entry !== body.oldText)
+        }
+        return Promise.resolve(jsonResponse({ changed }))
       }
       if (
         url.pathname === '/api/prompt-memory/config' &&
@@ -91,7 +113,11 @@ describe('MemorySettings evolution profile', () => {
           files: {
             soul: memoryFile('soul', 'You are CyberCode.'),
             brief: memoryFile('brief'),
-            user: memoryFile('user', removed ? '' : userEntry),
+            user: memoryFile(
+              'user',
+              userEntries.join('\n\n---\n\n'),
+              userEntries,
+            ),
           },
         }))
       }
@@ -100,14 +126,86 @@ describe('MemorySettings evolution profile', () => {
     vi.stubGlobal('fetch', fetchMock)
   })
 
-  it('locates a visible profile insight in the USER editor', async () => {
+  it('edits a visible profile insight without opening the raw file editor', async () => {
     render(<MemorySettings />)
     await screen.findByText(userEntry)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Correct in editor' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit memory' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit this memory' })
+    const editor = within(dialog).getByRole('textbox', { name: 'Memory' })
+    expect(editor).toHaveValue(userEntry)
+    fireEvent.change(editor, {
+      target: { value: '用户给 CyberCode/AI 取名为「Nova」。' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
 
-    expect(screen.getByRole('textbox', { name: 'Prompt memory editor' })).toHaveValue(
-      userEntry,
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:3456/api/prompt-memory/user/entries',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'replace',
+            oldText: userEntry,
+            content: '[identity] 用户给 CyberCode/AI 取名为「Nova」。',
+          }),
+        }),
+      )
+    })
+    expect(
+      await screen.findByText('用户给 CyberCode/AI 取名为「Nova」。'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'Prompt memory editor' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('adds one categorized memory from the profile', async () => {
+    render(<MemorySettings />)
+    await screen.findByText(userEntry)
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add memory' })[0]!)
+    const dialog = screen.getByRole('dialog', { name: 'Add a memory' })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Memory' }), {
+      target: { value: '先讨论模糊的产品行为，再开始实现。' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:3456/api/prompt-memory/user/entries',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'add',
+            content: '[collaboration] 先讨论模糊的产品行为，再开始实现。',
+          }),
+        }),
+      )
+    })
+    expect(
+      await screen.findByText('先讨论模糊的产品行为，再开始实现。'),
+    ).toBeInTheDocument()
+  })
+
+  it('does not report success or close the editor for a duplicate memory', async () => {
+    const existing = '[collaboration] 先讨论模糊的产品行为，再开始实现。'
+    userEntries = [existing]
+    render(<MemorySettings />)
+    await screen.findByText('先讨论模糊的产品行为，再开始实现。')
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add memory' })[0]!)
+    const dialog = screen.getByRole('dialog', { name: 'Add a memory' })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Memory' }), {
+      target: { value: '先讨论模糊的产品行为，再开始实现。' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }))
+
+    expect(await within(dialog).findByText('This memory already exists.')).toBeInTheDocument()
+    expect(dialog).toBeInTheDocument()
+    expect(userEntries).toEqual([existing])
+    expect(useUIStore.getState().toasts).not.toContainEqual(
+      expect.objectContaining({ type: 'success' }),
     )
   })
 

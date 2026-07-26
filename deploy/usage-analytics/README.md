@@ -29,7 +29,7 @@ sudo install -o root -g root -m 0755 server.py /opt/cybercode-usage/server.py
 sudo install -o root -g root -m 0755 update_geoip.py /opt/cybercode-usage/update_geoip.py
 sudo install -o root -g root -m 0644 dashboard.html /opt/cybercode-usage/dashboard.html
 sudo install -o root -g root -m 0644 login.html /opt/cybercode-usage/login.html
-sudo install -o root -g root -m 0644 assets/echarts.min.js assets/world.geojson /opt/cybercode-usage/assets/
+sudo install -o root -g root -m 0644 assets/echarts.min.js assets/world.geojson assets/china.geojson /opt/cybercode-usage/assets/
 sudo install -o root -g root -m 0644 cybercode-usage.service /etc/systemd/system/cybercode-usage.service
 sudo install -o root -g root -m 0644 cybercode-usage-geodb.service /etc/systemd/system/cybercode-usage-geodb.service
 sudo install -o root -g root -m 0644 cybercode-usage-geodb.timer /etc/systemd/system/cybercode-usage-geodb.timer

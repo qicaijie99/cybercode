@@ -62,7 +62,10 @@ describe('PendingSteerBar', () => {
 
     expect(screen.getByText('Please also check the migration')).toBeInTheDocument()
     expect(container.querySelector('[data-chat-content-column]')).toHaveClass('w-full', 'max-w-[878px]')
-    expect(container.querySelector('[data-chat-content-column]')?.parentElement).toHaveClass('px-[24px]')
+    expect(container.querySelector('[data-chat-content-column]')?.parentElement).toHaveClass(
+      'px-[24px]',
+      'mb-[-8px]',
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Edit saved input' }))
 
     expect(useChatStore.getState().sessions['edit-session']?.pendingSteers).toEqual([])
@@ -115,5 +118,89 @@ describe('PendingSteerBar', () => {
     expect(useChatStore.getState().sessions['multi-session']?.composerPrefill).toMatchObject({
       text: 'Second follow-up should stay editable by itself',
     })
+  })
+
+  it('reorders saved steers by dragging one row above another', () => {
+    useChatStore.setState({
+      sessions: {
+        'drag-session': makeChatSession({
+          pendingSteers: [
+            {
+              id: 'steer-1',
+              content: 'First follow-up',
+              createdAt: 1,
+              status: 'draft',
+            },
+            {
+              id: 'steer-2',
+              content: 'Second follow-up',
+              createdAt: 2,
+              status: 'draft',
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<PendingSteerBar sessionId="drag-session" />)
+
+    const dataTransfer = {
+      effectAllowed: 'none',
+      dropEffect: 'none',
+      setData: () => {},
+      getData: () => 'steer-2',
+    } as unknown as DataTransfer
+    const secondHandle = screen.getByRole('button', {
+      name: 'Drag or use arrow keys to reorder: Second follow-up',
+    })
+    const firstRow = screen.getByTestId('pending-steer-row-steer-1')
+
+    fireEvent.dragStart(secondHandle, { dataTransfer })
+    fireEvent.dragOver(firstRow, { dataTransfer })
+    expect(screen.getByTestId('pending-steer-drop-indicator')).toBeInTheDocument()
+    fireEvent.drop(firstRow, { dataTransfer })
+
+    expect(useChatStore.getState().sessions['drag-session']?.pendingSteers?.map((steer) => steer.id)).toEqual([
+      'steer-2',
+      'steer-1',
+    ])
+    expect(screen.getAllByTestId(/pending-steer-row-/).map((row) => row.textContent)).toEqual([
+      expect.stringContaining('Second follow-up'),
+      expect.stringContaining('First follow-up'),
+    ])
+  })
+
+  it('reorders saved steers with the arrow keys on the drag handle', () => {
+    useChatStore.setState({
+      sessions: {
+        'keyboard-session': makeChatSession({
+          pendingSteers: [
+            {
+              id: 'steer-1',
+              content: 'First follow-up',
+              createdAt: 1,
+              status: 'draft',
+            },
+            {
+              id: 'steer-2',
+              content: 'Second follow-up',
+              createdAt: 2,
+              status: 'draft',
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<PendingSteerBar sessionId="keyboard-session" />)
+
+    fireEvent.keyDown(screen.getByRole('button', {
+      name: 'Drag or use arrow keys to reorder: Second follow-up',
+    }), { key: 'ArrowUp' })
+
+    expect(useChatStore.getState().sessions['keyboard-session']?.pendingSteers?.map((steer) => steer.id)).toEqual([
+      'steer-2',
+      'steer-1',
+    ])
   })
 })

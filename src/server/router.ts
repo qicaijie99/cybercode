@@ -18,11 +18,13 @@ import { handlePluginsApi } from './api/plugins.js'
 import { handleSkillsApi } from './api/skills.js'
 import { handleComputerUseApi } from './api/computer-use.js'
 import { handleCybercodeOAuthApi } from './api/cybercode-oauth.js'
+import { handleProviderOAuthApi } from './api/provider-oauth.js'
 import { handleMcpApi } from './api/mcp.js'
 import { handlePromptMemoryApi } from './api/prompt-memory.js'
 import { handleTokenOptimizationApi } from './api/token-optimization.js'
 import { handleAgentMigrationApi } from './api/agent-migration.js'
 import { handleKnowledgeApi } from './api/knowledge.js'
+import { handleRoutingApi } from './api/routing.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
@@ -76,6 +78,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     case 'cybercode-oauth':
       return handleCybercodeOAuthApi(req, url, segments)
 
+    case 'provider-oauth':
+      return handleProviderOAuthApi(req, url, segments)
+
     case 'adapters':
       return handleAdaptersApi(req, url, segments)
 
@@ -96,6 +101,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'knowledge':
       return handleKnowledgeApi(req, url, segments)
+
+    case 'routing':
+      return handleRoutingApi(req, url, segments)
 
     case 'plugins':
       return handlePluginsApi(req, url, segments)

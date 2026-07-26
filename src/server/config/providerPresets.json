@@ -15,6 +15,48 @@
     "websiteUrl": "https://www.anthropic.com/claude-code"
   },
   {
+    "id": "anthropic-api",
+    "name": "Anthropic API",
+    "baseUrl": "https://api.anthropic.com",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "claude-opus-4-8",
+      "haiku": "claude-haiku-4-5",
+      "sonnet": "claude-sonnet-5",
+      "opus": "claude-opus-4-8"
+    },
+    "defaultModelContextWindows": {
+      "main": 1048576,
+      "haiku": 200000,
+      "sonnet": 1048576,
+      "opus": 1048576
+    },
+    "modelOptions": [
+      {
+        "id": "claude-opus-4-8",
+        "label": "Claude Opus 4.8",
+        "contextWindow": 1048576,
+        "supportsImages": true
+      },
+      {
+        "id": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "contextWindow": 1048576,
+        "supportsImages": true
+      },
+      {
+        "id": "claude-haiku-4-5",
+        "label": "Claude Haiku 4.5",
+        "contextWindow": 200000,
+        "supportsImages": true
+      }
+    ],
+    "supportsImages": true,
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.anthropic.com/en/api",
+    "apiKeyUrl": "https://console.anthropic.com/settings/keys"
+  },
+  {
     "id": "deepseek",
     "name": "DeepSeek",
     "baseUrl": "https://api.deepseek.com/anthropic",
@@ -92,6 +134,16 @@
         "contextWindow": 200000
       },
       {
+        "id": "glm-4.7-flash",
+        "label": "GLM-4.7 Flash（免费）",
+        "contextWindow": 200000
+      },
+      {
+        "id": "glm-4-flash-250414",
+        "label": "GLM-4 Flash 250414（免费）",
+        "contextWindow": 128000
+      },
+      {
         "id": "glm-4.7-flashx",
         "label": "GLM-4.7 FlashX",
         "contextWindow": 200000
@@ -152,7 +204,7 @@
   },
   {
     "id": "kimi",
-    "name": "Kimi API",
+    "name": "Kimi",
     "baseUrl": "https://api.moonshot.cn",
     "apiFormat": "openai_chat",
     "defaultModels": {
@@ -438,6 +490,1519 @@
     "websiteUrl": "https://ai.google.dev/gemini-api/docs/models",
     "apiKeyUrl": "https://aistudio.google.com/apikey",
     "promoText": "Google Gemini 使用官方 OpenAI 兼容接口，Base URL 已包含 /v1beta/openai，CyberCode 会自动避免重复拼接 /v1。"
+  },
+  {
+    "id": "xai",
+    "name": "xAI",
+    "baseUrl": "https://api.x.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "grok-4.3",
+      "haiku": "grok-build-0.1",
+      "sonnet": "grok-4.3",
+      "opus": "grok-4.20-0309-reasoning"
+    },
+    "modelOptions": [
+      {
+        "id": "grok-4.3",
+        "label": "Grok 4.3"
+      },
+      {
+        "id": "grok-build-0.1",
+        "label": "Grok Build 0.1",
+        "contextWindow": 256000
+      },
+      {
+        "id": "grok-4.20-0309-reasoning",
+        "label": "Grok 4.20 Reasoning"
+      },
+      {
+        "id": "grok-4.20-0309-non-reasoning",
+        "label": "Grok 4.20"
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.x.ai",
+    "apiKeyUrl": "https://console.x.ai"
+  },
+  {
+    "id": "alibaba",
+    "name": "Alibaba Qwen",
+    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "qwen3-coder-plus",
+      "haiku": "qwen3-coder-flash",
+      "sonnet": "qwen3-coder-plus",
+      "opus": "qwen-max"
+    },
+    "modelOptions": [
+      {
+        "id": "qwen3-coder-plus",
+        "label": "Qwen3 Coder Plus"
+      },
+      {
+        "id": "qwen3-coder-flash",
+        "label": "Qwen3 Coder Flash"
+      },
+      {
+        "id": "qwen-max",
+        "label": "Qwen Max"
+      },
+      {
+        "id": "qwen-plus",
+        "label": "Qwen Plus"
+      },
+      {
+        "id": "qwen-turbo",
+        "label": "Qwen Turbo"
+      },
+      {
+        "id": "qwq-plus",
+        "label": "QwQ Plus"
+      },
+      {
+        "id": "qwen3-235b-a22b",
+        "label": "Qwen3 235B A22B"
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://help.aliyun.com/zh/model-studio",
+    "apiKeyUrl": "https://dashscope.console.aliyun.com/apiKey"
+  },
+  {
+    "id": "perplexity",
+    "name": "Perplexity",
+    "baseUrl": "https://api.perplexity.ai",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "sonar-pro",
+      "haiku": "sonar",
+      "sonnet": "sonar-reasoning-pro",
+      "opus": "sonar-deep-research"
+    },
+    "modelOptions": [
+      {
+        "id": "sonar-deep-research",
+        "label": "Sonar Deep Research"
+      },
+      {
+        "id": "sonar-reasoning-pro",
+        "label": "Sonar Reasoning Pro"
+      },
+      {
+        "id": "sonar-pro",
+        "label": "Sonar Pro"
+      },
+      {
+        "id": "sonar",
+        "label": "Sonar"
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.perplexity.ai",
+    "apiKeyUrl": "https://www.perplexity.ai/account/api/keys"
+  },
+  {
+    "id": "cohere",
+    "name": "Cohere",
+    "baseUrl": "https://api.cohere.com/compatibility/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "command-a-reasoning-08-2025",
+      "haiku": "command-r7b-12-2024",
+      "sonnet": "command-a-03-2025",
+      "opus": "command-a-reasoning-08-2025"
+    },
+    "modelOptions": [
+      {
+        "id": "command-a-reasoning-08-2025",
+        "label": "Command A Reasoning"
+      },
+      {
+        "id": "command-a-vision-07-2025",
+        "label": "Command A Vision",
+        "supportsImages": true
+      },
+      {
+        "id": "command-a-03-2025",
+        "label": "Command A"
+      },
+      {
+        "id": "command-r7b-12-2024",
+        "label": "Command R7B"
+      }
+    ],
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.cohere.com",
+    "apiKeyUrl": "https://dashboard.cohere.com/api-keys"
+  },
+  {
+    "id": "meta-llama",
+    "name": "Meta Llama API",
+    "baseUrl": "https://api.llama.com/compat/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "haiku": "Llama-4-Scout-17B-16E-Instruct-FP8",
+      "sonnet": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "opus": "Llama-4-Maverick-17B-128E-Instruct-FP8"
+    },
+    "modelOptions": [
+      {
+        "id": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+        "label": "Llama 4 Maverick"
+      },
+      {
+        "id": "Llama-4-Scout-17B-16E-Instruct-FP8",
+        "label": "Llama 4 Scout"
+      },
+      {
+        "id": "Llama-3.3-70B-Instruct",
+        "label": "Llama 3.3 70B"
+      },
+      {
+        "id": "Llama-3.3-8B-Instruct",
+        "label": "Llama 3.3 8B"
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://llama.developer.meta.com",
+    "apiKeyUrl": "https://llama.developer.meta.com"
+  },
+  {
+    "id": "volcengine",
+    "name": "Volcengine Ark",
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "doubao-seed-2-0-code-preview-260215",
+      "haiku": "doubao-seed-2-0-lite-260215",
+      "sonnet": "doubao-seed-2-0-code-preview-260215",
+      "opus": "doubao-seed-2-0-pro-260215"
+    },
+    "defaultModelContextWindows": {
+      "main": 262144,
+      "haiku": 262144,
+      "sonnet": 262144,
+      "opus": 262144
+    },
+    "modelOptions": [
+      {
+        "id": "doubao-seed-2-0-pro-260215",
+        "label": "Doubao Seed 2.0 Pro",
+        "contextWindow": 262144
+      },
+      {
+        "id": "doubao-seed-2-0-code-preview-260215",
+        "label": "Doubao Seed 2.0 Code",
+        "contextWindow": 262144
+      },
+      {
+        "id": "doubao-seed-2-0-lite-260215",
+        "label": "Doubao Seed 2.0 Lite",
+        "contextWindow": 262144
+      },
+      {
+        "id": "deepseek-v3-2-251201",
+        "label": "DeepSeek V3.2"
+      },
+      {
+        "id": "kimi-k2-5-260127",
+        "label": "Kimi K2.5"
+      },
+      {
+        "id": "glm-4-7-251222",
+        "label": "GLM 4.7"
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://www.volcengine.com/product/ark",
+    "apiKeyUrl": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"
+  },
+  {
+    "id": "qianfan",
+    "name": "Baidu Qianfan",
+    "baseUrl": "https://qianfan.baidubce.com/v2",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "ernie-5.1",
+      "haiku": "ernie-x1.1",
+      "sonnet": "ernie-5.1",
+      "opus": "ernie-5.0-thinking-latest"
+    },
+    "defaultModelContextWindows": {
+      "main": 128000,
+      "haiku": 64000,
+      "sonnet": 128000,
+      "opus": 128000
+    },
+    "modelOptions": [
+      {
+        "id": "ernie-5.1",
+        "label": "ERNIE 5.1",
+        "contextWindow": 128000
+      },
+      {
+        "id": "ernie-5.0-thinking-latest",
+        "label": "ERNIE 5.0 Thinking",
+        "contextWindow": 128000
+      },
+      {
+        "id": "ernie-x1.1",
+        "label": "ERNIE X1.1",
+        "contextWindow": 64000
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://cloud.baidu.com/product/wenxinworkshop",
+    "apiKeyUrl": "https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application"
+  },
+  {
+    "id": "ai21",
+    "name": "AI21 Labs",
+    "baseUrl": "https://api.ai21.com/studio/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "jamba-large-1.7",
+      "haiku": "jamba-mini-2",
+      "sonnet": "jamba-large-1.7",
+      "opus": "jamba-large-1.7"
+    },
+    "modelOptions": [
+      {
+        "id": "jamba-large-1.7",
+        "label": "Jamba Large 1.7"
+      },
+      {
+        "id": "jamba-mini-2",
+        "label": "Jamba Mini 2"
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.ai21.com",
+    "apiKeyUrl": "https://studio.ai21.com/account/api-key"
+  },
+  {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "openrouter/free",
+      "haiku": "openrouter/free",
+      "sonnet": "openrouter/free",
+      "opus": "openrouter/free"
+    },
+    "modelOptions": [
+      {
+        "id": "openrouter/free",
+        "label": "OpenRouter Free Router"
+      }
+    ],
+    "supportsImages": true,
+    "needsApiKey": true,
+    "websiteUrl": "https://openrouter.ai/docs/quickstart",
+    "apiKeyUrl": "https://openrouter.ai/settings/keys",
+    "promoText": "openrouter/free 会在当前可用的免费模型中自动选择；也可以发现模型后选择任意 :free 变体。",
+    "featured": true
+  },
+  {
+    "id": "cloudflare-ai",
+    "name": "Cloudflare Workers AI",
+    "baseUrl": "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "@cf/moonshotai/kimi-k2.7-code",
+      "haiku": "@cf/zai-org/glm-4.7-flash",
+      "sonnet": "@cf/zai-org/glm-5.2",
+      "opus": "@cf/openai/gpt-oss-120b"
+    },
+    "defaultModelContextWindows": {
+      "main": 262144,
+      "haiku": 131072,
+      "sonnet": 262144,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "@cf/moonshotai/kimi-k2.7-code",
+        "label": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "supportsImages": true
+      },
+      {
+        "id": "@cf/zai-org/glm-5.2",
+        "label": "GLM-5.2",
+        "contextWindow": 262144
+      },
+      {
+        "id": "@cf/moonshotai/kimi-k2.6",
+        "label": "Kimi K2.6",
+        "contextWindow": 262144,
+        "supportsImages": true
+      },
+      {
+        "id": "@cf/zai-org/glm-4.7-flash",
+        "label": "GLM-4.7 Flash",
+        "contextWindow": 131072
+      },
+      {
+        "id": "@cf/openai/gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "@cf/openai/gpt-oss-20b",
+        "label": "GPT-OSS 20B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": true,
+    "needsApiKey": true,
+    "websiteUrl": "https://developers.cloudflare.com/workers-ai/",
+    "apiKeyUrl": "https://dash.cloudflare.com/profile/api-tokens",
+    "promoText": "Workers AI 每天包含 10,000 Neurons 免费额度。填写 Account ID，并使用具有 Workers AI Read 权限的 API Token。",
+    "featured": true
+  },
+  {
+    "id": "ollama-cloud",
+    "name": "Ollama Cloud",
+    "baseUrl": "https://ollama.com",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "kimi-k2.7-code",
+      "haiku": "gpt-oss:20b",
+      "sonnet": "deepseek-v4-flash",
+      "opus": "glm-5.2"
+    },
+    "defaultModelContextWindows": {
+      "main": 262144,
+      "haiku": 131072,
+      "sonnet": 1048576,
+      "opus": 1000000
+    },
+    "modelOptions": [
+      {
+        "id": "kimi-k2.7-code",
+        "label": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "supportsImages": true
+      },
+      {
+        "id": "glm-5.2",
+        "label": "GLM-5.2",
+        "contextWindow": 1000000
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "label": "DeepSeek V4 Flash",
+        "contextWindow": 1048576
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+        "contextWindow": 524288
+      },
+      {
+        "id": "minimax-m3",
+        "label": "MiniMax M3",
+        "contextWindow": 524288,
+        "supportsImages": true
+      },
+      {
+        "id": "kimi-k2.6",
+        "label": "Kimi K2.6",
+        "contextWindow": 262144,
+        "supportsImages": true
+      },
+      {
+        "id": "gpt-oss:120b",
+        "label": "GPT-OSS 120B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "gpt-oss:20b",
+        "label": "GPT-OSS 20B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": true,
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.ollama.com/cloud",
+    "apiKeyUrl": "https://ollama.com/settings/keys",
+    "promoText": "Ollama 免费方案包含轻量云用量，额度按 5 小时会话和 7 天周期重置；云端可用模型会随官方目录更新。",
+    "featured": true
+  },
+  {
+    "id": "llm7",
+    "name": "LLM7.io",
+    "baseUrl": "https://api.llm7.io/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "default",
+      "haiku": "default",
+      "sonnet": "default",
+      "opus": "default"
+    },
+    "modelOptions": [
+      {
+        "id": "default",
+        "label": "Default Free Router"
+      },
+      {
+        "id": "fast",
+        "label": "Fast Router"
+      },
+      {
+        "id": "pro",
+        "label": "Pro Router"
+      }
+    ],
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.llm7.io/quickstart",
+    "apiKeyUrl": "https://dash.llm7.io/",
+    "promoText": "免费 Token 当前包含每日额度；default 会在可用免费模型中动态选择。模型能力和可用性可能变化，建议作为实验性备用路由。"
+  },
+  {
+    "id": "synthetic",
+    "name": "Synthetic",
+    "baseUrl": "https://api.synthetic.new/openai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://synthetic.new",
+    "apiKeyUrl": "https://synthetic.new"
+  },
+  {
+    "id": "kilo-gateway",
+    "name": "Kilo Gateway",
+    "baseUrl": "https://api.kilo.ai/api/openrouter",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://kilo.ai",
+    "apiKeyUrl": "https://app.kilo.ai"
+  },
+  {
+    "id": "aimlapi",
+    "name": "AI/ML API",
+    "baseUrl": "https://api.aimlapi.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://aimlapi.com",
+    "apiKeyUrl": "https://aimlapi.com"
+  },
+  {
+    "id": "novita",
+    "name": "Novita AI",
+    "baseUrl": "https://api.novita.ai/openai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://novita.ai",
+    "apiKeyUrl": "https://novita.ai/settings/key-management"
+  },
+  {
+    "id": "piapi",
+    "name": "PiAPI",
+    "baseUrl": "https://api.piapi.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://piapi.ai",
+    "apiKeyUrl": "https://piapi.ai"
+  },
+  {
+    "id": "getgoapi",
+    "name": "GoAPI",
+    "baseUrl": "https://api.getgoapi.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://api.getgoapi.com",
+    "apiKeyUrl": "https://api.getgoapi.com"
+  },
+  {
+    "id": "laozhang",
+    "name": "LaoZhang AI",
+    "baseUrl": "https://api.laozhang.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://api.laozhang.ai",
+    "apiKeyUrl": "https://api.laozhang.ai"
+  },
+  {
+    "id": "vercel-ai-gateway",
+    "name": "Vercel AI Gateway",
+    "baseUrl": "https://ai-gateway.vercel.sh/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://vercel.com/docs/ai-gateway",
+    "apiKeyUrl": "https://vercel.com/dashboard"
+  },
+  {
+    "id": "agentrouter",
+    "name": "AgentRouter",
+    "baseUrl": "https://agentrouter.org",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://agentrouter.org",
+    "apiKeyUrl": "https://agentrouter.org/register"
+  },
+  {
+    "id": "thebai",
+    "name": "TheB.AI",
+    "baseUrl": "https://api.theb.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://theb.ai",
+    "apiKeyUrl": "https://theb.ai"
+  },
+  {
+    "id": "fenayai",
+    "name": "FenayAI",
+    "baseUrl": "https://fenayai.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://fenayai.com",
+    "apiKeyUrl": "https://fenayai.com"
+  },
+  {
+    "id": "empower",
+    "name": "Empower",
+    "baseUrl": "https://app.empower.dev/api/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.empower.dev",
+    "apiKeyUrl": "https://app.empower.dev"
+  },
+  {
+    "id": "poe",
+    "name": "Poe",
+    "baseUrl": "https://api.poe.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://creator.poe.com/api-reference",
+    "apiKeyUrl": "https://creator.poe.com"
+  },
+  {
+    "id": "chutes",
+    "name": "Chutes.ai",
+    "baseUrl": "https://api.chutesai.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://chutes.ai",
+    "apiKeyUrl": "https://chutes.ai"
+  },
+  {
+    "id": "hackclub",
+    "name": "Hack Club AI",
+    "baseUrl": "https://ai.hackclub.com/proxy/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://ai.hackclub.com",
+    "apiKeyUrl": "https://ai.hackclub.com"
+  },
+  {
+    "id": "freetheai",
+    "name": "FreeTheAi",
+    "baseUrl": "https://api.freetheai.xyz/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://freetheai.xyz",
+    "apiKeyUrl": "https://freetheai.xyz"
+  },
+  {
+    "id": "nanogpt",
+    "name": "NanoGPT",
+    "baseUrl": "https://nano-gpt.com/api/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://nano-gpt.com",
+    "apiKeyUrl": "https://nano-gpt.com/api"
+  },
+  {
+    "id": "groq",
+    "name": "Groq",
+    "baseUrl": "https://api.groq.com/openai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "openai/gpt-oss-120b",
+      "haiku": "openai/gpt-oss-20b",
+      "sonnet": "openai/gpt-oss-120b",
+      "opus": "openai/gpt-oss-120b"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "openai/gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "qwen/qwen3-32b",
+        "label": "Qwen3 32B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "llama-3.3-70b-versatile",
+        "label": "Llama 3.3 70B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "openai/gpt-oss-20b",
+        "label": "GPT-OSS 20B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://console.groq.com/docs/openai",
+    "apiKeyUrl": "https://console.groq.com/keys",
+    "featured": true
+  },
+  {
+    "id": "mistral",
+    "name": "Mistral AI",
+    "baseUrl": "https://api.mistral.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "devstral-latest",
+      "haiku": "mistral-small-latest",
+      "sonnet": "devstral-latest",
+      "opus": "mistral-large-latest"
+    },
+    "defaultModelContextWindows": {
+      "main": 262144,
+      "haiku": 131072,
+      "sonnet": 262144,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "devstral-latest",
+        "label": "Devstral Latest",
+        "contextWindow": 262144
+      },
+      {
+        "id": "mistral-large-latest",
+        "label": "Mistral Large Latest",
+        "contextWindow": 131072
+      },
+      {
+        "id": "mistral-small-latest",
+        "label": "Mistral Small Latest",
+        "contextWindow": 131072
+      },
+      {
+        "id": "codestral-latest",
+        "label": "Codestral Latest",
+        "contextWindow": 262144
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.mistral.ai",
+    "apiKeyUrl": "https://console.mistral.ai/api-keys",
+    "featured": true
+  },
+  {
+    "id": "reka",
+    "name": "Reka AI",
+    "baseUrl": "https://api.reka.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "reka-flash-3",
+      "haiku": "reka-edge-2603",
+      "sonnet": "reka-flash-3",
+      "opus": "reka-flash-3"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "reka-flash-3",
+        "label": "Reka Flash 3",
+        "contextWindow": 131072
+      },
+      {
+        "id": "reka-edge-2603",
+        "label": "Reka Edge 2603",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://docs.reka.ai/chat/overview",
+    "apiKeyUrl": "https://platform.reka.ai"
+  },
+  {
+    "id": "cerebras",
+    "name": "Cerebras",
+    "baseUrl": "https://api.cerebras.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "gpt-oss-120b",
+      "haiku": "gemma-4-31b",
+      "sonnet": "gpt-oss-120b",
+      "opus": "gpt-oss-120b"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "zai-glm-4.7",
+        "label": "GLM 4.7",
+        "contextWindow": 131072
+      },
+      {
+        "id": "gemma-4-31b",
+        "label": "Gemma 4 31B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://inference-docs.cerebras.ai",
+    "apiKeyUrl": "https://cloud.cerebras.ai"
+  },
+  {
+    "id": "nvidia",
+    "name": "NVIDIA NIM",
+    "baseUrl": "https://integrate.api.nvidia.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "qwen/qwen3.5-397b-a17b",
+      "haiku": "stepfun-ai/step-3.5-flash",
+      "sonnet": "qwen/qwen3.5-397b-a17b",
+      "opus": "deepseek-ai/deepseek-v4-pro"
+    },
+    "defaultModelContextWindows": {
+      "main": 262144,
+      "haiku": 131072,
+      "sonnet": 262144,
+      "opus": 262144
+    },
+    "modelOptions": [
+      {
+        "id": "qwen/qwen3.5-397b-a17b",
+        "label": "Qwen 3.5 397B",
+        "contextWindow": 262144
+      },
+      {
+        "id": "deepseek-ai/deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+        "contextWindow": 262144
+      },
+      {
+        "id": "mistralai/devstral-2-123b-instruct-2512",
+        "label": "Devstral 2 123B",
+        "contextWindow": 262144
+      },
+      {
+        "id": "stepfun-ai/step-3.5-flash",
+        "label": "Step 3.5 Flash",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://build.nvidia.com",
+    "apiKeyUrl": "https://build.nvidia.com/settings/api-keys",
+    "featured": true
+  },
+  {
+    "id": "sambanova",
+    "name": "SambaNova Cloud",
+    "baseUrl": "https://api.sambanova.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "DeepSeek-V3.2",
+      "haiku": "Meta-Llama-3.3-70B-Instruct",
+      "sonnet": "DeepSeek-V3.2",
+      "opus": "MiniMax-M2.7"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "DeepSeek-V3.2",
+        "label": "DeepSeek V3.2",
+        "contextWindow": 131072
+      },
+      {
+        "id": "MiniMax-M2.7",
+        "label": "MiniMax M2.7",
+        "contextWindow": 131072
+      },
+      {
+        "id": "Meta-Llama-3.3-70B-Instruct",
+        "label": "Llama 3.3 70B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://cloud.sambanova.ai",
+    "apiKeyUrl": "https://cloud.sambanova.ai/apis"
+  },
+  {
+    "id": "siliconflow",
+    "name": "SiliconFlow",
+    "baseUrl": "https://api.siliconflow.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+      "haiku": "Qwen/Qwen3-32B",
+      "sonnet": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+      "opus": "deepseek-ai/DeepSeek-V3.2"
+    },
+    "defaultModelContextWindows": {
+      "main": 262144,
+      "haiku": 131072,
+      "sonnet": 262144,
+      "opus": 262144
+    },
+    "modelOptions": [
+      {
+        "id": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "label": "Qwen3 Coder 480B",
+        "contextWindow": 262144
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V3.2",
+        "label": "DeepSeek V3.2",
+        "contextWindow": 262144
+      },
+      {
+        "id": "Qwen/Qwen3-32B",
+        "label": "Qwen3 32B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "openai/gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://siliconflow.com",
+    "apiKeyUrl": "https://cloud.siliconflow.com/account/ak",
+    "promoText": "同时提供免费和付费模型；免费优先路由只会使用 CyberCode 已识别的免费模型。",
+    "featured": true
+  },
+  {
+    "id": "github-models",
+    "name": "GitHub Models",
+    "baseUrl": "https://models.github.ai/inference",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "openai/gpt-4.1",
+      "haiku": "openai/gpt-4o-mini",
+      "sonnet": "openai/gpt-4.1",
+      "opus": "openai/o3"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 128000,
+      "sonnet": 131072,
+      "opus": 200000
+    },
+    "modelOptions": [
+      {
+        "id": "openai/gpt-4.1",
+        "label": "GPT-4.1",
+        "contextWindow": 131072,
+        "supportsImages": true
+      },
+      {
+        "id": "openai/gpt-4o-mini",
+        "label": "GPT-4o Mini",
+        "contextWindow": 128000,
+        "supportsImages": true
+      },
+      {
+        "id": "openai/o3",
+        "label": "o3",
+        "contextWindow": 200000,
+        "supportsImages": true
+      },
+      {
+        "id": "deepseek/DeepSeek-R1",
+        "label": "DeepSeek R1",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": true,
+    "needsApiKey": true,
+    "websiteUrl": "https://github.com/marketplace/models",
+    "apiKeyUrl": "https://github.com/settings/personal-access-tokens/new",
+    "promoText": "使用具有 models:read 权限的 GitHub Token。免费预览额度有限，因此默认不会进入稳定路由。",
+    "featured": true
+  },
+  {
+    "id": "huggingface",
+    "name": "Hugging Face Inference",
+    "baseUrl": "https://router.huggingface.co/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "deepseek-ai/DeepSeek-V3",
+      "haiku": "Qwen/Qwen2.5-7B-Instruct",
+      "sonnet": "deepseek-ai/DeepSeek-V3",
+      "opus": "deepseek-ai/DeepSeek-V3"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "deepseek-ai/DeepSeek-V3",
+        "label": "DeepSeek V3",
+        "contextWindow": 131072
+      },
+      {
+        "id": "Qwen/Qwen2.5-7B-Instruct",
+        "label": "Qwen 2.5 7B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "meta-llama/llama-3.1-8b-instruct",
+        "label": "Llama 3.1 8B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://huggingface.co/docs/inference-providers",
+    "apiKeyUrl": "https://huggingface.co/settings/tokens"
+  },
+  {
+    "id": "fireworks",
+    "name": "Fireworks AI",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "deepseek-v4-flash",
+      "haiku": "gpt-oss-20b",
+      "sonnet": "deepseek-v4-flash",
+      "opus": "deepseek-v4-pro"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "deepseek-v4-flash",
+        "label": "DeepSeek V4 Flash",
+        "contextWindow": 131072
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+        "contextWindow": 131072
+      },
+      {
+        "id": "gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://fireworks.ai",
+    "apiKeyUrl": "https://app.fireworks.ai"
+  },
+  {
+    "id": "deepinfra",
+    "name": "DeepInfra",
+    "baseUrl": "https://api.deepinfra.com/v1/openai",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "Qwen/Qwen3.6-35B-A3B",
+      "haiku": "openai/gpt-oss-20b",
+      "sonnet": "Qwen/Qwen3.6-35B-A3B",
+      "opus": "deepseek-ai/DeepSeek-V4-Pro"
+    },
+    "defaultModelContextWindows": {
+      "main": 262144,
+      "haiku": 131072,
+      "sonnet": 262144,
+      "opus": 262144
+    },
+    "modelOptions": [
+      {
+        "id": "Qwen/Qwen3.6-35B-A3B",
+        "label": "Qwen 3.6 35B",
+        "contextWindow": 262144
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V4-Pro",
+        "label": "DeepSeek V4 Pro",
+        "contextWindow": 262144
+      },
+      {
+        "id": "openai/gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://deepinfra.com",
+    "apiKeyUrl": "https://deepinfra.com/dash/api_keys"
+  },
+  {
+    "id": "openvecta",
+    "name": "OpenVecta",
+    "baseUrl": "https://api.openvecta.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "gpt-oss-120b",
+      "haiku": "glm-4.7-flash",
+      "sonnet": "gpt-oss-120b",
+      "opus": "nemotron-3-super-120b"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 262144
+    },
+    "modelOptions": [
+      {
+        "id": "gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "glm-4.7-flash",
+        "label": "GLM 4.7 Flash",
+        "contextWindow": 131072
+      },
+      {
+        "id": "nemotron-3-super-120b",
+        "label": "Nemotron 3 Super 120B",
+        "contextWindow": 262144
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://openvecta.com"
+  },
+  {
+    "id": "hyperbolic",
+    "name": "Hyperbolic",
+    "baseUrl": "https://api.hyperbolic.xyz/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "Qwen/Qwen2.5-Coder-32B-Instruct",
+      "haiku": "meta-llama/Llama-3.2-3B-Instruct",
+      "sonnet": "Qwen/Qwen2.5-Coder-32B-Instruct",
+      "opus": "deepseek-ai/DeepSeek-V3"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "Qwen/Qwen2.5-Coder-32B-Instruct",
+        "label": "Qwen 2.5 Coder 32B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V3",
+        "label": "DeepSeek V3",
+        "contextWindow": 131072
+      },
+      {
+        "id": "meta-llama/Llama-3.3-70B-Instruct",
+        "label": "Llama 3.3 70B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://hyperbolic.xyz"
+  },
+  {
+    "id": "nebius",
+    "name": "Nebius AI Studio",
+    "baseUrl": "https://api.tokenfactory.nebius.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "meta-llama/Llama-3.3-70B-Instruct",
+      "haiku": "meta-llama/Llama-3.3-70B-Instruct",
+      "sonnet": "meta-llama/Llama-3.3-70B-Instruct",
+      "opus": "meta-llama/Llama-3.3-70B-Instruct"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "meta-llama/Llama-3.3-70B-Instruct",
+        "label": "Llama 3.3 70B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://studio.nebius.com"
+  },
+  {
+    "id": "modelscope",
+    "name": "ModelScope",
+    "baseUrl": "https://api-inference.modelscope.cn/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://modelscope.cn",
+    "apiKeyUrl": "https://modelscope.cn/my/myaccesstoken",
+    "promoText": "模型目录会随账号和地区变化，请填写 Token 后点击发现模型。"
+  },
+  {
+    "id": "nous-research",
+    "name": "Nous Research",
+    "baseUrl": "https://inference-api.nousresearch.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "Hermes-4-405B",
+      "haiku": "Hermes-4-70B",
+      "sonnet": "Hermes-4-405B",
+      "opus": "Hermes-4-405B"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "Hermes-4-405B",
+        "label": "Hermes 4 405B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "Hermes-4-70B",
+        "label": "Hermes 4 70B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://portal.nousresearch.com"
+  },
+  {
+    "id": "friendliai",
+    "name": "FriendliAI",
+    "baseUrl": "https://api.friendli.ai/serverless/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "meta-llama-3.1-70b-instruct",
+      "haiku": "meta-llama-3.1-8b-instruct",
+      "sonnet": "meta-llama-3.1-70b-instruct",
+      "opus": "meta-llama-3.1-70b-instruct"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "meta-llama-3.1-70b-instruct",
+        "label": "Llama 3.1 70B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "meta-llama-3.1-8b-instruct",
+        "label": "Llama 3.1 8B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://friendli.ai"
+  },
+  {
+    "id": "featherless-ai",
+    "name": "Featherless AI",
+    "baseUrl": "https://api.featherless.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://featherless.ai",
+    "promoText": "模型目录更新频繁，请填写 API Key 后点击发现模型。"
+  },
+  {
+    "id": "pioneer",
+    "name": "Pioneer AI",
+    "baseUrl": "https://api.pioneer.ai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "Qwen/Qwen3.6-27B",
+      "haiku": "Qwen/Qwen3-8B",
+      "sonnet": "Qwen/Qwen3.6-27B",
+      "opus": "Qwen/Qwen3-32B"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 131072,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "Qwen/Qwen3.6-27B",
+        "label": "Qwen 3.6 27B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "Qwen/Qwen3-32B",
+        "label": "Qwen3 32B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "Qwen/Qwen3-8B",
+        "label": "Qwen3 8B",
+        "contextWindow": 131072
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://pioneer.ai",
+    "apiKeyUrl": "https://agent.pioneer.ai/settings/api-keys"
+  },
+  {
+    "id": "bytez",
+    "name": "Bytez",
+    "baseUrl": "https://api.bytez.com/models/v2/openai/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "Qwen/Qwen2.5-72B-Instruct",
+      "haiku": "mistralai/Mistral-7B-Instruct-v0.3",
+      "sonnet": "Qwen/Qwen2.5-72B-Instruct",
+      "opus": "meta-llama/Llama-3.3-70B-Instruct"
+    },
+    "defaultModelContextWindows": {
+      "main": 131072,
+      "haiku": 32768,
+      "sonnet": 131072,
+      "opus": 131072
+    },
+    "modelOptions": [
+      {
+        "id": "Qwen/Qwen2.5-72B-Instruct",
+        "label": "Qwen 2.5 72B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "meta-llama/Llama-3.3-70B-Instruct",
+        "label": "Llama 3.3 70B",
+        "contextWindow": 131072
+      },
+      {
+        "id": "mistralai/Mistral-7B-Instruct-v0.3",
+        "label": "Mistral 7B",
+        "contextWindow": 32768
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": true,
+    "websiteUrl": "https://bytez.com"
+  },
+  {
+    "id": "opencode-free",
+    "name": "OpenCode Free",
+    "baseUrl": "https://opencode.ai/zen/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "north-mini-code-free",
+      "haiku": "ling-3.0-flash-free",
+      "sonnet": "north-mini-code-free",
+      "opus": "mimo-v2.5-free"
+    },
+    "defaultModelContextWindows": {
+      "main": 131000,
+      "haiku": 131000,
+      "sonnet": 131000,
+      "opus": 131000
+    },
+    "modelOptions": [
+      {
+        "id": "north-mini-code-free",
+        "label": "North Mini Code Free",
+        "contextWindow": 131000
+      },
+      {
+        "id": "mimo-v2.5-free",
+        "label": "MiMo V2.5 Free",
+        "contextWindow": 131000
+      },
+      {
+        "id": "ling-3.0-flash-free",
+        "label": "Ling 3.0 Flash Free",
+        "contextWindow": 131000
+      }
+    ],
+    "supportsImages": false,
+    "needsApiKey": false,
+    "websiteUrl": "https://opencode.ai",
+    "promoText": "无需注册或 API Key。匿名免费模型及限额由 OpenCode 动态提供，繁忙时可能触发限流。"
   },
   {
     "id": "lmstudio",

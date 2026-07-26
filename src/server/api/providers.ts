@@ -27,9 +27,18 @@ import {
 import type { SavedProvider } from '../types/provider.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { discoverProviderModels } from '../services/providerModelDiscovery.js'
+import { getSourceMetadata } from '../routing/sourceCatalog.js'
 
 const providerService = new ProviderService()
 const MASKED_API_KEY = '••••••••'
+const PROVIDER_PRESETS_FOR_API = PROVIDER_PRESETS.map((preset) => {
+  const metadata = getSourceMetadata(preset.id)
+  return {
+    ...preset,
+    cost: metadata.cost,
+    ...(metadata.costNote && { costNote: metadata.costNote }),
+  }
+})
 const DiscoverProviderModelsSchema = z.object({
   providerId: z.string().optional(),
   presetId: z.string().optional(),
@@ -60,7 +69,7 @@ export async function handleProvidersApi(
 
     // GET /api/providers/presets
     if (id === 'presets' && req.method === 'GET') {
-      return Response.json({ presets: PROVIDER_PRESETS })
+      return Response.json({ presets: PROVIDER_PRESETS_FOR_API })
     }
 
     // GET /api/providers/auth-status

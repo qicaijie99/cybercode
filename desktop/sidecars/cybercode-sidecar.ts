@@ -8,7 +8,7 @@
  *
  *   cybercode-sidecar server   --app-root <path> --host 127.0.0.1 --port 12345
  *   cybercode-sidecar cli      --app-root <path> [其它 CLI 参数...]
- *   cybercode-sidecar adapters --app-root <path> [--feishu] [--telegram]
+ *   cybercode-sidecar adapters --app-root <path> [--feishu] [--telegram] [--weixin] [--qq] [--dingtalk]
  *   cybercode-sidecar codegraph index|watch|mcp --project <path>
  *
  * 任何模式都必须先做 process.env / process.argv 设置，再 await 进入相应的
@@ -55,12 +55,15 @@ if (mode === 'adapters') {
 }
 
 async function runAdapters(rawArgs: string[]): Promise<void> {
-  // adapters 模式的参数解析独立于 server/cli —— 这里只接受 --feishu /
-  // --telegram 选择启用哪个适配器，再加可选的 --app-root（透传给
+  // adapters 模式的参数解析独立于 server/cli —— 这里只接受平台开关，
+  // 再加可选的 --app-root（透传给
   // adapters/common/config.ts 内的 process.env 读取）。
   let appRoot: string | null = process.env.CLAUDE_APP_ROOT ?? null
   let enableFeishu = false
   let enableTelegram = false
+  let enableWeixin = false
+  let enableQQ = false
+  let enableDingTalk = false
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i]
@@ -77,12 +80,24 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
       enableTelegram = true
       continue
     }
+    if (arg === '--weixin') {
+      enableWeixin = true
+      continue
+    }
+    if (arg === '--qq') {
+      enableQQ = true
+      continue
+    }
+    if (arg === '--dingtalk') {
+      enableDingTalk = true
+      continue
+    }
     console.warn(`CyberCode sidecar adapters: ignoring unknown arg "${arg}"`)
   }
 
-  if (!enableFeishu && !enableTelegram) {
+  if (!enableFeishu && !enableTelegram && !enableWeixin && !enableQQ && !enableDingTalk) {
     console.error(
-      'CyberCode sidecar adapters: must enable at least one of --feishu / --telegram',
+      'CyberCode sidecar adapters: enable at least one supported IM platform',
     )
     process.exit(2)
   }
@@ -125,6 +140,42 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
       console.log('[CyberCode sidecar] starting Telegram adapter')
       // 副作用 import：telegram/index.ts 顶层会自动 bot.start()
       await import('../../adapters/telegram/index.ts')
+      started += 1
+    }
+  }
+
+  if (enableWeixin) {
+    if (!config.weixin.enabled || !config.weixin.accountId || !config.weixin.botToken) {
+      console.warn(
+        '[CyberCode sidecar] --weixin requested but no enabled iLink account is configured — skipping',
+      )
+    } else {
+      console.log('[CyberCode sidecar] starting Weixin iLink adapter')
+      await import('../../adapters/weixin/index.ts')
+      started += 1
+    }
+  }
+
+  if (enableQQ) {
+    if (!config.qq.enabled || !config.qq.appId || !config.qq.appSecret) {
+      console.warn(
+        '[CyberCode sidecar] --qq requested but QQBOT_APP_ID / QQBOT_APP_SECRET are missing or disabled — skipping',
+      )
+    } else {
+      console.log('[CyberCode sidecar] starting QQ WebSocket adapter')
+      await import('../../adapters/qq/index.ts')
+      started += 1
+    }
+  }
+
+  if (enableDingTalk) {
+    if (!config.dingtalk.clientId || !config.dingtalk.clientSecret) {
+      console.warn(
+        '[CyberCode sidecar] --dingtalk requested but DINGTALK_CLIENT_ID / DINGTALK_CLIENT_SECRET are missing — skipping',
+      )
+    } else {
+      console.log('[CyberCode sidecar] starting DingTalk Stream adapter')
+      await import('../../adapters/dingtalk/index.ts')
       started += 1
     }
   }

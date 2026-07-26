@@ -46,7 +46,7 @@ export function ChatModeSidebar({ label, ariaLabel }: ChatModeSidebarProps) {
   return (
     <aside
       aria-label={ariaLabel}
-      className="chat-mode-sidebar native-ui-text relative z-[95] flex h-full w-[var(--sidebar-rail-width)] shrink-0 select-none flex-col items-center border-l border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] py-[20px] text-[var(--color-text-tertiary)]"
+      className="chat-mode-sidebar native-ui-text relative z-[95] flex h-full w-[var(--chat-mode-sidebar-width)] shrink-0 select-none flex-col items-center border-l border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] py-[20px] text-[var(--color-text-tertiary)]"
     >
       <div className="flex w-full flex-col items-center gap-[24px]">
         <SideRailButton label={label}>

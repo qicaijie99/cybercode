@@ -1,41 +1,60 @@
 /**
- * Computer Use API — 环境检测与依赖安装
+ * Computer Use API — 运行组件、系统权限与应用授权
  *
  * Routes:
- *   GET  /api/computer-use/status  — 检测 Python3、venv、依赖、权限状态
- *   POST /api/computer-use/setup   — 创建 venv 并安装依赖
+ *   GET    /api/computer-use/status   — 检测运行组件与系统权限
+ *   GET    /api/computer-use/runtime  — 获取后台准备进度
+ *   POST   /api/computer-use/runtime  — 开始或继续后台准备
+ *   DELETE /api/computer-use/runtime  — 暂停后台下载
+ *   POST   /api/computer-use/setup    — 旧版 venv 安装兼容入口
  */
 
 import { join } from 'path'
 import { access, readFile, mkdir, writeFile } from 'fs/promises'
 import { createHash } from 'crypto'
 import path from 'path'
-import { fileURLToPath } from 'url'
 import type { CuPermissionRequest } from '../../vendor/computer-use-mcp/types.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import { detectPythonRuntime } from './computer-use-python.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { DEFAULT_DESKTOP_GRANT_FLAGS } from '../../utils/computerUse/preauthorizedConfig.js'
+import {
+  getManagedComputerUsePythonPath,
+  pauseComputerUseRuntimePreparation,
+  refreshComputerUseRuntimeStatus,
+  startComputerUseRuntimePreparation,
+  type ComputerUseRuntimeStatus,
+} from '../../utils/computerUse/runtimeManager.js'
+import {
+  readNativeScreenCapturePermission,
+  requestNativeMacScreenRecordingPermission,
+} from '../../utils/computerUse/nativeCapture.js'
 // Embed helper scripts at compile time so they're available in bundled mode
 // @ts-ignore — Bun text import
 import MAC_HELPER_CONTENT from '../../../runtime/mac_helper.py' with { type: 'text' }
 // @ts-ignore — Bun text import
 import WIN_HELPER_CONTENT from '../../../runtime/win_helper.py' with { type: 'text' }
 // @ts-ignore — Bun text import
+import LINUX_HELPER_CONTENT from '../../../runtime/linux_helper.py' with { type: 'text' }
+// @ts-ignore — Bun text import
 import REQUIREMENTS_DARWIN from '../../../runtime/requirements.txt' with { type: 'text' }
 // @ts-ignore — Bun text import
 import REQUIREMENTS_WIN32 from '../../../runtime/requirements-win.txt' with { type: 'text' }
+// @ts-ignore — Bun text import
+import REQUIREMENTS_LINUX from '../../../runtime/requirements-linux.txt' with { type: 'text' }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const projectRoot = path.resolve(__dirname, '../../..')
-const devRuntimeRoot = join(projectRoot, 'runtime')
 const claudeHome = getClaudeConfigHomeDir()
 const runtimeStateRoot = join(claudeHome, '.runtime')
 const venvRoot = join(runtimeStateRoot, 'venv')
 const installStampPath = join(runtimeStateRoot, 'requirements.sha256')
 
 const isWindows = process.platform === 'win32'
-const REQUIREMENTS_CONTENT = isWindows ? REQUIREMENTS_WIN32 : REQUIREMENTS_DARWIN
+const isLinux = process.platform === 'linux'
+const REQUIREMENTS_CONTENT = isWindows
+  ? REQUIREMENTS_WIN32
+  : isLinux
+    ? REQUIREMENTS_LINUX
+    : REQUIREMENTS_DARWIN
 
 function getPythonCommandEnv(): Record<string, string> | undefined {
   if (!isWindows) return undefined
@@ -56,7 +75,11 @@ function getRequirementsPath(): string {
 }
 
 function getHelperFileName(): string {
-  return isWindows ? 'win_helper.py' : 'mac_helper.py'
+  return isWindows
+    ? 'win_helper.py'
+    : isLinux
+      ? 'linux_helper.py'
+      : 'mac_helper.py'
 }
 
 function getHelperPath(): string {
@@ -93,13 +116,7 @@ async function runCommand(
   }
 }
 
-/**
- * Ensure runtime source files (requirements.txt, mac_helper.py) exist in
- * ~/.cyber/.runtime/. In dev mode they are copied from the project's
- * runtime/ directory; in bundled mode requirements.txt is written from the
- * embedded constant and mac_helper.py is copied from the project dir (if
- * available) or skipped (it will already have been extracted on a prior run).
- */
+/** Materialize the embedded requirements and platform helper in user state. */
 async function ensureRuntimeFiles(): Promise<void> {
   await mkdir(runtimeStateRoot, { recursive: true })
 
@@ -107,13 +124,18 @@ async function ensureRuntimeFiles(): Promise<void> {
   await writeFile(getRequirementsPath(), REQUIREMENTS_CONTENT, 'utf8')
 
   // helper script — write the platform-appropriate version
-  const helperContent = isWindows ? WIN_HELPER_CONTENT : MAC_HELPER_CONTENT
+  const helperContent = isWindows
+    ? WIN_HELPER_CONTENT
+    : isLinux
+      ? LINUX_HELPER_CONTENT
+      : MAC_HELPER_CONTENT
   await writeFile(getHelperPath(), helperContent, 'utf8')
 }
 
 type EnvStatus = {
   platform: string
   supported: boolean
+  runtime: ComputerUseRuntimeStatus
   python: {
     installed: boolean
     version: string | null
@@ -130,12 +152,16 @@ type EnvStatus = {
   permissions: {
     accessibility: boolean | null
     screenRecording: boolean | null
+    inputAvailable: boolean | null
   }
 }
 
 async function checkStatus(): Promise<EnvStatus> {
   const platform = process.platform
-  const supported = platform === 'darwin' || platform === 'win32'
+  const managedRuntime = await refreshComputerUseRuntimeStatus()
+  const supported =
+    (platform === 'darwin' || platform === 'win32' || platform === 'linux') &&
+    managedRuntime.platformKey !== null
 
   // Check venv — different paths on Windows vs Unix
   const venvPython = isWindows
@@ -143,16 +169,13 @@ async function checkStatus(): Promise<EnvStatus> {
     : join(venvRoot, 'bin', 'python3')
   const venvCreated = await pathExists(venvPython)
 
-  const pythonRuntime = await detectPythonRuntime(platform, runCommand, venvCreated ? venvPython : undefined)
-
-  // Check dependencies — use the state dir copy
-  const reqPath = getRequirementsPath()
-  const requirementsFound = await pathExists(reqPath)
+  // Existing users may already have the old per-user venv. Compare its stamp
+  // with the embedded requirements without probing a system Python executable
+  // on every 600 ms progress poll.
   let depsInstalled = false
-  if (requirementsFound && venvCreated) {
+  if (venvCreated) {
     try {
-      const requirements = await readFile(reqPath, 'utf8')
-      const digest = createHash('sha256').update(requirements).digest('hex')
+      const digest = createHash('sha256').update(REQUIREMENTS_CONTENT).digest('hex')
       const stamp = (await readFile(installStampPath, 'utf8')).trim()
       depsInstalled = stamp === digest
     } catch {
@@ -160,40 +183,83 @@ async function checkStatus(): Promise<EnvStatus> {
     }
   }
 
+  const managedPython = managedRuntime.ready
+    ? await getManagedComputerUsePythonPath()
+    : null
+  const legacyReady = venvCreated && depsInstalled
+  const activePython = managedPython ?? (legacyReady ? venvPython : null)
+  const activePythonVersion = activePython
+    ? pythonRuntimeVersion(await runCommand(activePython, ['--version']))
+    : null
+  const runtime: ComputerUseRuntimeStatus = managedPython
+    ? managedRuntime
+    : legacyReady
+      ? {
+          ...managedRuntime,
+          phase: 'ready',
+          ready: true,
+          version: activePythonVersion,
+          source: 'legacy',
+          downloadedBytes: 0,
+          totalBytes: null,
+          progressPercent: 100,
+          error: null,
+          canPause: false,
+        }
+      : managedRuntime
+
   // Check macOS permissions without triggering a system prompt. The helper
   // uses preflight + visible-window metadata as a passive fallback because
   // plain preflight can misreport child processes launched by the desktop app.
   let accessibility: boolean | null = null
   let screenRecording: boolean | null = null
-  if (supported && venvCreated && depsInstalled) {
+  let inputAvailable: boolean | null = null
+  if (supported && activePython) {
     try { await ensureRuntimeFiles() } catch {}
     const helperPath = getHelperPath()
     if (await pathExists(helperPath)) {
-      const permResult = await runCommand(venvPython, [helperPath, 'check_permissions'])
+      const permResult = await runCommand(activePython, [helperPath, 'check_permissions'])
       if (permResult.ok) {
         try {
           const parsed = JSON.parse(permResult.stdout)
           if (parsed.ok && parsed.result) {
             accessibility = parsed.result.accessibility ?? null
             screenRecording = parsed.result.screenRecording ?? null
+            inputAvailable = parsed.result.inputAvailable ?? null
           }
         } catch {}
       }
+    }
+  }
+  if (platform === 'darwin' || platform === 'linux') {
+    const nativeScreenRecording = await readNativeScreenCapturePermission().catch(
+      () => screenRecording,
+    )
+    if (nativeScreenRecording !== null) {
+      screenRecording = nativeScreenRecording
     }
   }
 
   return {
     platform,
     supported,
+    runtime,
     python: {
-      installed: pythonRuntime.installed,
-      version: pythonRuntime.version,
-      path: pythonRuntime.path,
+      installed: Boolean(activePython),
+      version: activePythonVersion,
+      path: activePython,
     },
-    venv: { created: venvCreated, path: venvRoot },
-    dependencies: { installed: depsInstalled, requirementsFound: requirementsFound || true },
-    permissions: { accessibility, screenRecording },
+    venv: { created: Boolean(activePython), path: managedPython ? path.dirname(managedPython) : venvRoot },
+    dependencies: { installed: Boolean(activePython), requirementsFound: true },
+    permissions: { accessibility, screenRecording, inputAvailable },
   }
+}
+
+function pythonRuntimeVersion(
+  result: { ok: boolean; stdout: string; stderr: string },
+): string | null {
+  if (!result.ok) return null
+  return `${result.stdout}\n${result.stderr}`.match(/Python\s+([^\s]+)/i)?.[1] ?? null
 }
 
 type SetupResult = {
@@ -380,11 +446,13 @@ async function saveConfig(config: ComputerUseConfig): Promise<void> {
 
 async function listInstalledApps(): Promise<{ bundleId: string; displayName: string; path: string }[]> {
   const helperPath = getHelperPath()
-  const pythonBin = isWindows
+  const legacyPython = isWindows
     ? join(venvRoot, 'Scripts', 'python.exe')
     : join(venvRoot, 'bin', 'python3')
+  const pythonBin = await getManagedComputerUsePythonPath()
+    ?? ((await pathExists(legacyPython)) ? legacyPython : null)
 
-  if (!(await pathExists(pythonBin)) || !(await pathExists(helperPath))) {
+  if (!pythonBin || !(await pathExists(helperPath))) {
     return []
   }
 
@@ -418,6 +486,21 @@ export async function handleComputerUseApi(
   if (action === 'setup' && req.method === 'POST') {
     const result = await runSetup()
     return Response.json(result)
+  }
+
+  if (action === 'runtime' && req.method === 'GET') {
+    return Response.json((await checkStatus()).runtime)
+  }
+
+  if (action === 'runtime' && req.method === 'POST') {
+    const current = await checkStatus()
+    if (current.runtime.ready) return Response.json(current.runtime)
+    const runtime = startComputerUseRuntimePreparation()
+    return Response.json(runtime, { status: 202 })
+  }
+
+  if (action === 'runtime' && req.method === 'DELETE') {
+    return Response.json(await pauseComputerUseRuntimePreparation())
   }
 
   // GET /api/computer-use/apps — list installed macOS apps
@@ -456,6 +539,9 @@ export async function handleComputerUseApi(
     }
 
     if (process.platform === 'darwin') {
+      if (pane === 'Privacy_ScreenCapture') {
+        await requestNativeMacScreenRecordingPermission().catch(() => null)
+      }
       const url = `x-apple.systempreferences:com.apple.preference.security?${pane}`
       await runCommand('open', [url])
     } else if (process.platform === 'win32') {

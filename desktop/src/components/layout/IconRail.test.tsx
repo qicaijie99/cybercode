@@ -113,12 +113,23 @@ describe('IconRail floating panel navigation', () => {
   it('toggles direct rail pages through the same floating panel state', () => {
     renderIconRail()
 
-    fireEvent.click(screen.getByRole('button', { name: '大模型' }))
+    fireEvent.click(screen.getByRole('button', { name: '大模型与智能路由' }))
     expect(useUIStore.getState().settingsPanelView).toBe('providers')
     expect(useUIStore.getState().settingsOpen).toBe(true)
 
-    fireEvent.click(screen.getByRole('button', { name: '大模型' }))
+    fireEvent.click(screen.getByRole('button', { name: '大模型与智能路由' }))
     expect(useUIStore.getState().settingsOpen).toBe(false)
+  })
+
+  it('keeps the More menu stacking context above the provider drawer', () => {
+    const { container } = renderIconRail()
+
+    expect(container.firstElementChild).toHaveClass('z-[120]')
+
+    fireEvent.click(screen.getByRole('button', { name: '大模型与智能路由' }))
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
+
+    expect(screen.getByRole('menu')).toHaveClass('z-[110]')
   })
 
   it('moves direct rail icons into More when the top rail height is tight', () => {
@@ -137,7 +148,7 @@ describe('IconRail floating panel navigation', () => {
     expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Agent 数据迁移' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '点赞收藏项目' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '大模型' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '大模型与智能路由' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'IM 接入' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '更多' }))

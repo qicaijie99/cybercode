@@ -81,7 +81,6 @@
 
       .boot-splash-logo-frame {
         position: relative;
-        isolation: isolate;
         width: 112px;
         height: 112px;
         overflow: hidden;
@@ -89,12 +88,11 @@
         border-radius: 28px;
         background: var(--boot-surface);
         box-shadow: 0 18px 48px var(--boot-shadow);
-        opacity: 0;
-        transition: opacity 300ms cubic-bezier(0.22, 1, 0.36, 1);
+        visibility: hidden;
       }
 
       .boot-splash.boot-splash-assets-ready .boot-splash-logo-frame {
-        opacity: 1;
+        visibility: visible;
       }
 
       .boot-splash-logo {
@@ -121,55 +119,54 @@
         pointer-events: none;
       }
 
-      :root[data-theme="dark"] .boot-splash-wordmark {
-        filter: invert(1) brightness(1.08) contrast(1.05);
+      .boot-splash-wordmark-dark {
+        display: none;
+      }
+
+      :root[data-theme="dark"] .boot-splash-wordmark-light {
+        display: none;
+      }
+
+      :root[data-theme="dark"] .boot-splash-wordmark-dark {
+        display: block;
       }
 
       .boot-splash-wordmark-shine {
         position: absolute;
         z-index: 1;
         inset: 0;
-        background: linear-gradient(108deg, transparent 35%, rgba(255, 255, 255, 0.18) 43%, rgba(255, 255, 255, 0.96) 49%, rgba(73, 211, 255, 0.58) 52%, transparent 60%);
-        background-position: 130% 0;
-        background-size: 260% 100%;
+        overflow: hidden;
         -webkit-mask: url('/brand/cybercode-wordmark-long-flat-v4.png') center / contain no-repeat;
         mask: url('/brand/cybercode-wordmark-long-flat-v4.png') center / contain no-repeat;
-        opacity: 0;
         pointer-events: none;
       }
 
-      .boot-splash.boot-splash-assets-ready .boot-splash-wordmark-shine-intro {
-        animation: boot-wordmark-shine-intro 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      .boot-splash-wordmark-shine-beam {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 62%;
+        background: linear-gradient(108deg, transparent 0%, rgba(255, 255, 255, 0.18) 22%, rgba(255, 255, 255, 0.96) 45%, rgba(73, 211, 255, 0.58) 55%, transparent 75%);
+        transform: translateX(-120%);
+        opacity: 0;
+        will-change: transform;
       }
 
-      .boot-splash.boot-splash-assets-ready .boot-splash-wordmark-shine-loop {
-        animation: boot-wordmark-shine-loop 1.9s cubic-bezier(0.45, 0, 0.2, 1) 760ms infinite;
+      .boot-splash.boot-splash-assets-ready .boot-splash-wordmark-shine-beam {
+        animation: boot-wordmark-shine-sweep 2.6s cubic-bezier(0.45, 0, 0.2, 1) 300ms infinite;
       }
 
-      @keyframes boot-wordmark-shine-intro {
-        0% { background-position: 112% 0; opacity: 1; }
-        76% { background-position: -130% 0; opacity: 1; }
-        100% { background-position: -130% 0; opacity: 0; }
-      }
-
-      @keyframes boot-wordmark-shine-loop {
-        0%, 14% { background-position: 130% 0; opacity: 0; }
-        24%, 72% { opacity: 1; }
-        86%, 100% { background-position: -130% 0; opacity: 0; }
+      @keyframes boot-wordmark-shine-sweep {
+        0% { transform: translateX(-120%); opacity: 0; }
+        6% { opacity: 1; }
+        42% { transform: translateX(290%); opacity: 1; }
+        48%, 100% { transform: translateX(290%); opacity: 0; }
       }
 
       @media (prefers-reduced-motion: reduce) {
-        .boot-splash-logo-frame {
-          transition: none;
-        }
-
         .boot-splash-wordmark-shine {
-          animation: none;
-        }
-
-        .boot-splash-wordmark-shine {
-          background-position: center;
-          opacity: 0.22;
+          display: none;
         }
       }
     </style>
@@ -181,9 +178,9 @@
           <img class="boot-splash-logo" src="/app-icon.png" alt="" draggable="false" decoding="async" fetchpriority="high" />
         </div>
         <div class="boot-splash-wordmark-frame">
-          <img class="boot-splash-wordmark" src="/brand/cybercode-wordmark-long-flat-v4.png" alt="" draggable="false" decoding="async" fetchpriority="high" />
-          <span class="boot-splash-wordmark-shine boot-splash-wordmark-shine-intro"></span>
-          <span class="boot-splash-wordmark-shine boot-splash-wordmark-shine-loop"></span>
+          <img class="boot-splash-wordmark boot-splash-wordmark-light" src="/brand/cybercode-wordmark-long-flat-v4.png" alt="" draggable="false" decoding="async" fetchpriority="high" />
+          <img class="boot-splash-wordmark boot-splash-wordmark-dark" src="/brand/cybercode-wordmark-long-flat-v4-dark.png" alt="" draggable="false" decoding="async" fetchpriority="high" />
+          <span class="boot-splash-wordmark-shine"><span class="boot-splash-wordmark-shine-beam"></span></span>
         </div>
       </div>
     </div>

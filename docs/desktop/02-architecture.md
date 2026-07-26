@@ -65,7 +65,7 @@
 │  └─────────────────────────────┘    │
 │                                     │
 │  ┌─────────────────────────────┐    │
-│  │   Adapter Sidecar (可选)    │    │  ← Telegram/飞书接入
+│  │   Adapter Sidecar (可选)    │    │  ← 微信/QQ/Telegram/飞书接入
 │  └─────────────────────────────┘    │
 └─────────────────────────────────────┘
 ```
@@ -94,7 +94,7 @@
 2. `start_server_sidecar(port)` — 启动 `cybercode-sidecar server --host 127.0.0.1 --port {port}`
 3. `wait_for_server()` — TCP 探活轮询，150ms 间隔，10s 超时
 4. WebView 加载 React 应用
-5. `start_adapters_sidecar()` — 启动 `cybercode-sidecar adapters --feishu --telegram`，注入 `ADAPTER_SERVER_URL` 环境变量
+5. `start_adapters_sidecar()` — 启动 `cybercode-sidecar adapters --feishu --telegram --weixin --qq`，注入 `ADAPTER_SERVER_URL` 环境变量
 
 **退出处理**：`RunEvent::Exit` / `ExitRequested` 时自动 kill 两个 sidecar。
 
@@ -135,7 +135,7 @@ Server 为每个 Session spawn 一个 CLI 子进程，通过 stdin/stdout JSON �
 三种模式共用一个入口 `desktop/sidecars/cybercode-sidecar.ts`：
 - `server` — 启动 HTTP/WS 服务
 - `cli` — 启动 CLI 子进程
-- `adapters` — 启动 IM 适配器（解析 `--feishu`/`--telegram` 参数，检查凭据后按需加载）
+- `adapters` — 启动 IM 适配器（解析四个平台开关，检查凭据后按需加载）
 
 编译产物放置在 `desktop/src-tauri/binaries/`，Tauri 打包时自动包含。
 
@@ -295,7 +295,7 @@ Server 内置代理层（`src/server/proxy/`），统一不同 AI 提供商的 A
 
 ## 适配器架构
 
-适配器系统让 Telegram/飞书等 IM 平台接入 CyberCode。
+适配器系统让微信、QQ、Telegram 和飞书接入 CyberCode。
 
 ```
 IM 平台 → Adapter 进程 → HTTP + WebSocket → Server → CLI
@@ -375,5 +375,7 @@ src/server/                           # 服务端（项目根目录）
 adapters/                             # IM 适配器
 ├── common/                          #   共享模块 (8 个)
 ├── telegram/                        #   Telegram Bot
-└── feishu/                          #   飞书 Bot
+├── feishu/                          #   飞书 Bot
+├── weixin/                          #   微信 iLink
+└── qq/                              #   QQ 官方机器人
 ```

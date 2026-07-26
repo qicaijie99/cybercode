@@ -47,6 +47,7 @@ ASSET_CONTENT_TYPES = {
     "satoshi-medium.woff2": "font/woff2",
     "satoshi-bold.woff2": "font/woff2",
     "world.geojson": "application/geo+json; charset=utf-8",
+    "china.geojson": "application/geo+json; charset=utf-8",
 }
 CHINA_REGION_NAMES = {
     "Anhui": "安徽省",
@@ -731,13 +732,16 @@ class AnalyticsStore:
         d7_cohort = int(d7_row["cohort_size"]) if d7_row else 0
         d7_retained = int(d7_row["retained_users"]) if d7_row else 0
         trend = []
+        cumulative_users = max(0, total_users - sum(new_by_day.values()))
         for offset in range(29, -1, -1):
             day = (local_date - timedelta(days=offset)).isoformat()
+            cumulative_users += new_by_day.get(day, 0)
             trend.append(
                 {
                     "day": day,
                     "active": activity_by_day.get(day, 0),
                     "new": new_by_day.get(day, 0),
+                    "cumulative": cumulative_users,
                 }
             )
 

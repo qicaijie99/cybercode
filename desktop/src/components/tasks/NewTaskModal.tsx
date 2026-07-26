@@ -70,8 +70,6 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
     if (open) fetchAdapterConfig()
   }, [open])
 
-  const isFeishuConfigured = !!(adapterConfig.feishu?.appId && adapterConfig.feishu?.appSecret
-    && ((adapterConfig.feishu?.pairedUsers?.length ?? 0) > 0 || (adapterConfig.feishu?.allowedUsers?.length ?? 0) > 0))
   const isTelegramConfigured = !!(adapterConfig.telegram?.botToken
     && ((adapterConfig.telegram?.pairedUsers?.length ?? 0) > 0 || (adapterConfig.telegram?.allowedUsers?.length ?? 0) > 0))
 
@@ -102,7 +100,9 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
   const [folderPath, setFolderPath] = useState(editTask?.folderPath || defaultWorkDir)
   const [useWorktree, setUseWorktree] = useState(editTask?.useWorktree || false)
   const [notifyEnabled, setNotifyEnabled] = useState(editTask?.notification?.enabled || false)
-  const [notifyChannels, setNotifyChannels] = useState<('telegram' | 'feishu')[]>(editTask?.notification?.channels || [])
+  const [notifyChannels, setNotifyChannels] = useState<Array<'telegram'>>(
+    editTask?.notification?.channels.includes('telegram') ? ['telegram'] : [],
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Enhanced scheduling state
@@ -356,23 +356,6 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
           {notifyEnabled && (
             <div className="flex flex-col gap-2 pl-7">
               <div className="flex items-center gap-4">
-                <label className={`flex items-center gap-2 ${isFeishuConfigured ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`}>
-                  <input
-                    type="checkbox"
-                    checked={notifyChannels.includes('feishu')}
-                    disabled={!isFeishuConfigured}
-                    onChange={(e) => {
-                      setNotifyChannels((prev) =>
-                        e.target.checked ? [...prev, 'feishu'] : prev.filter((c) => c !== 'feishu'),
-                      )
-                    }}
-                    className="w-3.5 h-3.5 rounded border-[var(--color-border)] accent-[var(--color-brand)]"
-                  />
-                  <span className="text-[14px] text-[var(--color-text-primary)]">{t('settings.adapters.feishu')}</span>
-                  {!isFeishuConfigured && (
-                    <span className="text-[10px] text-[var(--color-warning)]">{t('newTask.notConfigured')}</span>
-                  )}
-                </label>
                 <label className={`flex items-center gap-2 ${isTelegramConfigured ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`}>
                   <input
                     type="checkbox"
@@ -391,7 +374,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
                   )}
                 </label>
               </div>
-              {!isFeishuConfigured && !isTelegramConfigured && (
+              {!isTelegramConfigured && (
                 <p className="text-[12px] text-[var(--color-warning)]">
                   <Icon name="warning" size={12} className="align-middle mr-1" />
                   {t('newTask.noChannelConfigured')}

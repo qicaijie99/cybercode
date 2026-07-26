@@ -103,6 +103,7 @@ describe('sessionStore', () => {
   })
 
   it('excludes temporary sessions from available projects after refresh', async () => {
+    useSessionStore.setState({ error: 'temporary startup failure' })
     listMock.mockResolvedValue({
       sessions: [
         {
@@ -134,6 +135,7 @@ describe('sessionStore', () => {
     await useSessionStore.getState().fetchSessions()
 
     expect(useSessionStore.getState().availableProjects).toEqual(['-workspace-project'])
+    expect(useSessionStore.getState().error).toBeNull()
   })
 
   it('keeps the sidebar filter scope mutually exclusive', () => {

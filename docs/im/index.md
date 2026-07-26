@@ -1,166 +1,79 @@
 # IM 接入
 
-> 当前可用的 IM 接入方案总览。  
-> 如果你只是想把 Telegram 或飞书接进来，从这篇开始。
+> 在微信、QQ、钉钉或 Telegram 中远程使用本机 CyberCode。
 
-## 当前方案是什么
+## 支持的通道
 
-当前仓库里的 IM 接入，已经不是早期文档里设想的 “IM Gateway / MCP Channel 插件” 主路径。
+| 通道 | 推荐连接方式 | 是否需要公网回调 |
+|------|--------------|------------------|
+| 微信 | 腾讯官方 iLink 扫码 | 不需要 |
+| QQ | QQ 官方机器人扫码，AppID/Secret 兜底 | 不需要，使用 WebSocket |
+| 钉钉 | 企业内部应用 Stream 模式 | 不需要 |
+| Telegram | Bot Token 长轮询 | 不需要 |
 
-现在真实在跑的是一条更轻的链路：
+## 工作方式
 
 ```mermaid
-flowchart TD
-    A["Desktop Webapp<br/>Settings -> IM 接入"] --> B["GET / PUT /api/adapters"]
-    B --> C["Desktop Server<br/>配置接口"]
-    C --> D["本地配置持久化"]
-    D --> E["~/.claude/adapters.json"]
-
-    E --> F["Telegram / 飞书 Adapter 进程"]
-    F --> G["加载平台配置"]
-    F --> H["校验配对与授权"]
-    F --> I["读取 / 写入会话映射"]
-    I --> J["~/.claude/adapter-sessions.json"]
-
-    F --> K{"当前 chatId<br/>是否已有 session?"}
-    K -->|有历史映射| L["复用已有 sessionId"]
-    K -->|无历史映射| M{"是否配置<br/>defaultProjectDir?"}
-    M -->|是| N["POST /api/sessions<br/>创建新 session"]
-    M -->|否| O["GET /api/sessions/recent-projects<br/>让用户选择项目"]
-    O --> P["用户回复编号"]
-    P --> N
-
-    N --> Q["获得 sessionId"]
-    L --> R["连接 /ws/:sessionId"]
-    Q --> R
-
-    R --> S["adapters/common/ws-bridge.ts"]
-    S --> T["Desktop Server"]
-    T --> U["CyberCode session / CLI 子进程"]
-
-    U --> V["流式消息 / 权限请求 / 状态事件"]
-    V --> S
-    S --> F
-    F --> W["Telegram / 飞书用户"]
+flowchart LR
+    A["桌面端 IM 接入设置"] --> B["本地 Desktop Server"]
+    B --> C["~/.cyber/adapters.json"]
+    C --> D["Adapter Sidecar"]
+    D --> E["微信 iLink"]
+    D --> F["QQ WebSocket"]
+    D --> G["钉钉 Stream 长连接"]
+    D --> H["Telegram 长轮询"]
+    D <--> I["CyberCode 会话 WebSocket"]
 ```
 
-可以把这条链路理解成四层：
+桌面版会随应用自动启动 Adapter Sidecar。保存配置、扫码成功、启用或停用通道后，也会自动重启 Sidecar，普通用户不需要安装额外代理或手动运行命令。
 
-- 配置层：桌面端 webapp 负责填写平台凭据、默认项目和配对码管理
-- 存储层：本地服务端把配置写入 `~/.claude/adapters.json`
-- 适配层：Telegram / 飞书 adapter 进程负责接 IM 平台、做授权检查、恢复或创建会话
-- 会话层：adapter 通过 HTTP 创建 session，再通过 WebSocket 把 IM 消息桥接到 CyberCode 会话
+## 快速开始
 
-## 用户怎么用
+1. 打开桌面端 `设置 -> IM 接入`。
+2. 选择微信、QQ、钉钉或 Telegram。
+3. 扫码或填写官方凭据，然后保存。
+4. 需要授权其他账号时，在同页生成 6 位配对码，再通过 IM 发给 Bot。
 
-### 1. 在 Desktop Webapp 里配置
+微信和 QQ 扫码用户会自动成为首个已配对用户。手动填写 QQ 凭据、钉钉和 Telegram 则使用配对码授权具体用户。
 
-打开桌面端设置页的 `IM 接入` 标签，填写：
+## 会话与命令
 
-- `serverUrl`
-- `defaultProjectDir`
-- Telegram 或飞书各自的凭据
-- 可选 `allowedUsers`
+| 命令 | 作用 |
+|------|------|
+| `/help` | 查看帮助 |
+| `/new [项目名]` | 新建会话，可模糊匹配项目 |
+| `/projects` | 选择最近项目 |
+| `/status` | 查看当前项目、模型和执行状态 |
+| `/stop` | 停止当前生成 |
+| `/clear` | 清空当前会话上下文 |
+| `/allow <编号>` | 允许一次工具调用 |
+| `/deny <编号>` | 拒绝工具调用 |
 
-这里的配置会通过 `GET /api/adapters` 和 `PUT /api/adapters` 读写到 `~/.claude/adapters.json`。
+同一个 IM 对话会恢复之前的 CyberCode 会话。没有默认项目时，Bot 会让你从最近项目中选择。
 
-### 2. 生成配对码
+## 配置与安全
 
-配对也在同一个设置页完成：
+配置保存在 `~/.cyber/adapters.json`，IM 会话映射保存在 `~/.cyber/adapter-sessions.json`。
 
-- 点击“生成配对码”
-- 前端生成 6 位码并写入 `pairing.code / expiresAt / createdAt`
-- 码有效期 60 分钟
-- 配对成功后立即失效
+- API 返回配置时会对 Token 和 Secret 脱敏。
+- `allowedUsers` 和 `pairedUsers` 取并集；两者都为空时默认拒绝访问。
+- 配对码 60 分钟有效、一次性使用，并对连续失败尝试限流。
+- 微信、QQ 和 Telegram 附件只在本地临时目录中中转；钉钉通道当前只接收文字消息。
 
-配对码是平台无关的，同一个码可以在 Telegram 或飞书私聊里使用一次。
+## 命令行手动启动
 
-### 3. 启动对应 Adapter 进程
-
-Webapp 负责配置和配对，不负责代你启动 bot 进程。当前仍需要手动启动：
+只有在不使用桌面版时，才需要手动启动：
 
 ```bash
 cd adapters
 bun install
-bun run telegram
-# 或
-bun run feishu
+bun run weixin
+# 或 bun run qq / dingtalk / telegram
 ```
 
-### 4. 在 IM 里私聊 Bot
+## 分平台教程
 
-- 未配对用户：先把配对码发给 bot
-- 已配对用户：直接发送自然语言消息
-- 没有默认项目时：bot 会先让你从最近项目里选一个
-- 后续消息会复用同一个 CyberCode session
-
-## 配置和状态分别存哪
-
-### `~/.claude/adapters.json`
-
-保存平台配置和授权状态，包括：
-
-- `serverUrl`
-- `defaultProjectDir`
-- `pairing`
-- `telegram`
-- `feishu`
-
-其中：
-
-- 敏感字段会在 API 返回时被脱敏
-- 配对码也会被 `/api/adapters` 返回值掩码为 `******`
-
-### `~/.claude/adapter-sessions.json`
-
-保存 IM chat 到 CyberCode session 的映射：
-
-- `chatId`
-- `sessionId`
-- `workDir`
-- `updatedAt`
-
-这让 bot 重启后仍然能接回原来的会话。
-
-## 当前安全模型
-
-授权规则是：
-
-- `allowedUsers` 和 `pairedUsers` 取并集
-- 两者都为空时，默认拒绝访问
-- 配对码为 6 位安全字符集
-- 配对码一次性使用
-- 同一用户 5 分钟内最多失败 5 次
-
-这和旧 README 里“`allowedUsers` 为空就允许所有人”的说法已经不同，旧说法已过时。
-
-## 会话行为
-
-Adapter 不是直接把消息丢给一个全局 CyberCode 进程，而是：
-
-1. 先用 `POST /api/sessions` 创建 session
-2. 再用 `ws://.../ws/:sessionId` 建立桥接
-3. 把 IM 消息转成：
-   - `user_message`
-   - `permission_response`
-   - `stop_generation`
-4. 把服务端流式消息再格式化回 IM
-
-如果没有 `defaultProjectDir`，Adapter 会调用 `GET /api/sessions/recent-projects` 让用户先选项目。
-
-## 平台差异
-
-- Telegram：`grammy`，按钮审批，纯私聊模式
-- 飞书：`@larksuiteoapi/node-sdk`，长连接事件订阅，交互卡片审批，当前只处理 `p2p`
-
-分别看：
-
+- [微信接入](./weixin.md)
+- [QQ 机器人接入](./qq.md)
+- [钉钉机器人接入](./dingtalk.md)
 - [Telegram 接入](./telegram.md)
-- [飞书接入](./feishu.md)
-
-## 和 `docs/channel/` 的关系
-
-`docs/channel/` 主要是 Claude Code 原生 Channel/MCP 体系的源码研究资料，不是这个仓库当前推荐的 IM 接入方式。
-
-如果你是要“把 bot 真跑起来”，看本目录。  
-如果你是要研究 Claude Code 原始 Channel 设计，再去看 `docs/channel/`。

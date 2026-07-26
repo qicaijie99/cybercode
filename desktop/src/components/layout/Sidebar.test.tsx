@@ -24,7 +24,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 }))
 
 vi.mock('../../i18n', () => ({
-  useTranslation: () => (key: string) => {
+  useTranslation: () => (key: string, params?: Record<string, string | number>) => {
     const translations: Record<string, string> = {
       'sidebar.newSession': 'New Session',
       'sidebar.scheduled': 'Scheduled',
@@ -38,6 +38,14 @@ vi.mock('../../i18n', () => ({
       'sidebar.other': 'Other',
       'sidebar.projectSessionCount': '{count}',
       'sidebar.removeProject': 'Remove project from sidebar',
+      'sidebar.selectProjectSessions': 'Select sessions in {project}',
+      'sidebar.selectAllSessions': 'Select all sessions',
+      'sidebar.clearSessionSelection': 'Clear selection',
+      'sidebar.bulkSelectionCount': '{selected}/{total} selected',
+      'sidebar.deleteSelectedSessions': 'Delete selected sessions',
+      'sidebar.cancelBulkSelection': 'Cancel selection',
+      'sidebar.confirmBulkDelete': 'Delete the selected sessions ({count})? This cannot be undone.',
+      'sidebar.bulkDeleteFailed': 'Some sessions could not be deleted ({count}) and remain selected.',
       'sidebar.noSessions': 'No sessions',
       'sidebar.noMatching': 'No matching sessions',
       'sidebar.sessionListFailed': 'Session list failed',
@@ -76,7 +84,10 @@ vi.mock('../../i18n', () => ({
       'sidebar.expand': 'Expand sidebar',
     }
 
-    return translations[key] ?? key
+    return Object.entries(params ?? {}).reduce(
+      (value, [name, replacement]) => value.replaceAll(`{${name}}`, String(replacement)),
+      translations[key] ?? key,
+    )
   },
 }))
 
@@ -155,8 +166,24 @@ describe('Sidebar', () => {
     const search = screen.getByPlaceholderText('Search sessions')
     const newSessionButton = screen.getByRole('button', { name: 'New Session' })
 
-    expect(search).toHaveClass('h-[44px]', 'w-full', 'rounded-full')
-    expect(newSessionButton).toHaveClass('h-[44px]', 'w-full', 'rounded-full')
+    expect(search).toHaveClass(
+      'box-border',
+      'h-[44px]',
+      'min-h-[44px]',
+      'max-h-[44px]',
+      'w-full',
+      'appearance-none',
+      'rounded-full',
+    )
+    expect(newSessionButton).toHaveClass(
+      'box-border',
+      'h-[43px]',
+      'min-h-[43px]',
+      'max-h-[43px]',
+      'w-full',
+      'appearance-none',
+      'rounded-full',
+    )
     expect(search.parentElement).not.toContainElement(newSessionButton)
     expect(controls.lastElementChild).toBe(newSessionButton)
     expect(newSessionButton).toHaveAttribute('aria-haspopup', 'menu')
@@ -467,6 +494,241 @@ describe('Sidebar', () => {
     expect(useTabStore.getState().activeTabId).toBeNull()
   })
 
+  it('deletes only checked sessions from one project after confirmation', async () => {
+    const now = new Date().toISOString()
+    deleteSession.mockImplementation(async (id, projectPath) => {
+      useSessionStore.setState((state) => ({
+        sessions: state.sessions.filter(
+          (session) => session.id !== id || session.projectPath !== projectPath,
+        ),
+      }))
+    })
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'alpha-one',
+          title: 'Alpha One',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 1,
+          projectPath: '-workspace-alpha',
+          workDir: '/workspace/alpha',
+          workDirExists: true,
+          isTemporary: false,
+        },
+        {
+          id: 'alpha-two',
+          title: 'Alpha Two',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 1,
+          projectPath: '-workspace-alpha',
+          workDir: '/workspace/alpha',
+          workDirExists: true,
+          isTemporary: false,
+        },
+        {
+          id: 'beta-one',
+          title: 'Beta One',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 1,
+          projectPath: '-workspace-beta',
+          workDir: '/workspace/beta',
+          workDirExists: true,
+          isTemporary: false,
+        },
+      ],
+    })
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'alpha-one', projectPath: '-workspace-alpha', title: 'Alpha One', type: 'session', status: 'idle' },
+        { sessionId: 'alpha-two', projectPath: '-workspace-alpha', title: 'Alpha Two', type: 'session', status: 'idle' },
+        { sessionId: 'beta-one', projectPath: '-workspace-beta', title: 'Beta One', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'alpha-one',
+    })
+
+    render(<Sidebar />)
+
+    const alphaProject = screen.getByRole('region', { name: 'alpha' })
+    const alphaHeader = within(alphaProject).getByRole('button', { expanded: true })
+    fireEvent.click(alphaHeader)
+    expect(alphaHeader).toHaveAttribute('aria-expanded', 'false')
+    expect(within(alphaProject).queryByText('Alpha One')).not.toBeInTheDocument()
+
+    fireEvent.click(within(alphaProject).getByRole('button', { name: 'Select sessions in alpha' }))
+
+    const alphaOne = within(alphaProject).getByRole('checkbox', { name: 'Alpha One' })
+    expect(alphaHeader).toHaveAttribute('aria-expanded', 'true')
+    expect(alphaOne).not.toBeChecked()
+    fireEvent.click(alphaOne)
+
+    expect(alphaOne).toBeChecked()
+    expect(within(alphaProject).getByText('1/2 selected')).toBeInTheDocument()
+    expect(ensureSessionReady).not.toHaveBeenCalled()
+    expect(within(alphaProject).queryByRole('button', { name: 'Delete: Alpha One' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(alphaProject).getByRole('button', { name: 'Delete selected sessions' }))
+    expect(deleteSession).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog', { name: 'Delete selected sessions' })
+    expect(within(dialog).getByText('Delete the selected sessions (1)? This cannot be undone.')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    })
+
+    await waitFor(() => {
+      expect(deleteSession).toHaveBeenCalledTimes(1)
+      expect(deleteSession).toHaveBeenCalledWith('alpha-one', '-workspace-alpha')
+      expect(disconnectSession).toHaveBeenCalledWith('alpha-one')
+    })
+    expect(deleteSession).not.toHaveBeenCalledWith('alpha-two', '-workspace-alpha')
+    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['alpha-two', 'beta-one'])
+    expect(screen.queryByRole('checkbox', { name: 'Alpha Two' })).not.toBeInTheDocument()
+  })
+
+  it('supports project select-all and keeps failed deletions selected', async () => {
+    const now = new Date().toISOString()
+    deleteSession.mockImplementation(async (id, projectPath) => {
+      if (id === 'alpha-two') throw new Error('delete failed')
+      useSessionStore.setState((state) => ({
+        sessions: state.sessions.filter(
+          (session) => session.id !== id || session.projectPath !== projectPath,
+        ),
+      }))
+    })
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'alpha-one',
+          title: 'Alpha One',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 1,
+          projectPath: '-workspace-alpha',
+          workDir: '/workspace/alpha',
+          workDirExists: true,
+          isTemporary: false,
+        },
+        {
+          id: 'alpha-two',
+          title: 'Alpha Two',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 1,
+          projectPath: '-workspace-alpha',
+          workDir: '/workspace/alpha',
+          workDirExists: true,
+          isTemporary: false,
+        },
+      ],
+    })
+
+    render(<Sidebar />)
+
+    const alphaProject = screen.getByRole('region', { name: 'alpha' })
+    fireEvent.click(within(alphaProject).getByRole('button', { name: 'Select sessions in alpha' }))
+    fireEvent.click(within(alphaProject).getByRole('checkbox', { name: 'Select all sessions' }))
+
+    expect(within(alphaProject).getByRole('checkbox', { name: 'Alpha One' })).toBeChecked()
+    expect(within(alphaProject).getByRole('checkbox', { name: 'Alpha Two' })).toBeChecked()
+    expect(within(alphaProject).getByText('2/2 selected')).toBeInTheDocument()
+
+    fireEvent.click(within(alphaProject).getByRole('button', { name: 'Delete selected sessions' }))
+    const dialog = screen.getByRole('dialog', { name: 'Delete selected sessions' })
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    })
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith({
+        type: 'error',
+        message: 'Some sessions could not be deleted (1) and remain selected.',
+      })
+    })
+    expect(deleteSession).toHaveBeenCalledTimes(2)
+    expect(disconnectSession).toHaveBeenCalledTimes(1)
+    expect(disconnectSession).toHaveBeenCalledWith('alpha-one')
+    expect(screen.queryByRole('checkbox', { name: 'Alpha One' })).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Alpha Two' })).toBeChecked()
+    expect(screen.getByText('1/1 selected')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel selection' }))
+    expect(screen.queryByRole('checkbox', { name: 'Alpha Two' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete: Alpha Two' })).toBeInTheDocument()
+  })
+
+  it('supports batch selection and deletion for temporary sessions', async () => {
+    const now = new Date().toISOString()
+    deleteSession.mockImplementation(async (id, projectPath) => {
+      useSessionStore.setState((state) => ({
+        sessions: state.sessions.filter(
+          (session) => session.id !== id || session.projectPath !== projectPath,
+        ),
+      }))
+    })
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'temp-one',
+          title: 'Temporary One',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 1,
+          projectPath: '-Users-test',
+          workDir: '/Users/test',
+          workDirExists: true,
+          isTemporary: true,
+        },
+        {
+          id: 'temp-two',
+          title: 'Temporary Two',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 1,
+          projectPath: '-Users-test',
+          workDir: '/Users/test',
+          workDirExists: true,
+          isTemporary: true,
+        },
+      ],
+    })
+
+    render(<Sidebar />)
+
+    const temporaryGroup = screen.getByRole('region', { name: 'Temporary sessions' })
+    const selectButton = within(temporaryGroup).getByRole('button', {
+      name: 'Select sessions in Temporary sessions',
+    })
+    expect(selectButton).toHaveClass(
+      'right-[31px]',
+      'opacity-0',
+      'group-hover/project:opacity-100',
+    )
+
+    fireEvent.click(selectButton)
+    fireEvent.click(within(temporaryGroup).getByRole('checkbox', { name: 'Select all sessions' }))
+
+    expect(within(temporaryGroup).getByRole('checkbox', { name: 'Temporary One' })).toBeChecked()
+    expect(within(temporaryGroup).getByRole('checkbox', { name: 'Temporary Two' })).toBeChecked()
+    expect(within(temporaryGroup).getByText('2/2 selected')).toBeInTheDocument()
+
+    fireEvent.click(within(temporaryGroup).getByRole('button', { name: 'Delete selected sessions' }))
+    const dialog = screen.getByRole('dialog', { name: 'Delete selected sessions' })
+
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    })
+
+    await waitFor(() => {
+      expect(deleteSession).toHaveBeenCalledTimes(2)
+      expect(deleteSession).toHaveBeenCalledWith('temp-one', '-Users-test')
+      expect(deleteSession).toHaveBeenCalledWith('temp-two', '-Users-test')
+      expect(screen.queryByRole('region', { name: 'Temporary sessions' })).not.toBeInTheDocument()
+    })
+  })
+
   it('keeps project and session paths in hover titles instead of visible rows', () => {
     const now = new Date().toISOString()
     useSessionStore.setState({
@@ -744,6 +1006,10 @@ describe('Sidebar', () => {
     expect(screen.getByText('alpha transcript')).toBeInTheDocument()
     expect(screen.getByText('beta transcript')).toBeInTheDocument()
     expect(screen.getByText('temp transcript')).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Temporary sessions' })).getByRole(
+      'button',
+      { name: 'Select sessions in Temporary sessions' },
+    )).toBeInTheDocument()
 
     await act(async () => {
       useSessionStore.getState().setSelectedProjects(['-workspace-beta'])

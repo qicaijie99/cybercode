@@ -1,11 +1,11 @@
 import { create } from 'zustand'
 import { adaptersApi } from '../api/adapters'
-import type { AdapterFileConfig } from '../types/adapter'
+import type { AdapterFileConfig, ImPlatform } from '../types/adapter'
 
 /**
  * Tauri command 触发器：让主进程 kill + respawn adapter sidecar，
- * 让 ~/.cyber/adapters.json 里的最新凭据被新进程读到，建立飞书 / Telegram
- * 的 WebSocket 连接。
+ * 让 ~/.cyber/adapters.json 里的最新凭据被新进程读到，建立各 IM
+ * 平台的长连接或长轮询。
  *
  * 在非 Tauri 环境（纯浏览器调试 / 单元测试）这会安静失败 —— 那种场景下
  * 本来也没有 sidecar 可重启。
@@ -48,7 +48,8 @@ type AdapterStore = {
   fetchConfig: () => Promise<void>
   updateConfig: (patch: Partial<AdapterFileConfig>) => Promise<void>
   generatePairingCode: () => Promise<string>
-  removePairedUser: (platform: 'telegram' | 'feishu', userId: string | number) => Promise<void>
+  restartAdapters: () => Promise<void>
+  removePairedUser: (platform: ImPlatform, userId: string | number) => Promise<void>
 }
 
 export const useAdapterStore = create<AdapterStore>((set, get) => ({
@@ -71,7 +72,7 @@ export const useAdapterStore = create<AdapterStore>((set, get) => ({
     const config = await adaptersApi.updateConfig(patch)
     set({ config })
     // 配置文件已写入磁盘，让 Tauri 主进程 kill + respawn adapter sidecar，
-    // 触发飞书 / Telegram WebSocket 用新凭据重连。pairing code / paired users
+    // 触发各 IM 通道用新凭据重连。pairing code / paired users
     // 这种轻量更新也会触发重启 —— 这是个有意为之的简化：保证"任何配置变更
     // 都立刻生效"，比起精细判断哪些字段值得重启更可靠。
     void notifyTauriRestartAdapters()
@@ -89,6 +90,8 @@ export const useAdapterStore = create<AdapterStore>((set, get) => ({
     })
     return code
   },
+
+  restartAdapters: notifyTauriRestartAdapters,
 
   removePairedUser: async (platform, userId) => {
     const { config } = get()

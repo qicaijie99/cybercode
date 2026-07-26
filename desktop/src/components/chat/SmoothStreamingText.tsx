@@ -12,6 +12,9 @@ const MAX_STREAMING_GRAPHEMES_PER_FRAME = 6
 const MAX_SETTLING_GRAPHEMES_PER_FRAME = 8
 const STREAMING_GRAPHEME_HOLDBACK = 1
 const STREAMING_GRAPHEME_HOLDBACK_MS = 120
+const STREAMING_REVEAL_DURATION_MS = 140
+const STREAMING_REVEAL_STAGGER_MS = 8
+const STREAMING_REVEAL_SETTLE_BUFFER_MS = 40
 
 type SegmenterLike = {
   segment: (text: string) => Iterable<{ index: number; segment: string }>
@@ -138,6 +141,7 @@ export function SmoothStreamingText({ content, onCaughtUp }: Props) {
   const reducedMotionRef = useRef(prefersReducedMotion())
   const onCaughtUpRef = useRef(onCaughtUp)
   const notifiedTargetRef = useRef<string | null>(null)
+  const revealTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
 
   onCaughtUpRef.current = onCaughtUp
 
@@ -147,29 +151,92 @@ export function SmoothStreamingText({ content, onCaughtUp }: Props) {
     if (textNodeRef.current?.parentNode === container) return textNodeRef.current
 
     const existing = container.firstChild
-    if (existing?.nodeType === Node.TEXT_NODE && existing === container.lastChild) {
+    if (existing?.nodeType === Node.TEXT_NODE) {
       textNodeRef.current = existing as Text
       return textNodeRef.current
     }
 
     const textNode = document.createTextNode('')
-    container.replaceChildren(textNode)
+    container.insertBefore(textNode, existing ?? null)
     textNodeRef.current = textNode
     return textNode
   }
 
-  const getDisplayedText = () => textNodeRef.current?.data ?? textRef.current?.textContent ?? ''
+  const clearRevealTimers = () => {
+    revealTimersRef.current.forEach((timer) => clearTimeout(timer))
+    revealTimersRef.current.clear()
+  }
 
-  const writeDisplayedText = (nextText: string) => {
+  const promoteSettledRevealNodes = () => {
     const textNode = ensureTextNode()
     if (!textNode) return
-    const currentText = textNode.data
-    if (nextText.startsWith(currentText)) {
-      const suffix = nextText.slice(currentText.length)
-      if (suffix) textNode.appendData(suffix)
+
+    let nextNode = textNode.nextSibling
+    while (
+      nextNode instanceof HTMLElement
+      && nextNode.dataset.streamingRevealReady === 'true'
+    ) {
+      const followingNode = nextNode.nextSibling
+      textNode.appendData(nextNode.textContent ?? '')
+      nextNode.remove()
+      nextNode = followingNode
+    }
+  }
+
+  const appendAnimatedSuffix = (suffix: string) => {
+    const container = textRef.current
+    if (!container || !suffix) return
+
+    const boundaries = getGraphemeBoundaries(suffix)
+    for (let index = 0; index < boundaries.length - 1; index += 1) {
+      const start = boundaries[index] ?? suffix.length
+      const end = boundaries[index + 1] ?? suffix.length
+      const revealNode = document.createElement('span')
+      const delayMs = Math.min(index * STREAMING_REVEAL_STAGGER_MS, 48)
+      let settled = false
+      let fallbackTimer: ReturnType<typeof setTimeout> | null = null
+
+      revealNode.className = 'streaming-grapheme-reveal'
+      revealNode.textContent = suffix.slice(start, end)
+      revealNode.style.setProperty('--streaming-reveal-delay', `${delayMs}ms`)
+
+      const settle = () => {
+        if (settled) return
+        settled = true
+        revealNode.dataset.streamingRevealReady = 'true'
+        if (fallbackTimer !== null) {
+          clearTimeout(fallbackTimer)
+          revealTimersRef.current.delete(fallbackTimer)
+        }
+        promoteSettledRevealNodes()
+      }
+
+      revealNode.addEventListener('animationend', settle, { once: true })
+      container.appendChild(revealNode)
+      fallbackTimer = setTimeout(
+        settle,
+        STREAMING_REVEAL_DURATION_MS + delayMs + STREAMING_REVEAL_SETTLE_BUFFER_MS,
+      )
+      revealTimersRef.current.add(fallbackTimer)
+    }
+  }
+
+  const getDisplayedText = () => textRef.current?.textContent ?? ''
+
+  const writeDisplayedText = (nextText: string, animateSuffix = false) => {
+    const container = textRef.current
+    const textNode = ensureTextNode()
+    if (!container || !textNode) return
+    const currentText = container.textContent ?? ''
+
+    if (animateSuffix && nextText.startsWith(currentText)) {
+      appendAnimatedSuffix(nextText.slice(currentText.length))
       return
     }
+
+    clearRevealTimers()
     textNode.replaceData(0, textNode.length, nextText)
+    while (textNode.nextSibling) textNode.nextSibling.remove()
   }
 
   const getRevealableTotal = (total: number) => (
@@ -268,7 +335,7 @@ export function SmoothStreamingText({ content, onCaughtUp }: Props) {
       revealBudgetRef.current = Math.max(0, revealBudgetRef.current - revealCount)
       const next = current + revealCount
       displayedGraphemeRef.current = next
-      writeDisplayedText(target.slice(0, boundaries[next] ?? target.length))
+      writeDisplayedText(target.slice(0, boundaries[next] ?? target.length), true)
 
       if (pauseMs > 0 && next < currentTotal) {
         pauseUntilRef.current = now + pauseMs
@@ -357,6 +424,7 @@ export function SmoothStreamingText({ content, onCaughtUp }: Props) {
 
   useEffect(() => () => {
     cancelFrame()
+    clearRevealTimers()
     if (holdbackTimerRef.current !== null) clearTimeout(holdbackTimerRef.current)
   }, [])
 

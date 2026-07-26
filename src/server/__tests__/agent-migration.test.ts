@@ -86,6 +86,378 @@ describe('AgentMigrationService', () => {
     expect(cursor.projects).toContainEqual(expect.objectContaining({ path: await realpath(projectPath), exists: true }))
   })
 
+  it('detects and imports Trae CN skills, rules, memories, and workspace projects', async () => {
+    const projectPath = join(root, 'workspace', 'trae-app')
+    const traeRoot = join(homeDir, '.trae-cn')
+    const traeApplicationRoot = join(homeDir, 'Library', 'Application Support', 'Trae CN')
+    const encodedProjectPath = projectPath.replace(/[^a-zA-Z0-9]/g, '-')
+    await mkdir(projectPath, { recursive: true })
+    await write(join(traeRoot, 'skills', 'trae-review', 'SKILL.md'), '# Trae global review')
+    await write(join(traeRoot, 'memory', 'user_profile.md'), '# Trae profile\nPrefer TypeScript.')
+    await write(
+      join(traeRoot, 'memory', 'projects', encodedProjectPath, 'project_memory.md'),
+      '# Trae project memory\nUse focused tests.',
+    )
+    await write(
+      join(traeApplicationRoot, 'User', 'settings', 'user_rules.md'),
+      '# Trae global rules',
+    )
+    await write(
+      join(traeApplicationRoot, 'User', 'workspaceStorage', 'workspace-trae', 'workspace.json'),
+      JSON.stringify({ folder: pathToFileURL(projectPath).href }),
+    )
+    await write(join(projectPath, '.trae', 'skills', 'trae-project', 'SKILL.md'), '# Trae project skill')
+    await write(join(projectPath, '.trae', 'rules', 'project_rules.md'), '# Trae root rule')
+    await write(join(projectPath, 'packages', 'api', '.trae', 'rules', 'api-rule.md'), '# Trae nested rule')
+
+    const registered: string[] = []
+    const service = createService({
+      platform: 'darwin',
+      findExecutable: command => command === 'trae' ? '/bin/trae' : null,
+      registerProject: async project => {
+        registered.push(project)
+        return true
+      },
+    })
+    const scan = await service.scan()
+    const trae = scan.agents.find(agent => agent.id === 'trae')!
+    const canonicalProjectPath = await realpath(projectPath)
+    const project = trae.projects.find(candidate => candidate.path === canonicalProjectPath)!
+
+    expect(trae).toMatchObject({
+      installed: true,
+      executablePath: '/bin/trae',
+      counts: {
+        skills: 2,
+        memories: 2,
+        instructions: 3,
+        projects: 1,
+      },
+    })
+    expect(trae.dataRoots).toEqual(expect.arrayContaining([
+      traeRoot,
+      traeApplicationRoot,
+    ]))
+    expect(project.itemIds).toHaveLength(4)
+    expect(trae.items.map(item => item.sourcePath)).toEqual(expect.arrayContaining([
+      await realpath(join(traeRoot, 'skills', 'trae-review', 'SKILL.md')),
+      await realpath(join(traeRoot, 'memory', 'user_profile.md')),
+      await realpath(join(traeRoot, 'memory', 'projects', encodedProjectPath, 'project_memory.md')),
+      await realpath(join(traeApplicationRoot, 'User', 'settings', 'user_rules.md')),
+      await realpath(join(projectPath, '.trae', 'rules', 'project_rules.md')),
+      await realpath(join(projectPath, 'packages', 'api', '.trae', 'rules', 'api-rule.md')),
+    ]))
+
+    const profile = trae.items.find(item => item.name === 'user_profile.md')!
+    const preview = await service.preview('trae', profile.id)
+    expect(preview).toMatchObject({ truncated: false })
+    expect(preview.content).toContain('Prefer TypeScript.')
+
+    const result = await service.migrate({
+      agentId: 'trae',
+      itemIds: trae.items.filter(item => item.scope === 'global').map(item => item.id),
+      projectIds: [project.id],
+    })
+
+    expect(result).toMatchObject({ imported: 7, failed: 0 })
+    expect(registered).toEqual([canonicalProjectPath])
+    expect(await readFile(join(cyberConfigDir, 'skills', 'trae-review', 'SKILL.md'), 'utf-8'))
+      .toContain('Trae global review')
+    expect(await readFile(join(projectPath, '.cyber', 'skills', 'trae-project', 'SKILL.md'), 'utf-8'))
+      .toContain('Trae project skill')
+    expect(await readFile(join(cyberConfigDir, 'CYBER.md'), 'utf-8')).toContain('Trae global rules')
+    expect(result.items.filter(item => item.destinationPath?.includes(join('rules', 'imports', 'trae'))))
+      .toHaveLength(2)
+  })
+
+  it('writes CyberCode data to native Trae skills, rules, and memory paths idempotently', async () => {
+    const projectPath = join(root, 'workspace', 'trae-target')
+    const traeRoot = join(homeDir, '.trae-cn')
+    const traeApplicationRoot = join(homeDir, 'Library', 'Application Support', 'Trae CN')
+    const encodedProjectPath = projectPath.replace(/[^a-zA-Z0-9]/g, '-')
+    await seedCyberSource(projectPath)
+    await mkdir(traeRoot, { recursive: true })
+    const service = createService({ platform: 'darwin' })
+    const scan = await service.scan('trae')
+    const cybercode = scan.agents.find(agent => agent.id === 'cybercode')!
+    const canonicalProjectPath = await realpath(projectPath)
+    const encodedCanonicalProjectPath = canonicalProjectPath.replace(/[^a-zA-Z0-9]/g, '-')
+    const project = cybercode.projects.find(candidate => candidate.path === canonicalProjectPath)!
+    const globals = cybercode.items.filter(item => item.scope === 'global')
+    const projectItems = cybercode.items.filter(item => project.itemIds.includes(item.id))
+
+    expect(globals.find(item => item.kind === 'skill')).toMatchObject({
+      destinationPath: join(traeRoot, 'skills', 'review'),
+      adaptation: 'native',
+    })
+    expect(globals.find(item => item.kind === 'memory')).toMatchObject({
+      destinationPath: join(traeRoot, 'memory', 'user_profile.md'),
+      adaptation: 'native',
+    })
+    expect(globals.find(item => item.kind === 'instruction')).toMatchObject({
+      destinationPath: join(traeApplicationRoot, 'User', 'settings', 'user_rules.md'),
+      adaptation: 'native',
+    })
+    expect(projectItems.find(item => item.kind === 'memory')).toMatchObject({
+      destinationPath: join(
+        traeRoot,
+        'memory',
+        'projects',
+        encodedCanonicalProjectPath,
+        'project_memory.md',
+      ),
+      adaptation: 'native',
+    })
+    expect(projectItems.find(item => item.kind === 'instruction')).toMatchObject({
+      writeMode: 'trae-rule',
+      destinationFormat: 'Trae project rule',
+    })
+
+    const request: AgentMigrationRequest = {
+      agentId: 'cybercode',
+      targetAgentId: 'trae',
+      itemIds: globals.map(item => item.id),
+      projectIds: [project.id],
+    }
+    const result = await service.migrate(request)
+
+    expect(result).toMatchObject({ imported: 5, skipped: 0, failed: 0 })
+    expect(await readFile(join(traeRoot, 'skills', 'review', 'SKILL.md'), 'utf-8'))
+      .toContain('# Review workflow')
+    expect(await readFile(join(traeRoot, 'memory', 'user_profile.md'), 'utf-8'))
+      .toContain('Prefer Bun.')
+    expect(await readFile(
+      join(traeRoot, 'memory', 'projects', encodedCanonicalProjectPath, 'project_memory.md'),
+      'utf-8',
+    )).toContain('Use focused tests.')
+    expect(await readFile(
+      join(traeApplicationRoot, 'User', 'settings', 'user_rules.md'),
+      'utf-8',
+    )).toContain('CyberCode global rules')
+    const projectRule = result.items.find(item =>
+      item.destinationPath?.includes(join('.trae', 'rules', 'imports', 'cybercode')))!
+    expect(await readFile(projectRule.destinationPath!, 'utf-8')).toContain('alwaysApply: true')
+
+    const repeated = await service.migrate(request)
+    expect(repeated).toMatchObject({ imported: 0, skipped: 5, failed: 0 })
+  })
+
+  it('selects Trae international, Windows, and Linux profile roots without shell-specific paths', async () => {
+    await write(join(cyberConfigDir, 'CYBER.md'), '# Portable rules')
+    await mkdir(join(homeDir, '.trae'), { recursive: true })
+
+    const internationalScan = await createService({ platform: 'darwin' }).scan('trae')
+    const internationalRules = internationalScan.agents.find(agent => agent.id === 'cybercode')!
+      .items.find(item => item.kind === 'instruction')!
+    expect(internationalRules.destinationPath).toBe(join(
+      homeDir,
+      'Library',
+      'Application Support',
+      'Trae',
+      'User',
+      'settings',
+      'user_rules.md',
+    ))
+
+    await rm(join(homeDir, '.trae'), { recursive: true, force: true })
+    await mkdir(join(homeDir, '.trae-cn'), { recursive: true })
+    const appData = join(root, 'windows-app-data')
+    const windowsScan = await createService({
+      platform: 'win32',
+      env: { APPDATA: appData },
+    }).scan('trae')
+    const windowsRules = windowsScan.agents.find(agent => agent.id === 'cybercode')!
+      .items.find(item => item.kind === 'instruction')!
+    expect(windowsRules.destinationPath).toBe(join(
+      appData,
+      'Trae CN',
+      'User',
+      'settings',
+      'user_rules.md',
+    ))
+
+    await rm(join(homeDir, '.trae-cn'), { recursive: true, force: true })
+    await mkdir(join(homeDir, '.trae'), { recursive: true })
+    const xdgConfigHome = join(root, 'linux-config')
+    const linuxScan = await createService({
+      platform: 'linux',
+      env: { XDG_CONFIG_HOME: xdgConfigHome },
+    }).scan('trae')
+    const linuxRules = linuxScan.agents.find(agent => agent.id === 'cybercode')!
+      .items.find(item => item.kind === 'instruction')!
+    expect(linuxRules.destinationPath).toBe(join(
+      xdgConfigHome,
+      'Trae',
+      'User',
+      'settings',
+      'user_rules.md',
+    ))
+  })
+
+  it('adds global imports beside current Trae rule files without overwriting them', async () => {
+    const traeRoot = join(homeDir, '.trae-cn')
+    const settingsRules = join(
+      homeDir,
+      'Library',
+      'Application Support',
+      'Trae CN',
+      'User',
+      'settings',
+      'rules',
+    )
+    const personalRule = join(settingsRules, 'personal-rule.md')
+    await mkdir(traeRoot, { recursive: true })
+    await write(join(cyberConfigDir, 'CYBER.md'), '# Imported CyberCode rules')
+    await write(personalRule, '# Keep this Trae rule')
+
+    const service = createService({ platform: 'darwin' })
+    const scan = await service.scan('trae')
+    const instruction = scan.agents.find(agent => agent.id === 'cybercode')!
+      .items.find(item => item.kind === 'instruction')!
+    const importPath = join(settingsRules, 'cybercode-imports.md')
+
+    expect(instruction.destinationPath).toBe(importPath)
+    const result = await service.migrate({
+      agentId: 'cybercode',
+      targetAgentId: 'trae',
+      itemIds: [instruction.id],
+    })
+
+    expect(result).toMatchObject({ imported: 1, skipped: 0, failed: 0 })
+    expect(await readFile(personalRule, 'utf-8')).toBe('# Keep this Trae rule')
+    expect(await readFile(importPath, 'utf-8')).toContain('Imported CyberCode rules')
+  })
+
+  it('detects a Windows Trae installation without exposing its application folder as migration data', async () => {
+    const localAppData = join(root, 'windows-local-app-data')
+    await mkdir(join(localAppData, 'Programs', 'Trae CN'), { recursive: true })
+
+    const scan = await createService({
+      platform: 'win32',
+      env: {
+        APPDATA: join(root, 'windows-roaming'),
+        LOCALAPPDATA: localAppData,
+      },
+    }).scan()
+    const trae = scan.agents.find(agent => agent.id === 'trae')!
+
+    expect(trae).toMatchObject({
+      installed: true,
+      executablePath: null,
+      dataRoots: [],
+      counts: {
+        skills: 0,
+        memories: 0,
+        instructions: 0,
+        projects: 0,
+      },
+    })
+  })
+
+  it('detects WorkBuddy, Kimi Code, and Pi global and project data', async () => {
+    const workBuddyProject = join(root, 'workspace', 'workbuddy-app')
+    const kimiProject = join(root, 'workspace', 'kimi-app')
+    const piProject = join(root, 'workspace', 'pi-app')
+    await Promise.all([
+      mkdir(workBuddyProject, { recursive: true }),
+      mkdir(kimiProject, { recursive: true }),
+      mkdir(piProject, { recursive: true }),
+    ])
+
+    await write(join(homeDir, '.workbuddy', 'skills', 'plan', 'SKILL.md'), '# WorkBuddy plan')
+    await write(join(homeDir, '.workbuddy', 'MEMORY.md'), '# WorkBuddy memory')
+    await write(join(homeDir, '.workbuddy', 'SOUL.md'), '# WorkBuddy guidance')
+    await write(join(homeDir, '.workbuddy', 'sessions', 'latest.json'), JSON.stringify({ cwd: workBuddyProject }))
+    await write(join(workBuddyProject, '.workbuddy', 'skills', 'ship', 'SKILL.md'), '# Ship')
+    await write(join(workBuddyProject, '.workbuddy', 'memory', 'MEMORY.md'), '# Workspace memory')
+
+    await write(join(homeDir, '.kimi-code', 'skills', 'review', 'SKILL.md'), '# Kimi review')
+    await write(join(homeDir, '.kimi-code', 'AGENTS.md'), '# Kimi global rules')
+    await write(join(homeDir, '.kimi-code', 'sessions', 'latest.json'), JSON.stringify({ work_dir: kimiProject }))
+    await write(join(kimiProject, '.kimi-code', 'skills', 'test', 'SKILL.md'), '# Test')
+    await write(join(kimiProject, '.kimi-code', 'AGENTS.md'), '# Kimi project rules')
+
+    await write(join(homeDir, '.pi', 'agent', 'skills', 'fix', 'SKILL.md'), '# Pi fix')
+    await write(join(homeDir, '.pi', 'agent', 'AGENTS.md'), '# Pi global rules')
+    await write(join(homeDir, '.pi', 'agent', 'sessions', 'latest.jsonl'), JSON.stringify({ cwd: piProject }))
+    await write(join(piProject, '.pi', 'skills', 'lint', 'SKILL.md'), '# Lint')
+    await write(join(piProject, '.pi', 'APPEND_SYSTEM.md'), '# Pi project instructions')
+
+    const scan = await createService({
+      findExecutable: command => ['workbuddy', 'kimi', 'pi'].includes(command) ? `/bin/${command}` : null,
+    }).scan()
+
+    const workBuddy = scan.agents.find(agent => agent.id === 'workbuddy')!
+    expect(workBuddy).toMatchObject({ installed: true, executablePath: '/bin/workbuddy' })
+    expect(workBuddy.counts).toMatchObject({ skills: 2, memories: 2 })
+    expect(workBuddy.projects).toContainEqual(expect.objectContaining({ path: await realpath(workBuddyProject) }))
+
+    const kimi = scan.agents.find(agent => agent.id === 'kimi-code')!
+    expect(kimi).toMatchObject({ installed: true, executablePath: '/bin/kimi' })
+    expect(kimi.counts).toMatchObject({ skills: 2, instructions: 2 })
+    expect(kimi.projects).toContainEqual(expect.objectContaining({ path: await realpath(kimiProject) }))
+
+    const pi = scan.agents.find(agent => agent.id === 'pi')!
+    expect(pi).toMatchObject({ installed: true, executablePath: '/bin/pi' })
+    expect(pi.counts).toMatchObject({ skills: 2, instructions: 2 })
+    expect(pi.projects).toContainEqual(expect.objectContaining({ path: await realpath(piProject) }))
+  })
+
+  it('writes CyberCode data to native WorkBuddy, Kimi Code, and Pi locations', async () => {
+    const projectPath = join(root, 'workspace', 'portable-app')
+    await seedCyberSource(projectPath)
+    await Promise.all([
+      mkdir(join(homeDir, '.workbuddy'), { recursive: true }),
+      mkdir(join(homeDir, '.kimi-code'), { recursive: true }),
+      mkdir(join(homeDir, '.pi', 'agent'), { recursive: true }),
+    ])
+    const service = createService()
+
+    const workBuddyScan = await service.scan('workbuddy')
+    const cyberForWorkBuddy = workBuddyScan.agents.find(agent => agent.id === 'cybercode')!
+    const workBuddyItems = cyberForWorkBuddy.items.filter(item =>
+      item.scope === 'global' && ['skill', 'memory', 'instruction'].includes(item.kind))
+    const workBuddyResult = await service.migrate({
+      agentId: 'cybercode',
+      targetAgentId: 'workbuddy',
+      itemIds: workBuddyItems.map(item => item.id),
+    })
+    expect(workBuddyResult.failed).toBe(0)
+    expect(await readFile(join(homeDir, '.workbuddy', 'skills', 'review', 'SKILL.md'), 'utf-8'))
+      .toContain('# Review workflow')
+    expect(await readFile(join(homeDir, '.workbuddy', 'MEMORY.md'), 'utf-8')).toContain('Prefer Bun.')
+    expect(await readFile(join(homeDir, '.workbuddy', 'SOUL.md'), 'utf-8')).toContain('# CyberCode global rules')
+
+    const kimiScan = await service.scan('kimi-code')
+    const cyberForKimi = kimiScan.agents.find(agent => agent.id === 'cybercode')!
+    const kimiItems = cyberForKimi.items.filter(item =>
+      item.scope === 'global' && ['skill', 'memory'].includes(item.kind))
+    const kimiResult = await service.migrate({
+      agentId: 'cybercode',
+      targetAgentId: 'kimi-code',
+      itemIds: kimiItems.map(item => item.id),
+    })
+    expect(kimiResult.failed).toBe(0)
+    expect(await readFile(join(homeDir, '.kimi-code', 'skills', 'review', 'SKILL.md'), 'utf-8'))
+      .toContain('# Review workflow')
+    const kimiMemory = kimiResult.items.find(item => item.destinationPath?.includes('imported-memory-'))!
+    expect(await readFile(kimiMemory.destinationPath!, 'utf-8')).toContain('Prefer Bun.')
+
+    const piScan = await service.scan('pi')
+    const cyberForPi = piScan.agents.find(agent => agent.id === 'cybercode')!
+    const piItems = cyberForPi.items.filter(item =>
+      item.scope === 'global' && ['skill', 'instruction'].includes(item.kind))
+    const piResult = await service.migrate({
+      agentId: 'cybercode',
+      targetAgentId: 'pi',
+      itemIds: piItems.map(item => item.id),
+    })
+    expect(piResult.failed).toBe(0)
+    expect(await readFile(join(homeDir, '.pi', 'agent', 'skills', 'review', 'SKILL.md'), 'utf-8'))
+      .toContain('# Review workflow')
+    expect(await readFile(join(homeDir, '.pi', 'agent', 'AGENTS.md'), 'utf-8')).toContain('# CyberCode global rules')
+  })
+
   it('migrates selected items and preserves an existing CyberCode skill', async () => {
     const projectPath = join(root, 'workspace', 'codex-app')
     await mkdir(projectPath, { recursive: true })
@@ -970,6 +1342,26 @@ describe('AgentMigrationService', () => {
 
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({ error: 'BAD_REQUEST' })
+  })
+
+  it('accepts Trae as a source and destination agent at the HTTP boundary', async () => {
+    const url = new URL('http://127.0.0.1/api/agent-migration/migrate')
+    const response = await handleAgentMigrationApi(
+      new Request(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          agentId: 'trae',
+          targetAgentId: 'trae',
+          allRecommended: true,
+        }),
+      }),
+      url,
+      ['api', 'agent-migration', 'migrate'],
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: 'SAME_AGENT' })
   })
 
   function createService(overrides: Partial<ConstructorParameters<typeof AgentMigrationService>[0]> = {}) {

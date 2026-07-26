@@ -38,9 +38,45 @@ import { usePluginStore } from '../stores/pluginStore'
 import { PluginList } from '../components/plugins/PluginList'
 import { PluginDetail } from '../components/plugins/PluginDetail'
 import { useUIStore, type SettingsTab } from '../stores/uiStore'
-import { ClaudeOfficialLogin } from '../components/settings/ClaudeOfficialLogin'
+import { ClaudeOAuthDialog } from '../components/settings/ClaudeOfficialLogin'
 import { SettingsPage, SettingsSection, SettingsRow, SegmentedControl, Switch } from '../components/settings/SettingsLayout'
 import { ProviderLogo } from '../components/providers/ProviderLogo'
+import {
+  OAuthProviderCatalog,
+  OAUTH_PROVIDER_CATALOG,
+  type OAuthProviderCatalogItem,
+} from '../components/providers/OAuthProviderCatalog'
+import {
+  ProviderCatalogCard,
+  type ProviderCatalogAction,
+  type ProviderCatalogBadgeTone,
+  type ProviderCatalogCardTone,
+} from '../components/providers/ProviderCatalogCard'
+import {
+  aggregatorGatewayProviderIds,
+  compareAggregatorGatewayOrder,
+  compareProviderPopularity,
+  getProviderCatalogDisplayName,
+  getProviderCatalogGroup,
+  getProviderCatalogGroupId,
+  inferProviderPresetId,
+  isAggregatorGatewayPreset,
+  isApiKeyProviderPreset,
+  isLocalOrCustomProviderPreset,
+  isNoAuthProviderPreset,
+} from '../components/providers/providerCatalog'
+import {
+  buildCloudflareWorkersAiBaseUrl,
+  extractCloudflareAccountId,
+  isValidCloudflareAccountId,
+} from '../components/providers/cloudflareWorkersAi'
+import { ProviderOAuthDialog } from '../components/providers/ProviderOAuthDialog'
+import {
+  mergeProviderOAuthCapabilities,
+  providerOAuthApi,
+  type ProviderOAuthCatalog,
+} from '../api/providerOAuth'
+import { useCybercodeOAuthStore } from '../stores/cybercodeOAuthStore'
 import { useUpdateStore } from '../stores/updateStore'
 import { formatBytes } from '../lib/formatBytes'
 import { isTauriRuntime } from '../lib/desktopRuntime'
@@ -53,13 +89,52 @@ import {
   type PromptMemoryStatus,
   type PromptMemoryTarget,
 } from '../api/promptMemory'
-import { EvolutionProfile } from '../components/memory/EvolutionProfile'
+import {
+  EvolutionProfile,
+  type PromptMemoryEntrySave,
+  type PromptMemoryEntrySaveResult,
+} from '../components/memory/EvolutionProfile'
+import {
+  RoutingStatusPanel,
+  SmartRoutingPanel,
+} from '../components/providers/RoutingPanels'
+import { useRoutingStore } from '../stores/routingStore'
 
 const SETTINGS_TABS: SettingsTab[] = [
   'general',
   'memory',
   'about',
 ]
+
+function getProviderCostBadge(
+  cost: ProviderPreset['cost'],
+  translate: ReturnType<typeof useTranslation>,
+): { label: string; tone: ProviderCatalogBadgeTone } | undefined {
+  switch (cost) {
+    case 'recurring-free':
+      return {
+        label: translate('settings.providers.freeTier.recurring'),
+        tone: 'free',
+      }
+    case 'mixed':
+      return {
+        label: translate('settings.providers.freeTier.mixed'),
+        tone: 'mixed',
+      }
+    case 'signup-credit':
+      return {
+        label: translate('settings.providers.freeTier.signup'),
+        tone: 'credit',
+      }
+    case 'uncapped':
+      return {
+        label: translate('settings.providers.freeTier.local'),
+        tone: 'local',
+      }
+    default:
+      return undefined
+  }
+}
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
@@ -136,23 +211,115 @@ export function ProviderSettings() {
     testProvider,
   } = useProviderStore()
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
+  const fetchRoutingDashboard = useRoutingStore((s) => s.fetchDashboard)
   const t = useTranslation()
+  const [providerView, setProviderView] = useState<'sources' | 'routing' | 'status'>('sources')
+  const [sourceQuery, setSourceQuery] = useState('')
   const [editingProvider, setEditingProvider] = useState<SavedProvider | null>(null)
   const [creatingPresetId, setCreatingPresetId] = useState<string | null>(null)
+  const [selectedProviderCatalogKey, setSelectedProviderCatalogKey] = useState<string | null>(null)
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<SavedProvider | null>(null)
   const [isDeletingProvider, setIsDeletingProvider] = useState(false)
   const [testResults, setTestResults] = useState<Record<string, { loading: boolean; result?: ProviderTestResult }>>({})
+  const [providerOAuthCatalog, setProviderOAuthCatalog] = useState<ProviderOAuthCatalog>({
+    supportedProviders: [],
+    capabilities: [],
+    statuses: [],
+  })
+  const [selectedOAuthProvider, setSelectedOAuthProvider] = useState<OAuthProviderCatalogItem | null>(null)
+  const claudeOAuthStatus = useCybercodeOAuthStore((s) => s.status)
+  const fetchClaudeOAuthStatus = useCybercodeOAuthStore((s) => s.fetchStatus)
+
+  const fetchProviderOAuthCatalog = useCallback(async () => {
+    try {
+      const catalog = await providerOAuthApi.catalog()
+      setProviderOAuthCatalog({
+        supportedProviders: Array.isArray(catalog.supportedProviders)
+          ? catalog.supportedProviders
+          : [],
+        capabilities: Array.isArray(catalog.capabilities)
+          ? catalog.capabilities
+          : [],
+        statuses: Array.isArray(catalog.statuses)
+          ? catalog.statuses
+          : [],
+      })
+    } catch (error) {
+      console.warn('[ProviderSettings] Failed to load provider OAuth status:', error)
+    }
+  }, [])
 
   useEffect(() => {
     void fetchProviders()
     void fetchPresets()
-  }, [fetchPresets, fetchProviders])
+    void fetchClaudeOAuthStatus()
+    void fetchProviderOAuthCatalog()
+  }, [fetchClaudeOAuthStatus, fetchPresets, fetchProviderOAuthCatalog, fetchProviders])
+
+  useEffect(() => {
+    if (!hasLoadedProviders) return
+    void fetchRoutingDashboard({ quiet: true })
+  }, [fetchRoutingDashboard, hasLoadedProviders, providers])
 
   const providerRows = useMemo(
     () => buildProviderCatalogRows(providers, presets),
     [providers, presets],
   )
-
+  const selectedProviderCatalogRow = selectedProviderCatalogKey
+    ? providerRows.find((row) => row.key === selectedProviderCatalogKey) ?? null
+    : null
+  const normalizedSourceQuery = sourceQuery.trim().toLowerCase()
+  const matchesSourceQuery = (row: ProviderCatalogRow) => {
+    if (!normalizedSourceQuery) return true
+    return [
+      row.groupName,
+      ...row.variants.flatMap(({ preset, providers: configuredProviders }) => [
+        preset.name,
+        getProviderCatalogDisplayName(preset.id, preset.name, t),
+        preset.id,
+        preset.baseUrl,
+        ...configuredProviders.flatMap((provider) => [
+          provider.name,
+          provider.baseUrl,
+          provider.models.main,
+        ]),
+      ]),
+    ].some((value) => value?.toLowerCase().includes(normalizedSourceQuery))
+  }
+  const apiKeyProviderCatalogRows = providerRows
+    .filter((row) => row.variants.some(({ preset, providers: configuredProviders }) => (
+      (
+        isApiKeyProviderPreset(preset) ||
+        configuredProviders.some((provider) => isRemoteCustomProvider(preset, provider))
+      ) &&
+      !isAggregatorGatewayPreset(preset)
+    )))
+  const apiKeyProviderRows = apiKeyProviderCatalogRows
+    .filter(matchesSourceQuery)
+    .sort((left, right) => compareProviderPopularity(left.preset.id, right.preset.id))
+  const aggregatorGatewayCatalogRows = providerRows
+    .filter((row) => row.variants.some(({ preset }) => isAggregatorGatewayPreset(preset)))
+  const aggregatorGatewayRows = aggregatorGatewayCatalogRows
+    .filter(matchesSourceQuery)
+    .sort((left, right) => (
+      compareAggregatorGatewayOrder(left.preset.id, right.preset.id)
+    ))
+  const noAuthProviderRows = providerRows
+    .filter((row) => row.variants.some(({ preset }) => isNoAuthProviderPreset(preset)))
+    .filter(matchesSourceQuery)
+  const configuredAggregatorGatewayCount = new Set(
+    aggregatorGatewayCatalogRows
+      .filter(({ providers: configuredProviders }) => configuredProviders.length > 0)
+      .map(({ catalogId }) => catalogId),
+  ).size
+  const localAndCustomProviderRows = providerRows
+    .filter((row) => row.variants.some(({ preset, providers: configuredProviders }) => (
+      isLocalOrCustomProviderPreset(preset) &&
+      (
+        configuredProviders.length === 0 ||
+        configuredProviders.some((provider) => !isRemoteCustomProvider(preset, provider))
+      )
+    )))
   const handleDelete = async (provider: SavedProvider) => {
     if (activeId === provider.id) return
     setPendingDeleteProvider(provider)
@@ -192,103 +359,404 @@ export function ProviderSettings() {
   }
 
   const isOfficialActive = hasLoadedProviders && activeId === null
-  const isInitialLoading = (isLoading && !hasLoadedProviders) || (isPresetsLoading && presets.length === 0)
+  const isInitialLoading = (
+    (isLoading && !hasLoadedProviders) ||
+    (isPresetsLoading && presets.length === 0)
+  )
+  const providerOAuthCapabilities = useMemo(
+    () => mergeProviderOAuthCapabilities(providerOAuthCatalog.capabilities),
+    [providerOAuthCatalog.capabilities],
+  )
+  const connectedOAuthProviderIds = useMemo(
+    () => new Set(
+      providerOAuthCatalog.statuses
+        .filter((status) => status.connected)
+        .map((status) => status.providerId),
+    ),
+    [providerOAuthCatalog.statuses],
+  )
+  const connectedOAuthCount = connectedOAuthProviderIds.size + (
+    claudeOAuthStatus?.loggedIn ? 1 : 0
+  )
+
+  const handleProviderOAuthChanged = useCallback(async () => {
+    await Promise.all([
+      fetchProviderOAuthCatalog(),
+      fetchProviders(),
+    ])
+    await fetchRoutingDashboard({ quiet: true })
+  }, [fetchProviderOAuthCatalog, fetchProviders, fetchRoutingDashboard])
+
+  const renderProviderRow = (row: ProviderCatalogRow) => {
+    const { key, preset, providers: configuredProviders, variants } = row
+    const activeProvider = configuredProviders.find((provider) => provider.id === activeId)
+    const primaryProvider = activeProvider ?? configuredProviders[0]
+    const isConfigured = configuredProviders.length > 0
+    const isActive = Boolean(activeProvider)
+    const isGrouped = variants.length > 1 || configuredProviders.length > 1
+    const test = primaryProvider ? testResults[primaryProvider.id] : undefined
+    const name = row.groupName ?? (
+      primaryProvider && preset.id === 'custom'
+        ? primaryProvider.name
+        : getProviderCatalogDisplayName(preset.id, preset.name, t)
+    )
+    const testSummary = test?.result ? summarizeProviderConnectionTest(test.result) : null
+    const status = test?.loading
+      ? `${t('settings.providers.test')}…`
+      : testSummary
+        ? testSummary.success
+          ? t('settings.providers.connectivityOk', {
+              latency: String(testSummary.latencyMs),
+            })
+          : t('settings.providers.connectivityFailed', {
+              error: testSummary.error || t('settings.providers.requestFailed'),
+            })
+        : isActive
+          ? t('settings.providers.default')
+          : configuredProviders.length > 1
+            ? t('settings.providers.configurations', {
+                count: String(configuredProviders.length),
+              })
+            : isConfigured
+              ? t('settings.providers.configured')
+              : variants.length > 1
+                ? t('settings.providers.connectionMethods', {
+                    count: String(variants.length),
+                  })
+                : t('settings.providers.notConfigured')
+    const statusTone: ProviderCatalogCardTone = testSummary
+      ? testSummary.success ? 'positive' : 'negative'
+      : isConfigured ? 'accent' : 'muted'
+    const costBadge = getProviderCostBadge(preset.cost, t)
+    const actions: ProviderCatalogAction[] = primaryProvider && !isGrouped
+      ? [
+          ...(!isActive ? [{
+            id: 'default',
+            label: t('settings.providers.setDefault'),
+            icon: 'star',
+            onSelect: () => {
+              void handleActivate(primaryProvider.id)
+            },
+          }] : []),
+          {
+            id: 'test',
+            label: t('settings.providers.test'),
+            icon: 'play_arrow',
+            onSelect: () => {
+              void handleTest(primaryProvider)
+            },
+          },
+          {
+            id: 'edit',
+            label: t('settings.providers.edit'),
+            icon: 'edit',
+            onSelect: () => setEditingProvider(primaryProvider),
+          },
+          ...(!isActive ? [{
+            id: 'delete',
+            label: t('common.delete'),
+            icon: 'delete',
+            danger: true,
+            onSelect: () => {
+              void handleDelete(primaryProvider)
+            },
+          }] : []),
+        ]
+      : []
+
+    return (
+      <ProviderCatalogCard
+        key={key}
+        name={name}
+        providerId={primaryProvider && preset.id === 'custom' ? undefined : row.catalogId}
+        baseUrl={primaryProvider?.baseUrl ?? preset.baseUrl}
+        modelId={primaryProvider?.models.main ?? preset.defaultModels.main}
+        status={status}
+        statusTone={statusTone}
+        active={isActive}
+        emphasized={isConfigured}
+        badge={costBadge?.label}
+        badgeTone={costBadge?.tone}
+        badgeTitle={preset.costNote}
+        ariaLabel={`${isGrouped
+          ? t('settings.providers.manage')
+          : isConfigured
+            ? t('settings.providers.edit')
+            : t('settings.providers.configure')} ${name}`}
+        onClick={() => {
+          if (isGrouped) {
+            setSelectedProviderCatalogKey(key)
+          } else if (primaryProvider) {
+            setEditingProvider(primaryProvider)
+          } else {
+            setCreatingPresetId(preset.id)
+          }
+        }}
+        actions={actions}
+        actionsLabel={t('settings.providers.moreActions', { name })}
+      />
+    )
+  }
 
   return (
-    <SettingsPage
-      icon="dns"
-      title={t('settings.providers.title')}
-      description={t('settings.providers.description')}
-    >
-      {isInitialLoading ? (
-        <div className="flex justify-center py-10">
-          <Icon name="loading" size={24} className="animate-spin text-[var(--color-text-tertiary)]" />
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <ProviderCatalogItem
-            name={t('settings.providers.officialName')}
-            description={t('settings.providers.officialDesc')}
-            detail="claude-opus-4-8 · claude-sonnet-5 · claude-haiku-4-5"
-            providerId="official"
-            isActive={isOfficialActive}
-            isConfigured={true}
-            badges={[
-              t('settings.providers.officialBadge'),
-              isOfficialActive ? t('settings.providers.default') : null,
-            ]}
-            actions={!isOfficialActive ? (
-              <Button variant="secondary" size="sm" onClick={handleActivateOfficial}>
-                {t('settings.providers.setDefault')}
-              </Button>
-            ) : null}
+    <SettingsPage layout="workspace">
+      <div className="grid min-h-0 gap-[24px] lg:grid-cols-[200px_minmax(0,1fr)]">
+        <aside
+          aria-label={t('settings.routing.centerTabs')}
+          className="min-w-0 lg:sticky lg:top-0 lg:self-start lg:border-r lg:border-[var(--color-border-separator)] lg:pr-[18px]"
+        >
+          <nav
+            role="tablist"
+            aria-orientation="vertical"
+            aria-label={t('settings.routing.centerTabs')}
+            className="grid grid-cols-3 gap-[6px] lg:flex lg:flex-col"
           >
-            {isOfficialActive && (
-              <div className="border-t border-[var(--color-border-separator)] px-5 pb-5 pt-3">
-                <ClaudeOfficialLogin />
-              </div>
-            )}
-          </ProviderCatalogItem>
+            {(['sources', 'routing', 'status'] as const).map((view) => (
+              <button
+                key={view}
+                type="button"
+                role="tab"
+                aria-selected={providerView === view}
+                onClick={() => setProviderView(view)}
+                className={`flex min-h-[50px] min-w-0 items-center rounded-[8px] border px-[12px] text-left text-[13px] font-bold transition-colors ${
+                  providerView === view
+                    ? 'border-[#1473e6]/35 bg-[#1473e6]/[0.07] text-[var(--color-text-primary)] dark:border-[#64a8ff]/35 dark:bg-[#64a8ff]/[0.08]'
+                    : 'border-transparent text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:bg-[var(--color-surface-container-low)] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                <span className="truncate">{t(`settings.routing.tab.${view}` as never)}</span>
+              </button>
+            ))}
+          </nav>
+        </aside>
 
-          {providerRows.map(({ key, preset, provider }) => {
-            const isConfigured = Boolean(provider)
-            const isActive = Boolean(provider && activeId === provider.id)
-            const test = provider ? testResults[provider.id] : undefined
-            const name = provider && preset.id === 'custom' ? provider.name : preset.name
-            const description = provider && provider.name !== preset.name
-              ? provider.name
-              : getPresetDescription(preset, t)
-            const detail = provider
-              ? `${provider.baseUrl} · ${provider.models.main}`
-              : getPresetDetail(preset, t)
-            const apiFormat = provider?.apiFormat ?? preset.apiFormat
-            const badges = [
-              isConfigured ? t('settings.providers.configured') : t('settings.providers.notConfigured'),
-              isActive ? t('settings.providers.default') : null,
-              apiFormat !== 'anthropic'
-                ? (apiFormat === 'openai_chat' ? 'OpenAI Chat' : 'OpenAI Responses')
-                : null,
-            ]
-
-            return (
-              <ProviderCatalogItem
-                key={key}
-                name={name}
-                description={description}
-                detail={detail}
-                providerId={provider && preset.id === 'custom' ? undefined : preset.id}
-                isActive={isActive}
-                isConfigured={isConfigured}
-                badges={badges}
-                test={test}
-                actions={provider ? (
-                  <>
-                    {!isActive && (
-                      <Button variant="secondary" size="sm" onClick={() => handleActivate(provider.id)}>
-                        {t('settings.providers.setDefault')}
-                      </Button>
-                    )}
-                    <Button variant="ghost" size="sm" onClick={() => handleTest(provider)} loading={test?.loading}>
-                      {t('settings.providers.test')}
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setEditingProvider(provider)} aria-label={t('settings.providers.edit')}>
-                      <Icon name="edit" size={14} />
-                    </Button>
-                    {!isActive && (
-                      <Button variant="ghost" size="sm" onClick={() => handleDelete(provider)} className="text-[var(--color-error)]/70 hover:text-[var(--color-error)]" aria-label={t('common.delete')}>
-                        <Icon name="delete" size={14} />
-                      </Button>
-                    )}
-                  </>
-                ) : (
-                  <Button variant="secondary" size="sm" onClick={() => setCreatingPresetId(preset.id)}>
-                    {t('settings.providers.configure')}
-                  </Button>
-                )}
+        <main className="min-w-0">
+          {providerView === 'sources' && (isInitialLoading ? (
+            <div className="flex justify-center py-10">
+              <Icon name="loading" size={24} className="animate-spin text-[var(--color-text-tertiary)]" />
+            </div>
+          ) : (
+            <div className="flex flex-col gap-[18px]">
+              <OAuthProviderCatalog
+                claudeConnected={claudeOAuthStatus?.loggedIn === true}
+                connectedProviderIds={connectedOAuthProviderIds}
+                capabilities={providerOAuthCapabilities}
+                onSelectProvider={setSelectedOAuthProvider}
+                labels={{
+                  title: t('settings.routing.oauthProviders.title'),
+                  description: t('settings.routing.oauthProviders.description'),
+                  connectedCount: t('settings.routing.oauthProviders.connectedCount', {
+                    connected: String(connectedOAuthCount),
+                    total: String(OAUTH_PROVIDER_CATALOG.length),
+                  }),
+                  connected: t('settings.routing.oauthProviders.connected'),
+                  nativeReady: t('settings.routing.oauthProviders.nativeReady'),
+                  pending: t('settings.routing.oauthProviders.pending'),
+                  openLogin: t('settings.routing.oauthProviders.openClaudeLogin'),
+                }}
               />
-            )
-          })}
-        </div>
+
+              <section
+                aria-labelledby="no-auth-provider-catalog-title"
+                className="border-t border-[var(--color-border-separator)] pt-[18px]"
+              >
+                <div className="mb-[12px] min-w-0">
+                  <div className="flex items-center gap-[7px]">
+                    <h2
+                      id="no-auth-provider-catalog-title"
+                      className="text-[15px] font-semibold text-[var(--color-text-primary)]"
+                    >
+                      {t('settings.routing.noAuthProviders.title')}
+                    </h2>
+                    <span
+                      aria-hidden="true"
+                      className="h-[8px] w-[8px] shrink-0 rounded-full bg-[#16a34a]"
+                    />
+                    <span className="text-[12px] font-semibold text-[#137333] dark:text-[#86efac]">
+                      {t('settings.routing.noAuthProviders.count', {
+                        count: String(noAuthProviderRows.length),
+                      })}
+                    </span>
+                  </div>
+                  <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
+                    {t('settings.routing.noAuthProviders.description')}
+                  </p>
+                </div>
+
+                <div
+                  data-provider-catalog="no-auth"
+                  data-provider-catalog-layout="comfortable"
+                  className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                >
+                  {noAuthProviderRows.map(renderProviderRow)}
+                </div>
+              </section>
+
+              <section
+                aria-labelledby="api-key-provider-catalog-title"
+                className="border-t border-[var(--color-border-separator)] pt-[18px]"
+              >
+                <div className="mb-[12px] flex flex-col gap-[10px] sm:flex-row sm:items-end sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-[7px]">
+                      <h2
+                        id="api-key-provider-catalog-title"
+                        className="text-[15px] font-semibold text-[var(--color-text-primary)]"
+                      >
+                        {t('settings.routing.apiKeyProviders.title')}
+                      </h2>
+                      <span className="text-[12px] font-semibold text-[#1473e6] dark:text-[#68adff]">
+                        {t('settings.routing.apiKeyProviders.count', {
+                          count: String(apiKeyProviderRows.length),
+                        })}
+                      </span>
+                    </div>
+                    <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
+                      {t('settings.routing.apiKeyProviders.description')}
+                    </p>
+                  </div>
+
+                  <div className="relative min-w-0 sm:w-[320px]">
+                    <Icon
+                      name="search"
+                      size={16}
+                      className="pointer-events-none absolute left-[12px] top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
+                    />
+                    <input
+                      type="search"
+                      value={sourceQuery}
+                      onChange={(event) => setSourceQuery(event.target.value)}
+                      placeholder={t('settings.routing.searchApiKeyProviders')}
+                      aria-label={t('settings.routing.searchApiKeyProviders')}
+                      className="h-[40px] w-full rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] pl-[38px] pr-[12px] text-[12px] font-medium text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
+                    />
+                  </div>
+                </div>
+
+                <div
+                  data-provider-catalog="api-key"
+                  data-provider-catalog-layout="comfortable"
+                  className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                >
+                  {apiKeyProviderRows.map(renderProviderRow)}
+                  {apiKeyProviderRows.length === 0 &&
+                    aggregatorGatewayRows.length === 0 &&
+                    noAuthProviderRows.length === 0 && (
+                    <div className="col-span-full rounded-[8px] border border-[var(--color-border)] px-[20px] py-[36px] text-center text-[13px] text-[var(--color-text-tertiary)]">
+                      {t('settings.routing.apiKeyProviders.noMatches')}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section
+                aria-labelledby="aggregator-gateway-catalog-title"
+                className="border-t border-[var(--color-border-separator)] pt-[18px]"
+              >
+                <div className="mb-[12px] min-w-0">
+                  <div className="flex items-center gap-[7px]">
+                    <h2
+                      id="aggregator-gateway-catalog-title"
+                      className="text-[15px] font-semibold text-[var(--color-text-primary)]"
+                    >
+                      {t('settings.routing.aggregators.title')}
+                    </h2>
+                    <span
+                      aria-hidden="true"
+                      className="h-[8px] w-[8px] shrink-0 rounded-full bg-[#f59e0b]"
+                    />
+                    <span className="text-[12px] font-semibold text-[#b76800] dark:text-[#f6b94d]">
+                      {t('settings.routing.aggregators.count', {
+                        configured: String(configuredAggregatorGatewayCount),
+                        total: String(aggregatorGatewayProviderIds.length),
+                      })}
+                    </span>
+                  </div>
+                  <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
+                    {t('settings.routing.aggregators.description')}
+                  </p>
+                </div>
+
+                <div
+                  data-provider-catalog="aggregators-gateways"
+                  data-provider-catalog-layout="comfortable"
+                  className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                >
+                  {aggregatorGatewayRows.map(renderProviderRow)}
+                  {aggregatorGatewayRows.length === 0 && (
+                    <div className="col-span-full rounded-[8px] border border-[var(--color-border)] px-[20px] py-[36px] text-center text-[13px] text-[var(--color-text-tertiary)]">
+                      {t('settings.routing.aggregators.noMatches')}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section
+                aria-labelledby="local-provider-catalog-title"
+                className="border-t border-[var(--color-border-separator)] pt-[18px]"
+              >
+                <div className="mb-[12px] min-w-0">
+                  <div className="flex items-center gap-[7px]">
+                    <h2
+                      id="local-provider-catalog-title"
+                      className="text-[15px] font-semibold text-[var(--color-text-primary)]"
+                    >
+                      {t('settings.routing.localProviders.title')}
+                    </h2>
+                    <span className="text-[12px] font-semibold text-[#1473e6] dark:text-[#68adff]">
+                      {t('settings.routing.localProviders.count', {
+                        count: String(localAndCustomProviderRows.length),
+                      })}
+                    </span>
+                  </div>
+                  <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
+                    {t('settings.routing.localProviders.description')}
+                  </p>
+                </div>
+
+                <div
+                  data-provider-catalog="local-custom"
+                  data-provider-catalog-layout="comfortable"
+                  className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                >
+                  {localAndCustomProviderRows.map(renderProviderRow)}
+                </div>
+              </section>
+            </div>
+          ))}
+
+          {providerView === 'routing' && (
+            <SmartRoutingPanel onOpenSources={() => setProviderView('sources')} />
+          )}
+          {providerView === 'status' && <RoutingStatusPanel />}
+        </main>
+      </div>
+
+      {selectedProviderCatalogRow && (
+        <ProviderCatalogGroupDialog
+          row={selectedProviderCatalogRow}
+          activeId={activeId}
+          testResults={testResults}
+          onClose={() => setSelectedProviderCatalogKey(null)}
+          onCreate={(presetId) => {
+            setSelectedProviderCatalogKey(null)
+            setCreatingPresetId(presetId)
+          }}
+          onEdit={(provider) => {
+            setSelectedProviderCatalogKey(null)
+            setEditingProvider(provider)
+          }}
+          onActivate={(provider) => {
+            void handleActivate(provider.id)
+          }}
+          onTest={(provider) => {
+            void handleTest(provider)
+          }}
+          onDelete={(provider) => {
+            setSelectedProviderCatalogKey(null)
+            void handleDelete(provider)
+          }}
+        />
       )}
 
       {/* Create Modal — conditionally rendered so state resets on close */}
@@ -306,6 +774,27 @@ export function ProviderSettings() {
       {editingProvider && (
         <ProviderFormModal key={editingProvider.id} open={true} onClose={() => setEditingProvider(null)} mode="edit" provider={editingProvider} presets={presets} />
       )}
+
+      <ClaudeOAuthDialog
+        open={selectedOAuthProvider?.id === 'claude'}
+        onClose={() => setSelectedOAuthProvider(null)}
+        isDefault={isOfficialActive}
+        onSetDefault={handleActivateOfficial}
+      />
+
+      <ProviderOAuthDialog
+        provider={selectedOAuthProvider?.id === 'claude' ? null : selectedOAuthProvider}
+        capability={selectedOAuthProvider && selectedOAuthProvider.id !== 'claude'
+          ? providerOAuthCapabilities.get(selectedOAuthProvider.id)
+          : undefined}
+        status={selectedOAuthProvider && selectedOAuthProvider.id !== 'claude'
+          ? providerOAuthCatalog.statuses.find(
+              (status) => status.providerId === selectedOAuthProvider.id,
+            )
+          : undefined}
+        onClose={() => setSelectedOAuthProvider(null)}
+        onChanged={handleProviderOAuthChanged}
+      />
 
       <ConfirmDialog
         open={pendingDeleteProvider !== null}
@@ -325,134 +814,366 @@ export function ProviderSettings() {
   )
 }
 
+type ProviderCatalogVariant = {
+  preset: ProviderPreset
+  providers: SavedProvider[]
+}
+
 type ProviderCatalogRow = {
   key: string
+  catalogId: string
+  groupName?: string
   preset: ProviderPreset
-  provider?: SavedProvider
+  variants: ProviderCatalogVariant[]
+  providers: SavedProvider[]
+}
+
+function isRemoteCustomProvider(
+  preset: ProviderPreset,
+  provider?: SavedProvider,
+): boolean {
+  if (preset.id !== 'custom' || !provider?.baseUrl) return false
+
+  try {
+    const hostname = new URL(provider.baseUrl).hostname.toLowerCase()
+    return !['localhost', '127.0.0.1', '::1'].includes(hostname)
+  } catch {
+    return true
+  }
 }
 
 function buildProviderCatalogRows(
   providers: SavedProvider[],
   presets: ProviderPreset[],
 ): ProviderCatalogRow[] {
-  const rows: ProviderCatalogRow[] = []
+  const nonOAuthProviders = providers.filter((provider) => !provider.oauthProviderId)
   const presetById = new Map(presets.map((preset) => [preset.id, preset]))
+  const availablePresetIds = new Set(presetById.keys())
+  const matchedCustomProviders = new Map<string, SavedProvider[]>()
+  const consumedCustomProviderIds = new Set<string>()
+  const rowBuilders = new Map<string, {
+    key: string
+    catalogId: string
+    groupName?: string
+    variants: ProviderCatalogVariant[]
+  }>()
+
+  const appendVariant = (
+    key: string,
+    catalogId: string,
+    groupName: string | undefined,
+    preset: ProviderPreset,
+    configuredProviders: SavedProvider[],
+  ) => {
+    const row = rowBuilders.get(key) ?? {
+      key,
+      catalogId,
+      groupName,
+      variants: [],
+    }
+    const existingVariant = row.variants.find((variant) => variant.preset.id === preset.id)
+    if (existingVariant) {
+      existingVariant.providers.push(...configuredProviders)
+    } else {
+      row.variants.push({ preset, providers: configuredProviders })
+    }
+    rowBuilders.set(key, row)
+  }
+
+  const appendPresetVariant = (
+    preset: ProviderPreset,
+    configuredProviders: SavedProvider[],
+  ) => {
+    const isKimiKeyProduct = preset.id === 'kimi-code' || preset.id === 'kimi'
+    const group = isKimiKeyProduct ? null : getProviderCatalogGroup(preset.id)
+    const catalogId = isKimiKeyProduct ? preset.id : getProviderCatalogGroupId(preset.id)
+    appendVariant(
+      `catalog:${catalogId}`,
+      catalogId,
+      group?.name,
+      preset,
+      configuredProviders,
+    )
+  }
+
+  for (const provider of nonOAuthProviders.filter((item) => item.presetId === 'custom')) {
+    const inferredPresetId = inferProviderPresetId(
+      {
+        providerId: provider.presetId,
+        name: provider.name,
+        baseUrl: provider.baseUrl,
+      },
+      availablePresetIds,
+    )
+    if (!inferredPresetId || inferredPresetId === 'custom' || inferredPresetId === 'official') {
+      continue
+    }
+    const matches = matchedCustomProviders.get(inferredPresetId) ?? []
+    matches.push(provider)
+    matchedCustomProviders.set(inferredPresetId, matches)
+    consumedCustomProviderIds.add(provider.id)
+  }
 
   for (const preset of presets) {
     if (preset.id === 'official' || preset.id === 'custom') continue
-    const configured = providers.filter((provider) => provider.presetId === preset.id)
-    if (configured.length === 0) {
-      rows.push({ key: `preset:${preset.id}`, preset })
-      continue
-    }
-    for (const provider of configured) {
-      rows.push({ key: `provider:${provider.id}`, preset, provider })
-    }
+    const configured = [
+      ...nonOAuthProviders.filter((provider) => provider.presetId === preset.id),
+      ...(matchedCustomProviders.get(preset.id) ?? []),
+    ]
+    appendPresetVariant(preset, configured)
   }
 
-  for (const provider of providers) {
+  const unknownProvidersByPresetId = new Map<string, SavedProvider[]>()
+  for (const provider of nonOAuthProviders) {
     if (
       presetById.has(provider.presetId) ||
       provider.presetId === 'official' ||
       provider.presetId === 'custom'
     ) continue
-    rows.push({
-      key: `provider:${provider.id}`,
-      preset: buildFallbackPreset(provider),
-      provider,
-    })
+    const configured = unknownProvidersByPresetId.get(provider.presetId) ?? []
+    configured.push(provider)
+    unknownProvidersByPresetId.set(provider.presetId, configured)
+  }
+  for (const configured of unknownProvidersByPresetId.values()) {
+    appendPresetVariant(buildFallbackPreset(configured[0]), configured)
   }
 
   const customPreset = presetById.get('custom')
-  for (const provider of providers.filter((item) => item.presetId === 'custom')) {
-    rows.push({
-      key: `provider:${provider.id}`,
-      preset: customPreset ?? buildFallbackPreset(provider),
-      provider,
-    })
+  for (const provider of nonOAuthProviders.filter((item) => item.presetId === 'custom')) {
+    if (consumedCustomProviderIds.has(provider.id)) continue
+    appendVariant(
+      `custom:${provider.id}`,
+      provider.id,
+      undefined,
+      customPreset ?? buildFallbackPreset(provider),
+      [provider],
+    )
   }
   if (customPreset) {
-    rows.push({ key: 'preset:custom', preset: customPreset })
+    appendVariant('catalog:custom', 'custom', undefined, customPreset, [])
   }
 
-  return rows
+  return [...rowBuilders.values()].map((row) => ({
+    ...row,
+    preset: row.variants[0]!.preset,
+    providers: row.variants.flatMap((variant) => variant.providers),
+  }))
 }
 
-function ProviderCatalogItem({
-  name,
-  description,
-  detail,
-  providerId,
-  isActive,
-  isConfigured,
-  badges,
-  test,
-  actions,
-  children,
+function ProviderCatalogGroupDialog({
+  row,
+  activeId,
+  testResults,
+  onClose,
+  onCreate,
+  onEdit,
+  onActivate,
+  onTest,
+  onDelete,
 }: {
-  name: string
-  description: string
-  detail: string
-  providerId?: string
-  isActive: boolean
-  isConfigured: boolean
-  badges: Array<string | null>
-  test?: { loading: boolean; result?: ProviderTestResult }
-  actions: ReactNode
-  children?: ReactNode
+  row: ProviderCatalogRow
+  activeId: string | null
+  testResults: Record<string, { loading: boolean; result?: ProviderTestResult }>
+  onClose: () => void
+  onCreate: (presetId: string) => void
+  onEdit: (provider: SavedProvider) => void
+  onActivate: (provider: SavedProvider) => void
+  onTest: (provider: SavedProvider) => void
+  onDelete: (provider: SavedProvider) => void
 }) {
   const t = useTranslation()
-  const testSummary = test?.result ? summarizeProviderConnectionTest(test.result) : null
+  const name = row.groupName ?? getProviderCatalogDisplayName(
+    row.preset.id,
+    row.preset.name,
+    t,
+  )
+
   return (
-    <div
-      className={`relative overflow-hidden rounded-[12px] border transition-all ${
-        isActive
-          ? 'border-[3px] border-[var(--color-brand)] bg-[var(--color-surface-container)] shadow-[var(--shadow-accent-glow)]'
-          : 'border-[var(--color-border)] bg-[var(--color-surface-container)] hover:border-[var(--color-border-focus)]'
+    <Modal
+      open
+      onClose={onClose}
+      title={name}
+      width={680}
+      footer={(
+        <Button variant="secondary" onClick={onClose}>
+          {t('common.close')}
+        </Button>
+      )}
+    >
+      <p className="text-[12px] leading-5 text-[var(--color-text-secondary)]">
+        {t('settings.providers.connectionMethodHint')}
+      </p>
+
+      <div className="mt-[12px] divide-y divide-[var(--color-border-separator)] border-y border-[var(--color-border-separator)]">
+        {row.variants.map(({ preset, providers: configuredProviders }) => {
+          const presetName = getProviderCatalogDisplayName(preset.id, preset.name, t)
+          const apiFormatLabel = preset.apiFormat === 'openai_responses'
+            ? t('settings.providers.apiFormatOpenaiResponses')
+            : preset.apiFormat === 'openai_chat'
+              ? t('settings.providers.apiFormatOpenaiChat')
+              : t('settings.providers.apiFormatAnthropic')
+
+          return (
+            <section key={preset.id} className="py-[16px]">
+              <div className="flex min-w-0 items-start gap-[11px]">
+                <ProviderLogo
+                  name={presetName}
+                  providerId={preset.id}
+                  baseUrl={preset.baseUrl}
+                  modelId={preset.defaultModels.main}
+                  size="sm"
+                  decorative
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-[7px]">
+                    <h3 className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
+                      {presetName}
+                    </h3>
+                    <ProviderBadge muted>{apiFormatLabel}</ProviderBadge>
+                  </div>
+                  <p className="mt-[3px] line-clamp-2 text-[11px] leading-[17px] text-[var(--color-text-tertiary)]">
+                    {getPresetDescription(preset, t)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onCreate(preset.id)}
+                  aria-label={`${configuredProviders.length > 0
+                    ? t('settings.providers.addConfiguration')
+                    : t('settings.providers.configure')} ${presetName}`}
+                  className="flex h-[32px] shrink-0 items-center gap-[6px] rounded-[7px] border border-[var(--color-border)] px-[10px] text-[11px] font-semibold text-[var(--color-text-secondary)] outline-none transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:shadow-[var(--shadow-focus-ring)]"
+                >
+                  <Icon name="add" size={14} />
+                  <span>
+                    {configuredProviders.length > 0
+                      ? t('settings.providers.addConfiguration')
+                      : t('settings.providers.configure')}
+                  </span>
+                </button>
+              </div>
+
+              {configuredProviders.length > 0 && (
+                <div className="mt-[11px] overflow-hidden rounded-[8px] border border-[var(--color-border-separator)]">
+                  {configuredProviders.map((provider, index) => {
+                    const isActive = provider.id === activeId
+                    const test = testResults[provider.id]
+                    const testSummary = test?.result
+                      ? summarizeProviderConnectionTest(test.result)
+                      : null
+                    const status = test?.loading
+                      ? `${t('settings.providers.test')}…`
+                      : testSummary
+                        ? testSummary.success
+                          ? t('settings.providers.connectivityOk', {
+                              latency: String(testSummary.latencyMs),
+                            })
+                          : t('settings.providers.connectivityFailed', {
+                              error: testSummary.error || t('settings.providers.requestFailed'),
+                            })
+                        : isActive
+                          ? t('settings.providers.default')
+                          : t('settings.providers.configured')
+                    const statusClassName = testSummary
+                      ? testSummary.success
+                        ? 'text-[var(--color-success)]'
+                        : 'text-[var(--color-error)]'
+                      : isActive
+                        ? 'text-[#1473e6] dark:text-[#68adff]'
+                        : 'text-[var(--color-text-tertiary)]'
+
+                    return (
+                      <div
+                        key={provider.id}
+                        data-provider-configuration={provider.id}
+                        className={`flex min-w-0 items-center gap-[8px] px-[11px] py-[9px] ${
+                          index > 0 ? 'border-t border-[var(--color-border-separator)]' : ''
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => onEdit(provider)}
+                          className="min-w-0 flex-1 rounded-[5px] px-[3px] py-[2px] text-left outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+                        >
+                          <span className="block truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+                            {provider.name}
+                          </span>
+                          <span className="mt-[2px] flex min-w-0 items-center gap-[7px]">
+                            <span className="truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                              {provider.models.main}
+                            </span>
+                            <span className={`shrink-0 text-[10px] font-semibold ${statusClassName}`}>
+                              {status}
+                            </span>
+                          </span>
+                        </button>
+
+                        {!isActive && (
+                          <ProviderConfigurationAction
+                            label={`${t('settings.providers.setDefault')} ${provider.name}`}
+                            icon="star"
+                            onClick={() => onActivate(provider)}
+                          />
+                        )}
+                        <ProviderConfigurationAction
+                          label={`${t('settings.providers.test')} ${provider.name}`}
+                          icon={test?.loading ? 'loading' : 'play_arrow'}
+                          loading={test?.loading}
+                          onClick={() => onTest(provider)}
+                        />
+                        <ProviderConfigurationAction
+                          label={`${t('settings.providers.edit')} ${provider.name}`}
+                          icon="edit"
+                          onClick={() => onEdit(provider)}
+                        />
+                        {!isActive && (
+                          <ProviderConfigurationAction
+                            label={`${t('common.delete')} ${provider.name}`}
+                            icon="delete"
+                            danger
+                            onClick={() => onDelete(provider)}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </section>
+          )
+        })}
+      </div>
+    </Modal>
+  )
+}
+
+function ProviderConfigurationAction({
+  label,
+  icon,
+  loading = false,
+  danger = false,
+  onClick,
+}: {
+  label: string
+  icon: string
+  loading?: boolean
+  danger?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={loading}
+      onClick={onClick}
+      className={`flex h-[29px] w-[29px] shrink-0 items-center justify-center rounded-[6px] outline-none transition-colors focus-visible:shadow-[var(--shadow-focus-ring)] disabled:opacity-55 ${
+        danger
+          ? 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-error)]/[0.07] hover:text-[var(--color-error)]'
+          : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
       }`}
     >
-      <div className="flex min-h-[76px] items-center gap-[14px] px-[20px] py-[14px]">
-        <ProviderLogo name={name} providerId={providerId} active={isActive} />
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[14px] font-semibold tracking-tight text-[var(--color-text-primary)]">
-              {name}
-            </span>
-            {badges.filter((badge): badge is string => Boolean(badge)).map((badge) => (
-              <ProviderBadge
-                key={badge}
-                active={badge === t('settings.providers.default')}
-                muted={badge === t('settings.providers.notConfigured')}
-                warning={badge.startsWith('OpenAI')}
-              >
-                {badge}
-              </ProviderBadge>
-            ))}
-          </div>
-          <p className="mt-0.5 text-[12px] text-[var(--color-text-secondary)] truncate">
-            {description}
-          </p>
-          <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)] truncate">
-            {detail}
-          </p>
-          {test && !test.loading && testSummary && (
-            <p className={`mt-1 text-[11px] ${testSummary.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>
-              {testSummary.success
-                ? t('settings.providers.connectivityOk', { latency: String(testSummary.latencyMs) })
-                : t('settings.providers.connectivityFailed', {
-                    error: testSummary.error || t('settings.providers.requestFailed'),
-                  })}
-            </p>
-          )}
-        </div>
-
-        <div className={`flex shrink-0 items-center gap-[8px] ${isConfigured ? '' : 'opacity-95'}`}>
-          {actions}
-        </div>
-      </div>
-      {children}
-    </div>
+      <Icon name={icon} size={14} className={loading ? 'animate-spin' : ''} />
+    </button>
   )
 }
 
@@ -510,15 +1231,6 @@ function getPresetDescription(
   if (preset.id === 'custom') return t('settings.providers.customDesc')
   if (preset.promoText) return preset.promoText
   return preset.websiteUrl || preset.baseUrl || t('settings.providers.description')
-}
-
-function getPresetDetail(
-  preset: ProviderPreset,
-  t: ReturnType<typeof useTranslation>,
-): string {
-  const model = preset.defaultModels.main || t('settings.providers.modelPending')
-  const baseUrl = preset.baseUrl || t('settings.providers.baseUrlPending')
-  return `${baseUrl} · ${model}`
 }
 
 // ─── Provider Form Modal ──────────────────────────────────────
@@ -799,16 +1511,38 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const t = useTranslation()
 
   const availablePresets = presets.filter((p) => p.id !== 'official')
+  const inferredProviderPresetId = provider?.presetId === 'custom'
+    ? inferProviderPresetId(
+        {
+          providerId: provider.presetId,
+          name: provider.name,
+          baseUrl: provider.baseUrl,
+        },
+        new Set(availablePresets.map((preset) => preset.id)),
+      )
+    : null
   const fallbackPreset = provider
     ? buildFallbackPreset(provider)
     : availablePresets.find((p) => p.id === 'custom') ?? buildFallbackPreset()
   const initialPreset = provider
-    ? availablePresets.find((p) => p.id === provider.presetId) ?? fallbackPreset
+    ? availablePresets.find((p) => (
+        p.id === (inferredProviderPresetId ?? provider.presetId)
+      )) ?? fallbackPreset
     : availablePresets.find((p) => p.id === initialPresetId) ?? availablePresets[0] ?? fallbackPreset
 
   const selectedPreset = initialPreset
-  const [name, setName] = useState(provider?.name ?? initialPreset.name)
-  const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? initialPreset.baseUrl)
+  const selectedPresetName = getProviderCatalogDisplayName(
+    selectedPreset.id,
+    selectedPreset.name,
+    t,
+  )
+  const initialBaseUrl = provider?.baseUrl ?? initialPreset.baseUrl
+  const isCloudflareWorkersAi = selectedPreset.id === 'cloudflare-ai'
+  const [name, setName] = useState(provider?.name ?? selectedPresetName)
+  const [baseUrl, setBaseUrl] = useState(initialBaseUrl)
+  const [cloudflareAccountId, setCloudflareAccountId] = useState(() =>
+    isCloudflareWorkersAi ? extractCloudflareAccountId(initialBaseUrl) : '',
+  )
   const [apiFormat, setApiFormat] = useState<ApiFormat>(provider?.apiFormat ?? initialPreset.apiFormat ?? 'anthropic')
   const [apiKey, setApiKey] = useState(
     provider?.apiKey && !MASKED_API_KEYS.has(provider.apiKey) ? provider.apiKey : '',
@@ -884,11 +1618,15 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   }
 
   const isCustom = selectedPreset.id === 'custom'
+  const isNoAuthProvider = isNoAuthProviderPreset(selectedPreset)
   const requiresApiKey = selectedPreset.needsApiKey !== false
+  const cloudflareAccountIdIsValid =
+    !isCloudflareWorkersAi || isValidCloudflareAccountId(cloudflareAccountId)
+  const connectionLocationIsValid = Boolean(baseUrl.trim()) && cloudflareAccountIdIsValid
   const hasContextWindowError = MODEL_ROLES.some((role) =>
     contextWindowInputs[role].trim() && !parseContextWindowInput(contextWindowInputs[role]),
   )
-  const canSubmit = name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && !hasContextWindowError
+  const canSubmit = name.trim() && connectionLocationIsValid && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && !hasContextWindowError
   const apiKeyUrl = selectedPreset.apiKeyUrl?.trim()
   const promoText = selectedPreset.promoText?.trim()
   const apiFormatItems = [
@@ -928,6 +1666,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     ? summarizeProviderConnectionTest(testResult)
     : null
 
+  const updateCloudflareAccountId = (value: string) => {
+    setCloudflareAccountId(value)
+    setBaseUrl(buildCloudflareWorkersAiBaseUrl(value))
+  }
+
   const handleSubmit = async () => {
     if (!canSubmit) return
     setIsSubmitting(true)
@@ -949,6 +1692,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         })
       } else if (provider) {
         const input: UpdateProviderInput = {
+          ...(selectedPreset.id !== provider.presetId && {
+            presetId: selectedPreset.id,
+          }),
           name: name.trim(),
           baseUrl: baseUrl.trim(),
           apiFormat,
@@ -971,7 +1717,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   }
 
   const handleDiscoverModels = async () => {
-    if (!baseUrl.trim() || (requiresApiKey && mode === 'create' && !apiKey.trim())) return
+    if (!connectionLocationIsValid || (requiresApiKey && mode === 'create' && !apiKey.trim())) return
     setIsDiscoveringModels(true)
     setModelDiscoveryMessage(null)
     try {
@@ -1000,7 +1746,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   }
 
   const handleTest = async () => {
-    if (!baseUrl.trim() || !models.main.trim()) return
+    if (!connectionLocationIsValid || !models.main.trim()) return
     const resolvedModels = normalizedProviderModels(models)
     setIsTesting(true)
     setTestResult(null)
@@ -1017,7 +1763,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         if (requiresApiKey && !apiKey.trim()) return
         result = await testConfig({
           baseUrl: baseUrl.trim(),
-          apiKey: apiKey.trim() || selectedPreset.defaultEnv?.ANTHROPIC_AUTH_TOKEN || 'local',
+          apiKey: apiKey.trim() || selectedPreset.defaultEnv?.ANTHROPIC_AUTH_TOKEN || '',
           modelId: resolvedModels.main,
           models: resolvedModels,
           presetId: selectedPreset.id,
@@ -1038,7 +1784,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       open={open}
       onClose={onClose}
       title={mode === 'create'
-        ? t('settings.providers.configureTitle', { name: selectedPreset.name })
+        ? t('settings.providers.configureTitle', { name: selectedPresetName })
         : t('settings.providers.editTitle')}
       width={720}
       footer={
@@ -1052,11 +1798,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     >
       <div className="flex flex-col gap-4">
         <div className="flex min-h-[76px] items-start gap-[12px] rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[16px] py-[12px]">
-          <ProviderLogo name={selectedPreset.name} providerId={selectedPreset.id} active={false} />
+          <ProviderLogo name={selectedPresetName} providerId={selectedPreset.id} active={false} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="min-w-0 truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
-                {selectedPreset.name}
+                {selectedPresetName}
               </span>
               <ProviderBadge warning={apiFormat !== 'anthropic'}>
                 {selectedApiFormatLabel}
@@ -1079,7 +1825,22 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_128px]">
-          <Input label={t('settings.providers.baseUrl')} required value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={t('settings.providers.baseUrlPlaceholder')} />
+          {isCloudflareWorkersAi ? (
+            <Input
+              label={t('settings.providers.cloudflareAccountId')}
+              required
+              value={cloudflareAccountId}
+              onChange={(event) => updateCloudflareAccountId(event.target.value)}
+              placeholder={t('settings.providers.cloudflareAccountIdPlaceholder')}
+              error={cloudflareAccountId.trim() && !cloudflareAccountIdIsValid
+                ? t('settings.providers.cloudflareAccountIdError')
+                : undefined}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          ) : (
+            <Input label={t('settings.providers.baseUrl')} required value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={t('settings.providers.baseUrlPlaceholder')} />
+          )}
           <ModelIdInput
             label={t('settings.providers.mainModel')}
             required
@@ -1103,7 +1864,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           <button
             type="button"
             onClick={handleDiscoverModels}
-            disabled={isDiscoveringModels || !baseUrl.trim()}
+            disabled={isDiscoveringModels || !connectionLocationIsValid}
             className="inline-flex h-[32px] items-center gap-1.5 rounded-[8px] px-2.5 text-[12px] font-semibold text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)] disabled:opacity-40"
           >
             <Icon name="refresh" size={15} className={isDiscoveringModels ? 'animate-spin' : ''} />
@@ -1117,47 +1878,66 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         </div>
 
         <div className="flex flex-col gap-1">
-          <label htmlFor="provider-api-key" className="text-[14px] font-medium text-[var(--color-text-primary)]">
-            {t('settings.providers.apiKey')}
-            {mode === 'create' && requiresApiKey && <span className="text-[var(--color-error)] ml-0.5">*</span>}
-          </label>
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <input
-                id="provider-api-key"
-                type={showApiKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-..."
-                className="h-[40px] w-full rounded-[10px] border border-[var(--color-border)] bg-white px-[14px] pr-[40px] text-[13px] font-medium text-[var(--color-text-primary)] outline-none transition-colors duration-150 placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)] dark:bg-[var(--color-surface-container-low)]"
-              />
+          {isNoAuthProvider ? (
+            <div className="flex min-h-[40px] items-center justify-between gap-3 rounded-[8px] border border-[#16a34a]/20 bg-[#16a34a]/[0.06] px-[12px]">
+              <span className="flex min-w-0 items-center gap-2 text-[12px] font-medium text-[var(--color-text-secondary)]">
+                <Icon name="lock_open" size={16} className="shrink-0 text-[#15803d] dark:text-[#86efac]" />
+                <span>{t('settings.providers.noAuthHint')}</span>
+              </span>
               <button
                 type="button"
-                onClick={() => setShowApiKey((visible) => !visible)}
-                aria-label={showApiKey ? 'Hide API Key' : 'Show API Key'}
-                className="absolute right-[6px] top-1/2 flex h-[28px] w-[28px] -translate-y-1/2 cursor-pointer items-center justify-center rounded-full text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
-              >
-                <Icon name={showApiKey ? 'visibility_off' : 'visibility'} size={16} />
-              </button>
-            </div>
-            {apiKeyUrl && (
-              <button
-                type="button"
-                onClick={() => openExternalUrl(apiKeyUrl)}
+                onClick={handleTest}
+                disabled={isTesting || !connectionLocationIsValid || !models.main.trim()}
                 className="h-[40px] flex-shrink-0 cursor-pointer rounded-full border border-[var(--color-border)] bg-transparent px-[14px] text-[13px] font-bold text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)] disabled:cursor-default disabled:opacity-40"
               >
-                {t('settings.providers.getApiKey')}
+                {isTesting ? `${t('settings.providers.testConnection')}…` : t('settings.providers.testConnection')}
               </button>
-            )}
-            <button
-              type="button"
-              onClick={handleTest}
-              disabled={isTesting || !baseUrl.trim() || !models.main.trim()}
-              className="h-[40px] flex-shrink-0 cursor-pointer rounded-full border border-[var(--color-border)] bg-transparent px-[14px] text-[13px] font-bold text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)] disabled:cursor-default disabled:opacity-40"
-            >
-              {isTesting ? `${t('settings.providers.testConnection')}…` : t('settings.providers.testConnection')}
-            </button>
-          </div>
+            </div>
+          ) : (
+            <>
+              <label htmlFor="provider-api-key" className="text-[14px] font-medium text-[var(--color-text-primary)]">
+                {t('settings.providers.apiKey')}
+                {mode === 'create' && requiresApiKey && <span className="text-[var(--color-error)] ml-0.5">*</span>}
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    id="provider-api-key"
+                    type={showApiKey ? 'text' : 'password'}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="sk-..."
+                    className="h-[40px] w-full rounded-[10px] border border-[var(--color-border)] bg-white px-[14px] pr-[40px] text-[13px] font-medium text-[var(--color-text-primary)] outline-none transition-colors duration-150 placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)] dark:bg-[var(--color-surface-container-low)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey((visible) => !visible)}
+                    aria-label={showApiKey ? 'Hide API Key' : 'Show API Key'}
+                    className="absolute right-[6px] top-1/2 flex h-[28px] w-[28px] -translate-y-1/2 cursor-pointer items-center justify-center rounded-full text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
+                  >
+                    <Icon name={showApiKey ? 'visibility_off' : 'visibility'} size={16} />
+                  </button>
+                </div>
+                {apiKeyUrl && (
+                  <button
+                    type="button"
+                    onClick={() => openExternalUrl(apiKeyUrl)}
+                    className="h-[40px] flex-shrink-0 cursor-pointer rounded-full border border-[var(--color-border)] bg-transparent px-[14px] text-[13px] font-bold text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)] disabled:cursor-default disabled:opacity-40"
+                  >
+                    {t('settings.providers.getApiKey')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleTest}
+                  disabled={isTesting || !connectionLocationIsValid || !models.main.trim()}
+                  className="h-[40px] flex-shrink-0 cursor-pointer rounded-full border border-[var(--color-border)] bg-transparent px-[14px] text-[13px] font-bold text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)] disabled:cursor-default disabled:opacity-40"
+                >
+                  {isTesting ? `${t('settings.providers.testConnection')}…` : t('settings.providers.testConnection')}
+                </button>
+              </div>
+            </>
+          )}
           {connectionTestSummary && (
             <div className="mt-1">
               <span className={`text-[12px] ${connectionTestSummary.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>
@@ -1525,16 +2305,52 @@ export function MemorySettings() {
     }
   }
 
-  const handleEditInsight = (insight: PromptMemoryInsight) => {
-    setActiveView('files')
-    setTarget(insight.target)
-    if (status) setDraft(status.files[insight.target].content)
-    window.requestAnimationFrame(() => {
-      document.getElementById('prompt-memory-editor')?.scrollIntoView?.({
-        behavior: 'smooth',
-        block: 'start',
+  const handleSaveInsight = async (
+    entry: PromptMemoryEntrySave,
+  ): Promise<PromptMemoryEntrySaveResult> => {
+    const content = `[${entry.category}] ${entry.content.trim()}`
+    setError(null)
+    try {
+      let result
+      if (entry.original) {
+        result = await promptMemoryApi.replaceEntry(
+          entry.target,
+          entry.original.raw,
+          content,
+        )
+      } else {
+        result = await promptMemoryApi.addEntry(entry.target, content)
+      }
+      if (!result.changed) {
+        if (entry.original) {
+          addToast({
+            type: 'info',
+            message: t('settings.memory.insight.noChanges'),
+          })
+          return { ok: true }
+        }
+        return {
+          ok: false,
+          error: t('settings.memory.insight.alreadyExists'),
+        }
+      }
+      await loadMemory(target)
+      addToast({
+        type: 'success',
+        message: t(entry.original
+          ? 'settings.memory.insight.updated'
+          : 'settings.memory.insight.added'),
       })
-    })
+      return { ok: true }
+    } catch (saveError) {
+      const message = getMemoryErrorMessage(
+        saveError,
+        t('settings.memory.insight.saveFailed'),
+      )
+      setError(message)
+      addToast({ type: 'error', message })
+      return { ok: false, error: message }
+    }
   }
 
   const handleRemoveInsight = async () => {
@@ -1673,8 +2489,8 @@ export function MemorySettings() {
             <EvolutionProfile
               overview={insights}
               removingId={removingInsightId}
-              onEdit={handleEditInsight}
               onRemove={setPendingRemoveInsight}
+              onSaveEntry={handleSaveInsight}
             />
           </motion.section>
         )}

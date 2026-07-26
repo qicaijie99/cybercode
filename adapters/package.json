@@ -6,14 +6,23 @@
   "scripts": {
     "telegram": "bun run telegram/index.ts",
     "feishu": "bun run feishu/index.ts",
+    "weixin": "bun run weixin/index.ts",
+    "qq": "bun run qq/index.ts",
+    "dingtalk": "bun run dingtalk/index.ts",
     "test": "bun test",
     "test:common": "bun test common/",
     "test:telegram": "bun test telegram/",
-    "test:feishu": "bun test feishu/"
+    "test:feishu": "bun test feishu/",
+    "test:weixin": "bun test weixin/",
+    "test:qq": "bun test qq/",
+    "test:dingtalk": "bun test dingtalk/"
   },
   "dependencies": {
-    "grammy": "^1.42.0",
     "@larksuiteoapi/node-sdk": "^1.60.0",
+    "@tencent-connect/qqbot-connector": "1.2.0",
+    "@tencent-connect/qqbot-nodejs": "1.0.4",
+    "dingtalk-stream": "2.1.5",
+    "grammy": "^1.42.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

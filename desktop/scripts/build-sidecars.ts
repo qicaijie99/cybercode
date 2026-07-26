@@ -15,6 +15,23 @@ const bunTarget = mapTargetTripleToBun(targetTriple)
 
 await mkdir(binariesDir, { recursive: true })
 
+console.log('[build-sidecars] preparing native Computer Use helper...')
+const computerUseHelperPrepareProc = Bun.spawn(
+  ['bun', 'run', path.join(desktopRoot, 'scripts/prepare-computer-use-helper.ts')],
+  {
+    cwd: repoRoot,
+    env: { ...process.env, TAURI_ENV_TARGET_TRIPLE: targetTriple },
+    stdout: 'inherit',
+    stderr: 'inherit',
+  },
+)
+const computerUseHelperPrepareExit = await computerUseHelperPrepareProc.exited
+if (computerUseHelperPrepareExit !== 0) {
+  throw new Error(
+    `[build-sidecars] prepare-computer-use-helper failed (exit ${computerUseHelperPrepareExit})`,
+  )
+}
+
 console.log('[build-sidecars] preparing embedded RTK runtime...')
 const rtkPrepareProc = Bun.spawn(
   ['bun', 'run', path.join(desktopRoot, 'scripts/prepare-rtk.ts')],
@@ -28,6 +45,23 @@ const rtkPrepareProc = Bun.spawn(
 const rtkPrepareExit = await rtkPrepareProc.exited
 if (rtkPrepareExit !== 0) {
   throw new Error(`[build-sidecars] prepare-rtk failed (exit ${rtkPrepareExit})`)
+}
+
+console.log('[build-sidecars] preparing embedded agent-browser runtime...')
+const agentBrowserPrepareProc = Bun.spawn(
+  ['bun', 'run', path.join(desktopRoot, 'scripts/prepare-agent-browser.ts')],
+  {
+    cwd: repoRoot,
+    env: { ...process.env, TAURI_ENV_TARGET_TRIPLE: targetTriple },
+    stdout: 'inherit',
+    stderr: 'inherit',
+  },
+)
+const agentBrowserPrepareExit = await agentBrowserPrepareProc.exited
+if (agentBrowserPrepareExit !== 0) {
+  throw new Error(
+    `[build-sidecars] prepare-agent-browser failed (exit ${agentBrowserPrepareExit})`,
+  )
 }
 
 console.log('[build-sidecars] preparing embedded CodeGraph core...')

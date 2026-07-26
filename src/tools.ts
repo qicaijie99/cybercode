@@ -59,6 +59,7 @@ const SubscribePRTool = feature('KAIROS_GITHUB_WEBHOOKS')
 import { TaskOutputTool } from './tools/TaskOutputTool/TaskOutputTool.js'
 import { WebSearchTool } from './tools/WebSearchTool/WebSearchTool.js'
 import { TodoWriteTool } from './tools/TodoWriteTool/TodoWriteTool.js'
+import { GoalStatusTool } from './tools/GoalStatusTool/GoalStatusTool.js'
 import { ExitPlanModeV2Tool } from './tools/ExitPlanModeTool/ExitPlanModeV2Tool.js'
 import { TestingPermissionTool } from './tools/testing/TestingPermissionTool.js'
 import { GrepTool } from './tools/GrepTool/GrepTool.js'
@@ -214,6 +215,7 @@ export function getAllBaseTools(): Tools {
     NotebookEditTool,
     WebFetchTool,
     TodoWriteTool,
+    GoalStatusTool,
     WebSearchTool,
     PromptMemoryTool,
     SessionSearchTool,
@@ -308,6 +310,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
       CodeGraphTool,
       FileReadTool,
       FileEditTool,
+      GoalStatusTool,
     ]
     // When coordinator mode is also active, include AgentTool and TaskStopTool
     // so the coordinator gets Task+TaskStop (via useMergedTools filtering) and

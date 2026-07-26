@@ -1,0 +1,275 @@
+import { createHash } from 'node:crypto'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, test } from 'bun:test'
+import {
+  ComputerUseRuntimeManager,
+  type ComputerUseRuntimeManifest,
+} from '../../utils/computerUse/runtimeManager.js'
+
+const roots: string[] = []
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+})
+
+async function makeRoot(): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), 'cybercode-computer-use-runtime-'))
+  roots.push(root)
+  return root
+}
+
+function manifestFor(bytes: Uint8Array): ComputerUseRuntimeManifest {
+  return {
+    schemaVersion: 1,
+    runtimeVersion: 'test-v1',
+    assets: {
+      'win32-x64': {
+        filename: 'computer-use-runtime-win32-x64.tar.gz',
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        size: bytes.byteLength,
+        pythonPath: 'python/python.exe',
+      },
+    },
+  }
+}
+
+async function fakeExtract(_archivePath: string, destination: string): Promise<void> {
+  await mkdir(path.join(destination, 'python'), { recursive: true })
+  await writeFile(path.join(destination, 'python', 'python.exe'), 'fake python')
+}
+
+describe('ComputerUseRuntimeManager', () => {
+  test('selects the bundled Linux x64 runtime', () => {
+    const manager = new ComputerUseRuntimeManager({
+      platform: 'linux',
+      arch: 'x64',
+      runtimeRoot: '/tmp/cybercode-runtime-platform-test',
+    })
+
+    expect(manager.snapshot().platformKey).toBe('linux-x64')
+  })
+
+  test('downloads, verifies and atomically activates a private runtime', async () => {
+    const root = await makeRoot()
+    const archive = new TextEncoder().encode('portable-runtime')
+    const manifest = manifestFor(archive)
+    const requests: string[] = []
+    await mkdir(path.join(root, 'downloads'), { recursive: true })
+    await writeFile(path.join(root, 'downloads', 'stale-runtime.tar.gz.part'), 'stale')
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot: root,
+      platform: 'win32',
+      arch: 'x64',
+      manifestUrls: ['https://downloads.example/runtime/manifest.json'],
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        const url = String(input)
+        requests.push(url)
+        if (url.endsWith('manifest.json')) return Response.json(manifest)
+        return new Response(archive, { status: 200 })
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    const preparation = manager.startInBackground()
+    expect(preparation).toMatchObject({ phase: 'checking', ready: false })
+    const pythonPath = await manager.ensureReady()
+    expect(pythonPath).toBe(path.join(root, 'managed', 'test-v1', 'win32-x64', 'python', 'python.exe'))
+    expect(manager.snapshot()).toMatchObject({
+      phase: 'ready',
+      ready: true,
+      source: 'managed',
+      progressPercent: 100,
+    })
+    expect(requests).toEqual([
+      'https://downloads.example/runtime/manifest.json',
+      'https://downloads.example/runtime/computer-use-runtime-win32-x64.tar.gz',
+    ])
+
+    const pointer = JSON.parse(
+      await readFile(path.join(root, 'managed', 'active.json'), 'utf8'),
+    )
+    expect(pointer).toMatchObject({
+      runtimeVersion: 'test-v1',
+      platformKey: 'win32-x64',
+      pythonPath: 'python/python.exe',
+    })
+    await expect(
+      readFile(path.join(root, 'downloads', 'stale-runtime.tar.gz.part'), 'utf8'),
+    ).rejects.toThrow()
+  })
+
+  test('resumes a partial download with an HTTP Range request', async () => {
+    const root = await makeRoot()
+    const archive = new TextEncoder().encode('0123456789-runtime')
+    const manifest = manifestFor(archive)
+    const partialSize = 7
+    const partialPath = path.join(
+      root,
+      'downloads',
+      'computer-use-runtime-win32-x64.tar.gz.part',
+    )
+    await mkdir(path.dirname(partialPath), { recursive: true })
+    await writeFile(partialPath, archive.slice(0, partialSize))
+    let rangeHeader: string | null = null
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot: root,
+      platform: 'win32',
+      arch: 'x64',
+      manifestUrls: ['https://downloads.example/runtime/manifest.json'],
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('manifest.json')) return Response.json(manifest)
+        rangeHeader = new Headers(init?.headers).get('Range')
+        return new Response(archive.slice(partialSize), { status: 206 })
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    await manager.ensureReady()
+    expect(rangeHeader).toBe(`bytes=${partialSize}-`)
+    expect(manager.snapshot().phase).toBe('ready')
+  })
+
+  test('falls back to the next manifest and asset mirror', async () => {
+    const root = await makeRoot()
+    const archive = new TextEncoder().encode('mirror-runtime')
+    const manifest = manifestFor(archive)
+    const requests: string[] = []
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot: root,
+      platform: 'win32',
+      arch: 'x64',
+      manifestUrls: [
+        'https://primary.example/runtime/manifest.json',
+        'https://mirror.example/runtime/manifest.json',
+      ],
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        const url = String(input)
+        requests.push(url)
+        if (url.startsWith('https://primary.example')) {
+          return new Response('unavailable', { status: 503 })
+        }
+        if (url.endsWith('manifest.json')) return Response.json(manifest)
+        return new Response(archive, { status: 200 })
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    await manager.ensureReady()
+    expect(manager.snapshot().ready).toBe(true)
+    expect(requests).toContain('https://mirror.example/runtime/manifest.json')
+    expect(requests).toContain(
+      'https://mirror.example/runtime/computer-use-runtime-win32-x64.tar.gz',
+    )
+  })
+
+  test('does not activate a runtime with a mismatched checksum', async () => {
+    const root = await makeRoot()
+    const expected = new TextEncoder().encode('expected-runtime')
+    const corrupted = new TextEncoder().encode('corrupted-runtime')
+    const manifest = manifestFor(expected)
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot: root,
+      platform: 'win32',
+      arch: 'x64',
+      manifestUrls: ['https://downloads.example/runtime/manifest.json'],
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        if (String(input).endsWith('manifest.json')) return Response.json(manifest)
+        return new Response(corrupted, { status: 200 })
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    await expect(manager.ensureReady()).rejects.toThrow('运行组件下载失败')
+    expect(manager.snapshot()).toMatchObject({ phase: 'error', ready: false })
+    await expect(readFile(path.join(root, 'managed', 'active.json'), 'utf8')).rejects.toThrow()
+  })
+
+  test('aborts cleanly when paused before the manifest request starts', async () => {
+    const root = await makeRoot()
+    const archive = new TextEncoder().encode('resumable-runtime')
+    const manifest = manifestFor(archive)
+    let manifestRequests = 0
+    let assetRequests = 0
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot: root,
+      platform: 'win32',
+      arch: 'x64',
+      manifestUrls: ['https://downloads.example/runtime/manifest.json'],
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        if (String(input).endsWith('manifest.json')) {
+          manifestRequests += 1
+          return Response.json(manifest)
+        }
+        assetRequests += 1
+        return new Response(archive, { status: 200 })
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    manager.startInBackground()
+    const paused = await manager.pause()
+    expect(paused).toMatchObject({ phase: 'paused', ready: false })
+
+    const resumed = manager.startInBackground()
+    expect(resumed.phase).toBe('checking')
+    await manager.ensureReady()
+
+    expect(manager.snapshot()).toMatchObject({ phase: 'ready', ready: true })
+    expect(manifestRequests).toBe(1)
+    expect(assetRequests).toBe(1)
+  })
+
+  test('waits for an active download to stop before acknowledging pause', async () => {
+    const root = await makeRoot()
+    const archive = new TextEncoder().encode('resume-after-active-download')
+    const manifest = manifestFor(archive)
+    let assetRequests = 0
+    let markAssetStarted!: () => void
+    const assetStarted = new Promise<void>(resolve => {
+      markAssetStarted = resolve
+    })
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot: root,
+      platform: 'win32',
+      arch: 'x64',
+      manifestUrls: ['https://downloads.example/runtime/manifest.json'],
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('manifest.json')) return Response.json(manifest)
+        assetRequests += 1
+        if (assetRequests > 1) return new Response(archive, { status: 200 })
+
+        markAssetStarted()
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            setTimeout(() => reject(init.signal?.reason), 20)
+          }, { once: true })
+        })
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    manager.startInBackground()
+    await assetStarted
+    const paused = await manager.pause()
+    expect(paused).toMatchObject({ phase: 'paused', ready: false })
+
+    expect(manager.startInBackground().phase).toBe('checking')
+    await manager.ensureReady()
+    expect(manager.snapshot()).toMatchObject({ phase: 'ready', ready: true })
+    expect(assetRequests).toBe(2)
+  })
+})

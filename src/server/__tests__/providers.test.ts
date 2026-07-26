@@ -550,11 +550,13 @@ describe('ProviderService', () => {
       const added = await svc.addProvider(sampleInput())
 
       const updated = await svc.updateProvider(added.id, {
+        presetId: 'volcengine',
         name: 'Updated Name',
         baseUrl: 'https://new-api.example.com',
         imageSupportMode: 'disabled',
       })
 
+      expect(updated.presetId).toBe('volcengine')
       expect(updated.name).toBe('Updated Name')
       expect(updated.baseUrl).toBe('https://new-api.example.com')
       expect(updated.imageSupportMode).toBe('disabled')
@@ -1050,6 +1052,69 @@ describe('ProviderService', () => {
   })
 
   describe('testProviderConfig', () => {
+    test('should omit authorization headers for a no-auth cloud provider', async () => {
+      const svc = new ProviderService()
+      const originalFetch = globalThis.fetch
+      const authorizationHeaders: Array<string | null> = []
+
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        authorizationHeaders.push(new Headers(init?.headers).get('authorization'))
+        const body = JSON.parse(String(init?.body ?? '{}')) as { model: string }
+        return Response.json({
+          id: 'chatcmpl-keyless',
+          object: 'chat.completion',
+          model: body.model,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'ok' },
+            finish_reason: 'stop',
+          }],
+        })
+      }) as typeof fetch
+
+      try {
+        const result = await svc.testProviderConfig({
+          baseUrl: 'https://opencode.ai/zen/v1',
+          apiKey: '',
+          modelId: 'north-mini-code-free',
+          presetId: 'opencode-free',
+          apiFormat: 'openai_chat',
+        })
+
+        expect(result.connectivity.success).toBe(true)
+        expect(result.proxy?.success).toBe(true)
+        expect(authorizationHeaders).toEqual([null, null])
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('should still reject a credentialed cloud provider without its key', async () => {
+      const svc = new ProviderService()
+      const originalFetch = globalThis.fetch
+      let fetchCalled = false
+      globalThis.fetch = (async () => {
+        fetchCalled = true
+        return Response.json({})
+      }) as typeof fetch
+
+      try {
+        const result = await svc.testProviderConfig({
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: '',
+          modelId: 'gpt-5.5',
+          presetId: 'openai',
+          apiFormat: 'openai_chat',
+        })
+
+        expect(result.connectivity.success).toBe(false)
+        expect(result.connectivity.error).toBe('Missing baseUrl or apiKey')
+        expect(fetchCalled).toBe(false)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('should test local providers without forcing an API key or probing image support', async () => {
       const svc = new ProviderService()
       const provider = await svc.addProvider(sampleInput({

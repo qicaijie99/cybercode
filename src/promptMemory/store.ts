@@ -133,6 +133,31 @@ function normalizeEntry(content: string): string {
   return content.trim()
 }
 
+function findMatchingEntryIndexes(
+  entries: string[],
+  needle: string,
+): { indexes: number[]; exact: boolean } {
+  const exactIndexes = entries.flatMap((entry, index) =>
+    entry === needle ? [index] : [],
+  )
+  if (exactIndexes.length > 0) {
+    return { indexes: exactIndexes, exact: true }
+  }
+  return {
+    indexes: entries.flatMap((entry, index) =>
+      entry.includes(needle) ? [index] : [],
+    ),
+    exact: false,
+  }
+}
+
+function entriesEqual(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((entry, index) => entry === right[index])
+  )
+}
+
 export function parsePromptMemoryEntries(raw: string): {
   entries: string[]
   format: PromptMemoryFormat
@@ -374,29 +399,41 @@ export async function replacePromptMemoryEntry(
   }
 
   return mutatePromptMemoryEntries(target, 'replace', entries => {
-    const matches = entries
-      .map((entry, index) => ({ entry, index }))
-      .filter(({ entry }) => entry.includes(needle))
-    if (matches.length === 0) {
+    const match = findMatchingEntryIndexes(entries, needle)
+    if (match.indexes.length === 0) {
       throw new PromptMemoryError(
         'No memory entry matched oldText.',
         'ENTRY_NOT_FOUND',
         404,
       )
     }
-    if (matches.length > 1) {
+    if (match.indexes.length > 1 && !match.exact) {
       throw new PromptMemoryError(
         'oldText matched multiple memory entries. Provide a more specific oldText.',
         'AMBIGUOUS_ENTRY',
       )
     }
 
-    const next = [...entries]
-    next[matches[0]!.index] = replacement
+    const matchedIndexes = new Set(match.indexes)
+    const firstMatchIndex = match.indexes[0]!
+    const insertionIndex = entries
+      .slice(0, firstMatchIndex)
+      .filter((_, index) => !matchedIndexes.has(index))
+      .length
+    const next = entries.filter((_, index) => !matchedIndexes.has(index))
+    const mergedWithExisting = next.includes(replacement)
+    if (!mergedWithExisting) {
+      next.splice(insertionIndex, 0, replacement)
+    }
+    const changed = !entriesEqual(entries, next)
     return {
       entries: next,
-      changed: next[matches[0]!.index] !== matches[0]!.entry,
-      message: 'Entry replaced. It will affect future conversations.',
+      changed,
+      message: !changed
+        ? 'Entry is unchanged.'
+        : mergedWithExisting || match.indexes.length > 1
+          ? 'Entry merged with an existing entry. It will affect future conversations.'
+          : 'Entry replaced. It will affect future conversations.',
     }
   })
 }
@@ -411,25 +448,24 @@ export async function removePromptMemoryEntry(
   }
 
   return mutatePromptMemoryEntries(target, 'remove', entries => {
-    const matches = entries
-      .map((entry, index) => ({ entry, index }))
-      .filter(({ entry }) => entry.includes(needle))
-    if (matches.length === 0) {
+    const match = findMatchingEntryIndexes(entries, needle)
+    if (match.indexes.length === 0) {
       throw new PromptMemoryError(
         'No memory entry matched oldText.',
         'ENTRY_NOT_FOUND',
         404,
       )
     }
-    if (matches.length > 1) {
+    if (match.indexes.length > 1 && !match.exact) {
       throw new PromptMemoryError(
         'oldText matched multiple memory entries. Provide a more specific oldText.',
         'AMBIGUOUS_ENTRY',
       )
     }
 
+    const matchedIndexes = new Set(match.indexes)
     return {
-      entries: entries.filter((_, index) => index !== matches[0]!.index),
+      entries: entries.filter((_, index) => !matchedIndexes.has(index)),
       changed: true,
       message: 'Entry removed. The change will affect future conversations.',
     }

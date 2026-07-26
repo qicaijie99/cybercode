@@ -1,14 +1,28 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { computerUseApi, type ComputerUseStatus, type SetupResult, type InstalledApp, type AuthorizedApp } from '../api/computerUse'
+import {
+  computerUseApi,
+  type ComputerUseRuntimePhase,
+  type ComputerUseStatus,
+  type InstalledApp,
+  type AuthorizedApp,
+} from '../api/computerUse'
 import { useTranslation } from '../i18n'
 import { SettingsPage } from '../components/settings/SettingsLayout'
 import { Button } from '../components/shared/Button'
 import { Icon } from '../components/shared/Icon'
 
 type CheckState = 'loading' | 'ready' | 'error'
-const PYTHON_DOWNLOAD_URLS: Record<string, string> = {
-  darwin: 'https://www.python.org/downloads/macos/',
-  win32: 'https://www.python.org/downloads/windows/',
+const ACTIVE_RUNTIME_PHASES = new Set<ComputerUseRuntimePhase>([
+  'checking',
+  'downloading',
+  'verifying',
+  'installing',
+])
+
+function formatBytes(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return ''
+  if (value < 1024 * 1024) return `${Math.max(0, value / 1024).toFixed(0)} KB`
+  return `${Math.max(0, value / 1024 / 1024).toFixed(1)} MB`
 }
 
 function StatusIcon({ ok }: { ok: boolean | null }) {
@@ -28,7 +42,7 @@ function StatusRow({ label, ok, detail }: { label: string; ok: boolean | null; d
       <StatusIcon ok={ok} />
       <div className="flex-1 min-w-0">
         <span className="text-[14px] font-medium text-[var(--color-text-primary)]">{label}</span>
-        <span className="ml-2 text-[12px] text-[var(--color-text-tertiary)]">{detail}</span>
+        <span className="ml-2 break-all text-[12px] text-[var(--color-text-tertiary)]">{detail}</span>
       </div>
     </div>
   )
@@ -38,21 +52,11 @@ async function openSystemSettings(pane: 'Privacy_ScreenCapture' | 'Privacy_Acces
   await computerUseApi.openSettings(pane)
 }
 
-async function openExternalUrl(url: string) {
-  try {
-    const { open } = await import('@tauri-apps/plugin-shell')
-    await open(url)
-  } catch {
-    window.open(url, '_blank', 'noopener,noreferrer')
-  }
-}
-
 export function ComputerUseSettings() {
   const t = useTranslation()
   const [status, setStatus] = useState<ComputerUseStatus | null>(null)
   const [checkState, setCheckState] = useState<CheckState>('loading')
-  const [setupRunning, setSetupRunning] = useState(false)
-  const [setupResult, setSetupResult] = useState<SetupResult | null>(null)
+  const [runtimeActionError, setRuntimeActionError] = useState<string | null>(null)
 
   // App authorization state
   const [installedApps, setInstalledApps] = useState<InstalledApp[]>([])
@@ -64,14 +68,14 @@ export function ComputerUseSettings() {
   const [clipboardAccess, setClipboardAccess] = useState(true)
   const [systemKeys, setSystemKeys] = useState(true)
 
-  const fetchStatus = useCallback(async () => {
-    setCheckState('loading')
+  const fetchStatus = useCallback(async (silent = false) => {
+    if (!silent) setCheckState('loading')
     try {
       const s = await computerUseApi.getStatus()
       setStatus(s)
       setCheckState('ready')
     } catch {
-      setCheckState('error')
+      if (!silent) setCheckState('error')
     }
   }, [])
 
@@ -95,27 +99,41 @@ export function ComputerUseSettings() {
   }, [])
 
   useEffect(() => {
-    fetchStatus()
+    void fetchStatus()
   }, [fetchStatus])
 
   // Load apps when environment is ready
-  const envReady = status?.venv.created && status?.dependencies.installed
+  const envReady = status?.runtime.ready ?? false
   useEffect(() => {
-    if (envReady) fetchApps()
+    if (envReady) void fetchApps()
   }, [envReady, fetchApps])
 
+  const runtimePhase = status?.runtime.phase
+  const runtimeActive = runtimePhase ? ACTIVE_RUNTIME_PHASES.has(runtimePhase) : false
+  useEffect(() => {
+    if (!runtimeActive) return
+    const timer = window.setInterval(() => void fetchStatus(true), 600)
+    return () => window.clearInterval(timer)
+  }, [runtimeActive, fetchStatus])
+
   const handleSetup = async () => {
-    setSetupRunning(true)
-    setSetupResult(null)
+    setRuntimeActionError(null)
     try {
-      const result = await computerUseApi.runSetup()
-      setSetupResult(result)
-      await fetchStatus()
-      if (result.success) await fetchApps()
-    } catch {
-      setSetupResult({ success: false, steps: [{ name: 'error', ok: false, message: 'Request failed' }] })
-    } finally {
-      setSetupRunning(false)
+      const runtime = await computerUseApi.prepareRuntime()
+      setStatus(current => current ? { ...current, runtime } : current)
+      await fetchStatus(true)
+    } catch (error) {
+      setRuntimeActionError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const handlePause = async () => {
+    setRuntimeActionError(null)
+    try {
+      const runtime = await computerUseApi.pauseRuntime()
+      setStatus(current => current ? { ...current, runtime } : current)
+    } catch (error) {
+      setRuntimeActionError(error instanceof Error ? error.message : String(error))
     }
   }
 
@@ -162,16 +180,44 @@ export function ComputerUseSettings() {
 
   const allReady =
     status?.supported &&
-    status.python.installed &&
-    status.venv.created &&
-    status.dependencies.installed
+    status.runtime.ready &&
+    (status.platform !== 'linux' || (
+      status.permissions.inputAvailable === true &&
+      status.permissions.screenRecording === true
+    ))
 
   const accessibilityNeedsAttention = status?.permissions.accessibility === false
   const screenRecordingNeedsAttention = status?.permissions.screenRecording === false
   const screenRecordingReady = status ? status.permissions.screenRecording !== false : null
-  const pythonDownloadUrl = status
-    ? PYTHON_DOWNLOAD_URLS[status.platform] ?? 'https://www.python.org/downloads/'
-    : 'https://www.python.org/downloads/'
+  const runtimeDetail = status ? (() => {
+    const runtime = status.runtime
+    switch (runtime.phase) {
+      case 'checking':
+        return t('settings.computerUse.runtimeChecking')
+      case 'downloading': {
+        const downloaded = formatBytes(runtime.downloadedBytes)
+        const total = formatBytes(runtime.totalBytes)
+        return t('settings.computerUse.runtimeDownloading', {
+          percent: runtime.progressPercent,
+          size: total ? `${downloaded} / ${total}` : downloaded,
+        })
+      }
+      case 'verifying':
+        return t('settings.computerUse.runtimeVerifying')
+      case 'installing':
+        return t('settings.computerUse.runtimeInstalling')
+      case 'ready':
+        return runtime.source === 'legacy'
+          ? t('settings.computerUse.runtimeLegacyReady')
+          : t('settings.computerUse.runtimeReady', { version: runtime.version ?? '' })
+      case 'paused':
+        return t('settings.computerUse.runtimePaused')
+      case 'error':
+        return runtime.error ?? t('settings.computerUse.runtimeError')
+      default:
+        return t('settings.computerUse.runtimeNotInstalled')
+    }
+  })() : ''
 
   // Filter apps by search query
   const filteredApps = useMemo(() => {
@@ -202,7 +248,7 @@ export function ComputerUseSettings() {
       ) : checkState === 'error' ? (
         <div className="py-8 text-center text-[14px] text-red-400">
           Failed to check status.
-          <button onClick={fetchStatus} className="ml-2 underline">{t('common.retry')}</button>
+          <button onClick={() => void fetchStatus()} className="ml-2 underline">{t('common.retry')}</button>
         </div>
       ) : status ? (
         <>
@@ -212,27 +258,31 @@ export function ComputerUseSettings() {
             </div>
           )}
 
-          {/* Status checks */}
+          {/* Runtime status */}
           <div className="space-y-2">
             <StatusRow
-              label={t('settings.computerUse.python')}
-              ok={status.python.installed}
-              detail={
-                status.python.installed
-                  ? `${t('settings.computerUse.pythonFound')} — ${status.python.version} (${status.python.path})`
-                  : t('settings.computerUse.pythonNotFound')
-              }
+              label={t('settings.computerUse.runtime')}
+              ok={status.runtime.ready ? true : status.runtime.phase === 'error' ? false : null}
+              detail={runtimeDetail}
             />
-            <StatusRow
-              label={t('settings.computerUse.venv')}
-              ok={status.venv.created}
-              detail={status.venv.created ? `${t('settings.computerUse.venvReady')} — ${status.venv.path}` : t('settings.computerUse.venvNotReady')}
-            />
-            <StatusRow
-              label={t('settings.computerUse.deps')}
-              ok={status.dependencies.installed}
-              detail={status.dependencies.installed ? t('settings.computerUse.depsReady') : t('settings.computerUse.depsNotReady')}
-            />
+            {runtimeActive && (
+              <div className="px-4 py-3 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
+                <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-border-separator)]">
+                  <div
+                    role="progressbar"
+                    aria-label={t('settings.computerUse.runtime')}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={status.runtime.progressPercent}
+                    className="h-full rounded-full bg-[var(--color-brand)] transition-[width] duration-300 ease-out"
+                    style={{ width: `${Math.max(2, status.runtime.progressPercent)}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-[12px] text-[var(--color-text-tertiary)]">
+                  {t('settings.computerUse.runtimeBackgroundHint')}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* macOS Permissions — only shown on macOS (darwin) */}
@@ -284,6 +334,33 @@ export function ComputerUseSettings() {
             </>
           )}
 
+          {envReady && status.platform === 'linux' && (
+            <>
+              <StatusRow
+                label={t('settings.computerUse.screenCapture')}
+                ok={status.permissions.screenRecording}
+                detail={
+                  status.permissions.screenRecording === false
+                    ? t('settings.computerUse.linuxCaptureUnavailable')
+                    : status.permissions.screenRecording === true
+                      ? t('settings.computerUse.linuxCaptureReady')
+                      : t('settings.computerUse.permUnknown')
+                }
+              />
+              <StatusRow
+                label={t('settings.computerUse.desktopInput')}
+                ok={status.permissions.inputAvailable ?? null}
+                detail={
+                  status.permissions.inputAvailable === false
+                    ? t('settings.computerUse.linuxWaylandInputLimited')
+                    : status.permissions.inputAvailable === true
+                      ? t('settings.computerUse.linuxInputReady')
+                      : t('settings.computerUse.permUnknown')
+                }
+              />
+            </>
+          )}
+
           {allReady && (status.platform !== 'darwin' || (status.permissions.accessibility && screenRecordingReady)) && (
             <div className="px-4 py-3 rounded-[12px] bg-[var(--color-success)]/10 border border-[var(--color-brand)]/40 text-[14px] text-[var(--color-success)] flex items-center gap-2">
               <Icon name="verified" size={18} />
@@ -291,45 +368,52 @@ export function ComputerUseSettings() {
             </div>
           )}
 
-          {setupResult && (
-            <div className={`rounded-[12px] border p-4 space-y-2 ${setupResult.success ? 'bg-[var(--color-success)]/5 border-[var(--color-success)]/30' : 'bg-[var(--color-error)]/5 border-[var(--color-error)]/30'}`}>
-              <div className={`text-[14px] font-medium ${setupResult.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>
-                {setupResult.success ? t('settings.computerUse.setupSuccess') : t('settings.computerUse.setupFail')}
-              </div>
-              {setupResult.steps.map((step, i) => (
-                <div key={i} className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
-                  <StatusIcon ok={step.ok} />
-                  <span>{step.message}</span>
-                </div>
-              ))}
+          {runtimeActionError && (
+            <div className="rounded-[12px] border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 px-4 py-3 text-[12px] text-[var(--color-error)]">
+              {runtimeActionError}
             </div>
           )}
 
           {/* Action buttons */}
-          <div className="flex gap-3">
-            {!status.python.installed && (
-              <Button
-                type="button"
-                onClick={() => openExternalUrl(pythonDownloadUrl)}
-                icon={<Icon name="open_in_new" size={18} />}
-              >
-                {t('settings.computerUse.downloadPython')}
-              </Button>
-            )}
-            {!envReady && status.python.installed && (
+          <div className="flex flex-wrap gap-3">
+            {status.supported && !envReady && !runtimeActive && (
               <Button
                 type="button"
                 onClick={handleSetup}
-                disabled={setupRunning}
-                icon={<Icon name={setupRunning ? 'hourglass_empty' : 'download'} size={18} />}
+                icon={<Icon name="download" size={18} />}
               >
-                {setupRunning ? t('settings.computerUse.setupRunning') : t('settings.computerUse.setupBtn')}
+                {status.runtime.phase === 'error'
+                  ? t('settings.computerUse.runtimeRetry')
+                  : status.runtime.phase === 'paused'
+                    ? t('settings.computerUse.runtimeResume')
+                    : t('settings.computerUse.runtimePrepare')}
+              </Button>
+            )}
+            {status.supported && runtimeActive && (
+              <Button
+                type="button"
+                disabled
+                icon={<Icon name="hourglass_empty" size={18} />}
+              >
+                {t('settings.computerUse.runtimePreparing', {
+                  percent: status.runtime.progressPercent,
+                })}
+              </Button>
+            )}
+            {status.supported && runtimeActive && status.runtime.canPause && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handlePause}
+                icon={<Icon name="pause" size={18} />}
+              >
+                {t('settings.computerUse.runtimePause')}
               </Button>
             )}
             <Button
               type="button"
               variant="secondary"
-              onClick={fetchStatus}
+              onClick={() => void fetchStatus()}
               icon={<Icon name="refresh" size={18} />}
             >
               {t('settings.computerUse.recheckBtn')}

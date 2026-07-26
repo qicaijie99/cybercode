@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { OFFICIAL_MODELS } from '../../constants/modelCatalog'
 import { useProviderStore } from '../../stores/providerStore'
+import { useRoutingStore } from '../../stores/routingStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import type { SavedProvider } from '../../types/provider'
@@ -48,9 +49,16 @@ describe('ModelSelector', () => {
       error: null,
       fetchProviders: vi.fn(),
     })
+    useRoutingStore.setState({
+      dashboard: null,
+      isLoading: false,
+      isSaving: false,
+      error: null,
+      fetchDashboard: vi.fn(),
+    })
   })
 
-  it('does not infer custom provider logos from mixed model IDs', () => {
+  it('uses custom endpoint identities instead of mixed model IDs', () => {
     useProviderStore.setState({
       providers: [
         makeProvider({
@@ -91,11 +99,11 @@ describe('ModelSelector', () => {
       .find((element) => element.className.includes('text-[var(--color-text-primary)]'))
       ?.parentElement
 
-    expect(volcanoHeader?.querySelector('[data-provider-logo-kind="generated"]')).toHaveAttribute('data-provider-logo', 'generated-火山')
+    expect(volcanoHeader?.querySelector('[data-provider-logo="volcengine"]')).toBeInTheDocument()
     expect(volcanoHeader?.querySelector('[data-provider-logo="zhipuglm"]')).not.toBeInTheDocument()
     expect(volcanoHeader?.querySelector('[data-provider-logo="kimi"]')).not.toBeInTheDocument()
 
-    expect(qianfanHeader?.querySelector('[data-provider-logo-kind="generated"]')).toHaveAttribute('data-provider-logo', 'generated-百度千帆')
+    expect(qianfanHeader?.querySelector('[data-provider-logo="qianfan"]')).toBeInTheDocument()
     expect(qianfanHeader?.querySelector('[data-provider-logo="deepseek"]')).not.toBeInTheDocument()
     expect(qianfanHeader?.querySelector('[data-provider-logo="zhipuglm"]')).not.toBeInTheDocument()
   })
@@ -135,5 +143,77 @@ describe('ModelSelector', () => {
       modelId: 'kimi-k2.6',
       contextWindow: undefined,
     })
+  })
+
+  it('offers available route profiles without replacing direct model choices', () => {
+    useRoutingStore.setState({
+      dashboard: {
+        config: {
+          version: 1,
+          enabled: true,
+          profiles: [{
+            id: 'team-route',
+            name: 'Team route',
+            description: 'Custom route',
+            enabled: true,
+            strategy: 'priority',
+            strictFree: false,
+            allowExperimental: false,
+            maxAttempts: 2,
+            targets: [],
+          }],
+        },
+        sources: [],
+        health: [],
+        events: [],
+        routeAvailability: {
+          'team-route': { candidateCount: 2, available: true, contextWindow: 262_144 },
+        },
+      },
+    })
+    const onRuntimeChange = vi.fn()
+
+    render(
+      <ModelSelector
+        runtimeValue={{ providerId: null, modelId: 'claude-opus-4-8' }}
+        onRuntimeChange={onRuntimeChange}
+        compact
+        variant="pill"
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/i }))
+    expect(screen.getAllByText('Claude Official').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByText('Team route').closest('button')!)
+
+    expect(onRuntimeChange).toHaveBeenCalledWith({
+      kind: 'route',
+      providerId: null,
+      routeId: 'team-route',
+      modelId: 'cybercode-route-team-route',
+      contextWindow: 262_144,
+    })
+  })
+
+  it('refreshes route availability whenever the runtime selector is reopened', async () => {
+    const fetchDashboard = vi.fn().mockResolvedValue(undefined)
+    useRoutingStore.setState({ fetchDashboard })
+
+    render(
+      <ModelSelector
+        runtimeValue={{ providerId: null, modelId: 'claude-opus-4-8' }}
+        onRuntimeChange={vi.fn()}
+        compact
+        variant="pill"
+      />,
+    )
+
+    const trigger = screen.getByRole('button', { name: /Opus 4\.8/i })
+    await waitFor(() => expect(fetchDashboard).toHaveBeenCalledTimes(1))
+    fireEvent.click(trigger)
+    await waitFor(() => expect(fetchDashboard).toHaveBeenCalledTimes(2))
+    fireEvent.click(trigger)
+    fireEvent.click(trigger)
+    await waitFor(() => expect(fetchDashboard).toHaveBeenCalledTimes(3))
   })
 })

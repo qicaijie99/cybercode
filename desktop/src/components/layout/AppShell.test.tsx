@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { initializeDesktopServerUrl } from '../../lib/desktopRuntime'
 import { useChatStore } from '../../stores/chatStore'
+import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
-import { useUIStore } from '../../stores/uiStore'
+import { COMPACT_APP_LAYOUT_QUERY, useUIStore } from '../../stores/uiStore'
 import { AppShell } from './AppShell'
 
 vi.mock('../../lib/desktopRuntime', () => ({
@@ -45,9 +46,45 @@ vi.mock('../shared/Toast', () => ({
   ToastContainer: () => <div data-testid="toast-container" />,
 }))
 
+let compactViewport = false
+const mediaListeners = new Set<(event: MediaQueryListEvent) => void>()
+
+function installMatchMedia(compact = false) {
+  compactViewport = compact
+  mediaListeners.clear()
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn((query: string) => ({
+      matches: query === COMPACT_APP_LAYOUT_QUERY ? compactViewport : false,
+      media: query,
+      onchange: null,
+      addEventListener: (event: string, listener: (event: MediaQueryListEvent) => void) => {
+        if (query === COMPACT_APP_LAYOUT_QUERY && event === 'change') mediaListeners.add(listener)
+      },
+      removeEventListener: (event: string, listener: (event: MediaQueryListEvent) => void) => {
+        if (event === 'change') mediaListeners.delete(listener)
+      },
+      addListener: (listener: (event: MediaQueryListEvent) => void) => mediaListeners.add(listener),
+      removeListener: (listener: (event: MediaQueryListEvent) => void) => mediaListeners.delete(listener),
+      dispatchEvent: () => true,
+    })),
+  })
+}
+
+function setCompactViewport(compact: boolean) {
+  compactViewport = compact
+  const event = {
+    matches: compact,
+    media: COMPACT_APP_LAYOUT_QUERY,
+  } as MediaQueryListEvent
+  act(() => mediaListeners.forEach((listener) => listener(event)))
+}
+
 describe('AppShell bootstrap', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    installMatchMedia(false)
+    localStorage.removeItem('cybercode-sidebar-open')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     useSettingsStore.setState({
       fetchAll: vi.fn(async () => {}),
@@ -63,6 +100,9 @@ describe('AppShell bootstrap', () => {
       sessions: {},
       ensureSessionReady: vi.fn(async () => {}),
     } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useSessionStore.setState({
+      fetchSessions: vi.fn(async () => {}),
+    } as Partial<ReturnType<typeof useSessionStore.getState>>)
     useUIStore.setState({
       sidebarOpen: true,
       settingsOpen: false,
@@ -169,5 +209,27 @@ describe('AppShell bootstrap', () => {
 
     expect(await screen.findByText('Local server failed to start')).toBeInTheDocument()
     expect(screen.getByText('sidecar missing')).toBeInTheDocument()
+  })
+
+  it('uses a dismissible overlay sidebar when the viewport becomes compact', async () => {
+    vi.mocked(initializeDesktopServerUrl).mockResolvedValue('http://127.0.0.1:3456')
+
+    render(<AppShell />)
+
+    expect(await screen.findByTestId('content-router')).toBeInTheDocument()
+    expect(screen.getByTestId('app-sidebar-shell')).toHaveAttribute('data-state', 'open')
+
+    setCompactViewport(true)
+
+    await waitFor(() => expect(useUIStore.getState().sidebarOpen).toBe(false))
+    expect(screen.getByTestId('app-sidebar-shell')).toHaveAttribute('data-state', 'closed')
+
+    act(() => useUIStore.getState().setSidebarOpen(true))
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveClass('app-sidebar-backdrop')
+    expect(screen.getByTestId('app-sidebar-shell')).toHaveAttribute('data-state', 'open')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    expect(useUIStore.getState().sidebarOpen).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Collapse sidebar' })).not.toBeInTheDocument()
   })
 })

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -43,8 +43,8 @@ describe('EvolutionProfile', () => {
       <EvolutionProfile
         overview={overview}
         removingId={null}
-        onEdit={vi.fn()}
         onRemove={vi.fn()}
+        onSaveEntry={vi.fn().mockResolvedValue({ ok: true })}
       />,
     )
 
@@ -57,24 +57,114 @@ describe('EvolutionProfile', () => {
     expect(screen.getByText('Meta method')).toBeInTheDocument()
     expect(screen.getByText('Explicit')).toBeInTheDocument()
     expect(screen.getByText('Repeated pattern')).toBeInTheDocument()
+    expect(
+      screen.getAllByRole('button', { name: 'Edit memory' })[0]?.parentElement,
+    ).toHaveClass(
+      'opacity-0',
+      'pointer-events-none',
+      'group-hover:opacity-100',
+      'group-hover:pointer-events-auto',
+    )
   })
 
-  it('passes the selected memory to edit and remove actions', () => {
-    const onEdit = vi.fn()
+  it('edits one memory without opening the raw file editor', async () => {
+    const onSaveEntry = vi.fn().mockResolvedValue({ ok: true })
     const onRemove = vi.fn()
     render(
       <EvolutionProfile
         overview={overview}
         removingId={null}
-        onEdit={onEdit}
         onRemove={onRemove}
+        onSaveEntry={onSaveEntry}
       />,
     )
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Correct in editor' })[0]!)
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remove memory' })[0]!)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit memory' })[0]!)
+    expect(screen.getByRole('dialog', { name: 'Edit this memory' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Category'), {
+      target: { value: 'communication' },
+    })
+    fireEvent.change(screen.getByLabelText('Memory'), {
+      target: { value: 'The user calls CyberCode Nova.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-    expect(onEdit).toHaveBeenCalledWith(overview.insights[0])
+    await waitFor(() => {
+      expect(onSaveEntry).toHaveBeenCalledWith({
+        target: 'user',
+        category: 'communication',
+        content: 'The user calls CyberCode Nova.',
+        original: overview.insights[0],
+      })
+    })
+    expect(screen.queryByRole('dialog', { name: 'Edit this memory' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove memory' })[0]!)
     expect(onRemove).toHaveBeenCalledWith(overview.insights[0])
+  })
+
+  it('adds a categorized memory from the relevant profile group', async () => {
+    const onSaveEntry = vi.fn().mockResolvedValue({ ok: true })
+    render(
+      <EvolutionProfile
+        overview={overview}
+        removingId={null}
+        onRemove={vi.fn()}
+        onSaveEntry={onSaveEntry}
+      />,
+    )
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add memory' })[0]!)
+    expect(screen.getByRole('dialog', { name: 'Add a memory' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Category')).toHaveValue('collaboration')
+    fireEvent.change(screen.getByLabelText('Memory'), {
+      target: { value: 'Ask before changing an agreed product direction.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => {
+      expect(onSaveEntry).toHaveBeenCalledWith({
+        target: 'user',
+        category: 'collaboration',
+        content: 'Ask before changing an agreed product direction.',
+        original: undefined,
+      })
+    })
+  })
+
+  it('keeps the focused editor open when a memory already exists', async () => {
+    const onSaveEntry = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: 'This memory already exists.',
+      })
+      .mockResolvedValueOnce({ ok: true })
+    render(
+      <EvolutionProfile
+        overview={overview}
+        removingId={null}
+        onRemove={vi.fn()}
+        onSaveEntry={onSaveEntry}
+      />,
+    )
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add memory' })[0]!)
+    fireEvent.change(screen.getByLabelText('Memory'), {
+      target: { value: 'The user calls CyberCode Zero.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    expect(await screen.findByText('This memory already exists.')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Add a memory' })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Memory'), {
+      target: { value: 'The user prefers concise replies.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => {
+      expect(onSaveEntry).toHaveBeenCalledTimes(2)
+      expect(screen.queryByRole('dialog', { name: 'Add a memory' })).not.toBeInTheDocument()
+    })
   })
 })

@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "CyberCode",
-        "width": 1440,
-        "height": 960,
-        "minWidth": 960,
-        "minHeight": 640,
+        "width": 1200,
+        "height": 760,
+        "minWidth": 840,
+        "minHeight": 480,
         "decorations": true,
         "transparent": false,
         "acceptFirstMouse": true
@@ -51,12 +51,16 @@
     },
     "externalBin": [
       "binaries/cybercode-sidecar",
-      "binaries/rtk"
+      "binaries/rtk",
+      "binaries/agent-browser"
     ],
     "resources": [
       "resources/codegraph",
+      "resources/computer-use",
       "resources/rtk/LICENSE",
-      "resources/rtk/manifest.json"
+      "resources/rtk/manifest.json",
+      "resources/agent-browser/LICENSE",
+      "resources/agent-browser/manifest.json"
     ],
     "icon": [
       "icons/32x32.png",

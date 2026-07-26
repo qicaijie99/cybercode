@@ -39,6 +39,8 @@ import {
 } from '../services/modelImageCapabilityProbe.js'
 import { recordLearnedImageSupport } from '../../utils/model/imageCapabilityRegistry.js'
 import type { SavedProvider } from '../types/provider.js'
+import { routingService } from '../routing/routingService.js'
+import { CYBERCODE_MODEL_CONTEXT_WINDOWS_ENV } from '../../utils/modelContextWindows.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -59,6 +61,8 @@ const sessionCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>()
  * follows an interrupt so the frontend doesn't show "处理过程中发生错误".
  */
 const sessionStopRequested = new Set<string>()
+const sessionStopCompleted = new Set<string>()
+const sessionStopPromises = new Map<string, Promise<void>>()
 
 /**
  * Track user message count and title state per session for auto-title generation.
@@ -71,11 +75,13 @@ const sessionTitleState = new Map<string, {
 
 const runtimeOverrides = new Map<string, {
   providerId: string | null
+  routeId?: string
   modelId: string
   contextWindow?: number
 }>()
 
 const runtimeTransitionPromises = new Map<string, Promise<void>>()
+const runtimeSelectionTokens = new Map<string, object>()
 const sessionStartupPromises = new Map<string, Promise<void>>()
 const mediaRecoveryPromises = new Map<string, Promise<void>>()
 const pendingImageTurns = new Map<string, PendingImageTurn[]>()
@@ -267,8 +273,11 @@ async function handleUserMessage(
 ) {
   const { sessionId } = ws.data
 
-  // Clear any stale stop flag from a previous turn
+  await waitForSessionStop(sessionId)
+  // Clear any stale stop flag from a previous turn after its backend work has
+  // actually finished, so a delayed stop cannot terminate this new turn.
   sessionStopRequested.delete(sessionId)
+  sessionStopCompleted.delete(sessionId)
   clearPrewarmState(sessionId)
   await waitForMediaRecovery(sessionId)
 
@@ -341,6 +350,13 @@ async function handleUserMessage(
     return
   }
 
+  // The user can stop while the CLI is still starting. In that window there
+  // is no active generation for ConversationService to interrupt, so gate the
+  // eventual send here as well.
+  if (sessionStopRequested.has(sessionId)) {
+    return
+  }
+
   // Track user message for title generation
   let titleState = sessionTitleState.get(sessionId)
   if (!titleState) {
@@ -366,6 +382,9 @@ async function handleUserMessage(
     message.content,
     message.attachments,
   )
+  if (sessionStopRequested.has(sessionId)) {
+    return
+  }
 
   registerPendingImageTurn(
     sessionId,
@@ -494,6 +513,9 @@ async function handleUserSteer(
   const steerId = message.steerId.trim()
   const priority = message.priority === 'later' ? 'later' : 'next'
 
+  await waitForSessionStop(sessionId)
+  sessionStopRequested.delete(sessionId)
+  sessionStopCompleted.delete(sessionId)
   await waitForMediaRecovery(sessionId)
 
   if (!steerId) {
@@ -555,6 +577,16 @@ async function handleUserSteer(
       steerId,
       status: 'failed',
       message: errMsg,
+    })
+    return
+  }
+
+  if (sessionStopRequested.has(sessionId)) {
+    sendMessage(ws, {
+      type: 'steer_status',
+      steerId,
+      status: 'cancelled',
+      message: 'Queued input cancelled because the current task was stopped.',
     })
     return
   }
@@ -717,6 +749,19 @@ function hasImageAttachments(attachments: AttachmentRef[] | undefined): boolean 
 
 async function resolveCurrentImageSupport(sessionId: string) {
   const runtimeOverride = runtimeOverrides.get(sessionId)
+  if (runtimeOverride?.routeId) {
+    const supportsImages = await routingService.routeSupportsImages(runtimeOverride.routeId)
+    return {
+      provider: null,
+      support: {
+        supportsImages,
+        status: supportsImages ? 'supported' as const : 'unsupported' as const,
+        modelId: runtimeOverride.modelId,
+        providerName: runtimeOverride.routeId,
+        source: 'default' as const,
+      },
+    }
+  }
   if (runtimeOverride?.providerId) {
     const provider = await providerService.getProvider(runtimeOverride.providerId)
     return {
@@ -822,8 +867,11 @@ async function handleSetRuntimeConfig(
   message: Extract<ClientMessage, { type: 'set_runtime_config' }>
 ) {
   const { sessionId } = ws.data
-  const modelId = typeof message.modelId === 'string' ? message.modelId.trim() : ''
-  if (!modelId) {
+  const selectionToken = {}
+  runtimeSelectionTokens.set(sessionId, selectionToken)
+  let modelId = typeof message.modelId === 'string' ? message.modelId.trim() : ''
+  const routeId = typeof message.routeId === 'string' ? message.routeId.trim() : ''
+  if (!modelId && !routeId) {
     sendMessage(ws, {
       type: 'error',
       message: 'Runtime model selection is invalid.',
@@ -832,14 +880,44 @@ async function handleSetRuntimeConfig(
     return
   }
 
-  const nextOverride = {
-    providerId: message.providerId ?? null,
-    modelId,
-    ...(typeof message.contextWindow === 'number' &&
+  let contextWindow = typeof message.contextWindow === 'number' &&
     Number.isFinite(message.contextWindow) &&
     message.contextWindow > 0
-      ? { contextWindow: Math.round(message.contextWindow) }
-      : {}),
+    ? Math.round(message.contextWindow)
+    : undefined
+  if (routeId) {
+    try {
+      const routeEnv = await routingService.getRuntimeEnv(routeId, sessionId)
+      modelId = routeEnv.ANTHROPIC_MODEL || `cybercode-route-${routeId}`
+      const rawContextWindows = routeEnv[CYBERCODE_MODEL_CONTEXT_WINDOWS_ENV]
+      if (rawContextWindows) {
+        const parsed = JSON.parse(rawContextWindows) as Record<string, unknown>
+        const routeContextWindow = parsed[modelId]
+        contextWindow = typeof routeContextWindow === 'number' &&
+          Number.isFinite(routeContextWindow) &&
+          routeContextWindow > 0
+          ? Math.round(routeContextWindow)
+          : undefined
+      } else {
+        contextWindow = undefined
+      }
+    } catch (error) {
+      if (runtimeSelectionTokens.get(sessionId) !== selectionToken) return
+      sendMessage(ws, {
+        type: 'error',
+        message: error instanceof Error ? error.message : String(error),
+        code: 'RUNTIME_CONFIG_INVALID',
+      })
+      return
+    }
+  }
+  if (runtimeSelectionTokens.get(sessionId) !== selectionToken) return
+
+  const nextOverride = {
+    providerId: routeId ? null : message.providerId ?? null,
+    ...(routeId && { routeId }),
+    modelId,
+    ...(contextWindow ? { contextWindow } : {}),
   }
   const prevOverride = runtimeOverrides.get(sessionId)
   runtimeOverrides.set(sessionId, nextOverride)
@@ -847,6 +925,7 @@ async function handleSetRuntimeConfig(
   if (
     prevOverride &&
     prevOverride.providerId === nextOverride.providerId &&
+    prevOverride.routeId === nextOverride.routeId &&
     prevOverride.modelId === nextOverride.modelId &&
     prevOverride.contextWindow === nextOverride.contextWindow
   ) {
@@ -864,6 +943,7 @@ async function handleSetRuntimeConfig(
         const currentOverride = runtimeOverrides.get(sessionId)
         if (
           currentOverride?.providerId !== nextOverride.providerId ||
+          currentOverride.routeId !== nextOverride.routeId ||
           currentOverride.modelId !== nextOverride.modelId ||
           currentOverride.contextWindow !== nextOverride.contextWindow ||
           !conversationService.hasSession(sessionId)
@@ -952,24 +1032,50 @@ async function restartSessionWithRuntimeConfig(
 
 function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
   const { sessionId } = ws.data
+  if (sessionStopPromises.has(sessionId)) return
+
   console.log(`[WS] Stop generation requested for session: ${sessionId}`)
-
   sessionStopRequested.add(sessionId)
+  sessionStopCompleted.delete(sessionId)
 
-  if (conversationService.hasSession(sessionId)) {
-    // First try graceful interrupt via SDK control message
-    conversationService.sendInterrupt(sessionId)
+  const operation = (async () => {
+    let result: Awaited<ReturnType<typeof conversationService.stopGeneration>>
+    try {
+      result = await conversationService.stopGeneration(sessionId)
+    } catch (error) {
+      console.error(`[WS] Failed to stop generation for ${sessionId}:`, error)
+      conversationService.stopSession(sessionId)
+      result = 'killed'
+    }
 
-    // Force-kill if still running after 3 seconds
-    setTimeout(() => {
-      if (conversationService.hasSession(sessionId)) {
-        console.log(`[WS] Force-killing CLI subprocess for session: ${sessionId}`)
-        conversationService.stopSession(sessionId)
-      }
-    }, 3_000)
-  }
+    if (result === 'superseded') return
 
-  sendMessage(ws, { type: 'status', state: 'idle' })
+    sessionStopCompleted.add(sessionId)
+    pendingImageTurns.delete(sessionId)
+    computerUseApprovalService.cancelSession(sessionId)
+    cleanupStreamState(sessionId)
+    sendMessage(ws, {
+      type: 'generation_stopped',
+      forced: result === 'killed',
+    })
+    sendMessage(ws, { type: 'status', state: 'idle' })
+  })().catch((error) => {
+    sessionStopRequested.delete(sessionId)
+    sessionStopCompleted.delete(sessionId)
+    console.error(`[WS] Failed to finalize stop for ${sessionId}:`, error)
+  })
+
+  sessionStopPromises.set(sessionId, operation)
+  void operation.finally(() => {
+    if (sessionStopPromises.get(sessionId) === operation) {
+      sessionStopPromises.delete(sessionId)
+    }
+  })
+}
+
+async function waitForSessionStop(sessionId: string): Promise<void> {
+  const pendingStop = sessionStopPromises.get(sessionId)
+  if (pendingStop) await pendingStop
 }
 
 // ============================================================================
@@ -1042,10 +1148,13 @@ function cleanupStreamState(sessionId: string) {
 
 function cleanupSessionRuntimeState(sessionId: string) {
   cleanupStreamState(sessionId)
+  sessionStopRequested.delete(sessionId)
+  sessionStopCompleted.delete(sessionId)
   sessionSlashCommands.delete(sessionId)
   sessionTitleState.delete(sessionId)
   runtimeOverrides.delete(sessionId)
   runtimeTransitionPromises.delete(sessionId)
+  runtimeSelectionTokens.delete(sessionId)
   sessionStartupPromises.delete(sessionId)
   mediaRecoveryPromises.delete(sessionId)
   pendingImageTurns.delete(sessionId)
@@ -1695,7 +1804,6 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
         // If the user requested stop, this "error" is just the interrupt
         // result — don't show it as an error in the chat UI.
         if (sessionStopRequested.has(sessionId)) {
-          sessionStopRequested.delete(sessionId)
           return [{ type: 'message_complete', usage }]
         }
 
@@ -1716,8 +1824,6 @@ function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
         ]
       }
 
-      // Clear stop flag on successful completion too
-      sessionStopRequested.delete(sessionId)
       return [{ type: 'message_complete', usage }]
     }
 
@@ -1904,7 +2010,15 @@ function rebindSessionOutput(
       return
     }
 
-    if (handleRecoverableImageFailure(ws, sessionId, cliMsg)) {
+    const stopping = sessionStopRequested.has(sessionId)
+    if (stopping && sessionStopCompleted.has(sessionId)) {
+      return
+    }
+    if (stopping && cliMsg.type !== 'result') {
+      return
+    }
+
+    if (!stopping && handleRecoverableImageFailure(ws, sessionId, cliMsg)) {
       return
     }
 
@@ -1929,6 +2043,7 @@ async function getRuntimeSettings(sessionId?: string): Promise<{
   model?: string
   effort?: string
   providerId?: string | null
+  routeId?: string
   contextWindow?: number
   imageSupportOverride?: boolean
 }> {
@@ -1945,6 +2060,7 @@ async function getRuntimeSettings(sessionId?: string): Promise<{
       model: runtimeOverride.modelId,
       effort,
       providerId: runtimeOverride.providerId,
+      ...(runtimeOverride.routeId && { routeId: runtimeOverride.routeId }),
       contextWindow: runtimeOverride.contextWindow,
       ...(sessionId && imageFallbackSessions.has(sessionId)
         ? { imageSupportOverride: false }

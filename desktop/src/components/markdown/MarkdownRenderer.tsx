@@ -147,10 +147,10 @@ const CHAT_PROSE_CLASSES = `
   prose-p:tracking-normal
   prose-strong:text-[var(--color-text-primary)] prose-strong:font-bold
   prose-em:text-[var(--color-text-secondary)]
-  prose-a:text-[var(--color-text-accent)] prose-a:font-semibold prose-a:no-underline hover:prose-a:underline
+  prose-a:text-[var(--color-markdown-link)] hover:prose-a:text-[var(--color-markdown-link-hover)] prose-a:font-semibold prose-a:no-underline hover:prose-a:underline
   prose-ul:my-[8px] prose-ol:my-[8px] prose-ul:pl-[18px] prose-ol:pl-[18px]
   prose-li:my-[2px] prose-li:text-[15px] prose-li:font-normal prose-li:leading-relaxed prose-li:text-[var(--color-text-primary)]
-  prose-blockquote:my-[10px] prose-blockquote:rounded-r-lg prose-blockquote:border-l-2 prose-blockquote:border-[var(--color-border)] prose-blockquote:bg-[var(--color-surface-container-low)] prose-blockquote:px-[12px] prose-blockquote:py-[8px] prose-blockquote:text-[var(--color-text-secondary)] prose-blockquote:not-italic
+  prose-blockquote:my-[10px] prose-blockquote:rounded-r-lg prose-blockquote:border-l-2 prose-blockquote:border-[var(--color-markdown-quote-border)] prose-blockquote:bg-[var(--color-markdown-quote-bg)] prose-blockquote:px-[12px] prose-blockquote:py-[8px] prose-blockquote:text-[var(--color-text-secondary)] prose-blockquote:not-italic
   prose-code:text-[14px] prose-code:font-normal prose-code:text-[var(--color-code-fg)] prose-code:bg-[var(--color-code-bg)] prose-code:border-[var(--color-border)] prose-code:px-[5px] prose-code:py-[2px] prose-code:rounded-md
   prose-table:text-[14px]
   [&>p+p]:mt-[12px]
@@ -229,6 +229,7 @@ export function MarkdownRenderer({ content, variant = 'default', className }: Pr
     return (
       <div
         className={proseClasses}
+        data-markdown-variant={variant}
         dangerouslySetInnerHTML={{ __html: cleanHtml }}
         onClick={handleClick}
       />
@@ -236,7 +237,7 @@ export function MarkdownRenderer({ content, variant = 'default', className }: Pr
   }
 
   return (
-    <div className={proseClasses} onClick={handleClick}>
+    <div className={proseClasses} data-markdown-variant={variant} onClick={handleClick}>
       {parts.map((part, i) =>
         part.type === 'html' ? (
           <div key={i} dangerouslySetInnerHTML={{ __html: enhanceMarkdownHtml(part.content) }} />

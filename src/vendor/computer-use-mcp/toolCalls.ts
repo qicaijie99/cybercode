@@ -2441,7 +2441,8 @@ async function handleType(
     (text.includes("\n") ||
       (adapter.executor.capabilities.platform === "darwin" &&
         hasNonControlText) ||
-      (adapter.executor.capabilities.platform === "win32" &&
+      ((adapter.executor.capabilities.platform === "win32" ||
+        adapter.executor.capabilities.platform === "linux") &&
         hasNonAsciiText)) &&
     overrides.grantFlags.clipboardWrite &&
     subGates.clipboardPasteMultiline;
@@ -3523,6 +3524,13 @@ export async function handleToolCall(
     | { accessibility: boolean; screenRecording: boolean }
     | undefined;
   if (!osPerms.granted) {
+    if (adapter.executor.capabilities.platform === "linux") {
+      return errorResult(
+        "No active graphical Linux desktop capture session is available. " +
+          "Start CyberCode inside an X11, XWayland, or Wayland desktop session and try again.",
+        "feature_unavailable",
+      );
+    }
     // Both request_* tools thread tccState through to the renderer's
     // TCC toggle panel. Every other tool short-circuits.
     if (name !== "request_access" && name !== "request_teach_access") {

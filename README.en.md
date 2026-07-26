@@ -771,18 +771,12 @@ Notes:
 
 Use this module when you want the model to operate desktop applications through screenshots, mouse, and keyboard.
 
-1. Make sure Bun dependencies are installed.
-2. Confirm Python 3.8 or newer is available:
-
-```bash
-python3 --version
-```
-
-3. On macOS, grant Accessibility and Screen Recording permissions to your terminal or the desktop app host.
-4. Start CyberCode.
-5. Ask for a visual desktop action, such as `Take a screenshot and tell me what is open`.
-6. Approve the application access request when CyberCode asks.
-7. Let the model screenshot, inspect, click, type, and verify step by step.
+1. In the desktop app, open **Settings → Computer Use** and select **Prepare Automatically**.
+2. CyberCode downloads the private runtime for the current platform in the background. No system Python or PATH changes are required.
+3. On macOS, grant Accessibility and Screen Recording permissions to CyberCode, your terminal, or the desktop app host.
+4. Ask for a visual desktop action, such as `Take a screenshot and tell me what is open`.
+5. Approve the application access request when CyberCode asks.
+6. Let the model screenshot, inspect, click, type, and verify step by step.
 
 Verify it: CyberCode can take a screenshot, request app access, and operate only approved applications.
 

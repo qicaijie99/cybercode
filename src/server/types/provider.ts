@@ -54,6 +54,7 @@ export const SavedProviderSchema = z.object({
   presetId: z.string(),
   name: z.string().min(1),
   apiKey: z.string(),
+  oauthProviderId: z.string().optional(),
   baseUrl: z.string(),
   apiFormat: ApiFormatSchema.default('anthropic'),
   models: ModelMappingSchema,
@@ -85,6 +86,7 @@ export const CreateProviderSchema = z.object({
 })
 
 export const UpdateProviderSchema = z.object({
+  presetId: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),

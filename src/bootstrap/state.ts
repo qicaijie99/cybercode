@@ -1556,6 +1556,13 @@ export function getInvokedSkillsForAgent(
   return filtered
 }
 
+export function removeInvokedSkill(
+  skillName: string,
+  agentId: string | undefined | null,
+): void {
+  STATE.invokedSkills.delete(`${agentId ?? ''}:${skillName}`)
+}
+
 export function clearInvokedSkills(
   preservedAgentIds?: ReadonlySet<string>,
 ): void {

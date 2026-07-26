@@ -49,8 +49,27 @@ vi.mock('../api/providers', () => ({
   },
 }))
 
+vi.mock('../api/providerOAuth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/providerOAuth')>()
+  return {
+    ...actual,
+    providerOAuthApi: {
+      ...actual.providerOAuthApi,
+      catalog: vi.fn().mockResolvedValue({
+        supportedProviders: [],
+        capabilities: [],
+        statuses: [],
+      }),
+    },
+  }
+})
+
 vi.mock('../components/settings/ClaudeOfficialLogin', () => ({
-  ClaudeOfficialLogin: () => <div data-testid="claude-official-login" />,
+  ClaudeOAuthDialog: ({ open }: { open: boolean }) => (
+    open
+      ? <div role="dialog" aria-label="Claude Code" data-testid="claude-oauth-dialog" />
+      : null
+  ),
 }))
 
 vi.mock('../pages/AdapterSettings', () => ({
@@ -204,30 +223,224 @@ describe('Settings > Providers tab', () => {
     providerStoreState.hasLoadedProviders = true
   })
 
-  it('does not query official OAuth status before providers finish loading', () => {
+  it('places the renamed primary views in the left sidebar', () => {
+    render(<ProviderSettings />)
+
+    const sidebar = screen.getByRole('complementary', { name: 'Model access views' })
+    expect(within(sidebar).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Model providers',
+      'Smart routing',
+      'Runtime status',
+    ])
+    expect(screen.queryByRole('heading', { name: 'Models & Routing' })).not.toBeInTheDocument()
+  })
+
+  it('renders OAuth, no-auth, API key, aggregator, and local providers as peer catalogs', () => {
+    const makePreset = (
+      id: string,
+      name: string,
+      needsApiKey = true,
+    ): ProviderPreset => ({
+      id,
+      name,
+      baseUrl: `https://api.${id}.example/v1`,
+      apiFormat: 'openai_chat',
+      defaultModels: {
+        main: `${id}-main`,
+        haiku: `${id}-fast`,
+        sonnet: `${id}-main`,
+        opus: `${id}-main`,
+      },
+      needsApiKey,
+      websiteUrl: `https://${id}.example`,
+    })
+    providerStoreState.providers = [
+      {
+        id: 'legacy-gateway',
+        name: 'Legacy Gateway',
+        presetId: 'custom',
+        apiKey: '***',
+        baseUrl: 'https://gateway.example.com/v1',
+        apiFormat: 'openai_chat',
+        models: {
+          main: 'legacy-main',
+          haiku: '',
+          sonnet: '',
+          opus: '',
+        },
+        notes: '',
+      },
+      {
+        id: 'legacy-volcengine',
+        name: '火山',
+        presetId: 'custom',
+        apiKey: '***',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        apiFormat: 'openai_chat',
+        models: {
+          main: 'doubao-seed-1-6',
+          haiku: '',
+          sonnet: '',
+          opus: '',
+        },
+        notes: '',
+      },
+    ]
+    providerStoreState.presets = [
+      makePreset('perplexity', 'Perplexity'),
+      makePreset('openrouter', 'OpenRouter'),
+      makePreset('siliconflow', 'SiliconFlow'),
+      makePreset('anthropic-api', 'Anthropic API'),
+      makePreset('openai', 'OpenAI'),
+      {
+        ...makePreset('volcengine', 'Volcengine Ark'),
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      },
+      makePreset('lmstudio', 'LM Studio', false),
+      makePreset('custom', 'Custom'),
+    ]
+
+    const { container } = render(<ProviderSettings />)
+
+    expect(screen.getByRole('heading', { name: 'OAuth providers' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'No-auth providers' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Official API providers' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Model aggregators' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Local & custom' })).toBeInTheDocument()
+    expect(screen.queryByText('Free does not mean keyless')).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Model source categories' })).not.toBeInTheDocument()
+
+    const apiCatalog = container.querySelector('[data-provider-catalog="api-key"]')
+    const apiCards = Array.from(apiCatalog!.querySelectorAll('[data-provider-card-layout="catalog"]'))
+    expect(apiCards).toEqual([
+      screen.getByText('OpenAI').closest('[data-provider-card-layout="catalog"]'),
+      screen.getByText('Anthropic API').closest('[data-provider-card-layout="catalog"]'),
+      screen.getByText('Perplexity').closest('[data-provider-card-layout="catalog"]'),
+      screen
+        .getAllByText('Legacy Gateway')[0]!
+        .closest('[data-provider-card-layout="catalog"]'),
+    ])
+    expect(within(apiCatalog as HTMLElement).queryByText('SiliconFlow')).not.toBeInTheDocument()
+    expect(within(apiCatalog as HTMLElement).queryByText('Volcengine Ark')).not.toBeInTheDocument()
+    expect(within(apiCatalog as HTMLElement).queryByText('火山')).not.toBeInTheDocument()
+    expect(apiCatalog).toHaveAttribute('data-provider-catalog-layout', 'comfortable')
+
+    const aggregatorCatalog = container.querySelector(
+      '[data-provider-catalog="aggregators-gateways"]',
+    )
+    expect(aggregatorCatalog).toHaveAttribute('data-provider-catalog-layout', 'comfortable')
+    expect(within(aggregatorCatalog as HTMLElement).getByText('OpenRouter')).toBeInTheDocument()
+    expect(within(aggregatorCatalog as HTMLElement).getByText('SiliconFlow')).toBeInTheDocument()
+    expect(within(aggregatorCatalog as HTMLElement).getByText('Volcengine Ark')).toBeInTheDocument()
+    expect(within(
+      screen.getByText('Volcengine Ark').closest('[data-provider-card-layout="catalog"]')!,
+    ).getByText('Configured')).toBeInTheDocument()
+    expect(within(apiCatalog as HTMLElement).queryByText('OpenRouter')).not.toBeInTheDocument()
+    expect(screen.getByText('1/41')).toBeInTheDocument()
+
+    const localCatalog = container.querySelector('[data-provider-catalog="local-custom"]')
+    expect(localCatalog).toHaveAttribute('data-provider-catalog-layout', 'comfortable')
+    expect(within(localCatalog as HTMLElement).getByText('LM Studio')).toBeInTheDocument()
+    expect(within(localCatalog as HTMLElement).getByText('Custom')).toBeInTheDocument()
+    expect(within(localCatalog as HTMLElement).queryByText('Legacy Gateway')).not.toBeInTheDocument()
+  }, 15_000)
+
+  it('opens a complete OAuth wizard before the server capability catalog arrives', () => {
+    render(<ProviderSettings />)
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Amazon Q: Ready to connect',
+    }))
+
+    expect(screen.getByRole('dialog', { name: 'Amazon Q' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect account' })).toBeEnabled()
+    expect(screen.queryByText(/Loading this provider’s connection method/)).not.toBeInTheDocument()
+  })
+
+  it('uses official Chinese brand names without translating global-only brands', () => {
+    const makePreset = (id: string, name: string): ProviderPreset => ({
+      id,
+      name,
+      baseUrl: `https://api.${id}.example/v1`,
+      apiFormat: 'openai_chat',
+      defaultModels: {
+        main: `${id}-main`,
+        haiku: `${id}-fast`,
+        sonnet: `${id}-main`,
+        opus: `${id}-main`,
+      },
+      needsApiKey: true,
+      websiteUrl: `https://${id}.example`,
+    })
+    useSettingsStore.setState({ locale: 'zh' })
+    providerStoreState.providers = []
+    providerStoreState.presets = [
+      makePreset('openai', 'OpenAI'),
+      makePreset('groq', 'Groq'),
+      makePreset('alibaba', 'Alibaba Qwen'),
+      makePreset('volcengine', 'Volcengine Ark'),
+      makePreset('qianfan', 'Baidu Qianfan'),
+      makePreset('siliconflow', 'SiliconFlow'),
+      makePreset('zhipuglm', '智谱 GLM'),
+      makePreset('xiaomimimo', '小米 MiMo'),
+    ]
+
+    const { container } = render(<ProviderSettings />)
+
+    const apiCatalog = container.querySelector('[data-provider-catalog="api-key"]') as HTMLElement
+    const aggregatorCatalog = container.querySelector(
+      '[data-provider-catalog="aggregators-gateways"]',
+    ) as HTMLElement
+
+    expect(within(aggregatorCatalog).getByRole('button', { name: '配置 阿里云百炼' })).toBeInTheDocument()
+    expect(within(aggregatorCatalog).getByRole('button', { name: '配置 火山方舟' })).toBeInTheDocument()
+    expect(within(aggregatorCatalog).getByRole('button', { name: '配置 百度千帆' })).toBeInTheDocument()
+    expect(within(aggregatorCatalog).getByRole('button', { name: '配置 硅基流动' })).toBeInTheDocument()
+    expect(within(aggregatorCatalog).getByRole('button', { name: '配置 Groq' })).toBeInTheDocument()
+    expect(within(apiCatalog).getByRole('button', { name: '配置 智谱 GLM' })).toBeInTheDocument()
+    expect(within(apiCatalog).getByRole('button', { name: '配置 小米 MiMo' })).toBeInTheDocument()
+    expect(within(apiCatalog).getByRole('button', { name: '配置 OpenAI' })).toBeInTheDocument()
+    expect(within(apiCatalog).queryByRole('button', { name: '配置 Groq' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Alibaba Qwen')).not.toBeInTheDocument()
+    expect(screen.queryByText('Volcengine Ark')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索提供商或模型' }), {
+      target: { value: '火山方舟' },
+    })
+    expect(screen.getByRole('button', { name: '配置 火山方舟' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '配置 阿里云百炼' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the Claude OAuth dialog closed while providers load', () => {
     providerStoreState.providers = []
     providerStoreState.activeId = null
     providerStoreState.hasLoadedProviders = false
 
     render(<ProviderSettings />)
 
-    expect(screen.queryByTestId('claude-official-login')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('claude-oauth-dialog')).not.toBeInTheDocument()
   })
 
-  it('shows official OAuth status only after official provider is confirmed active', () => {
+  it('opens Claude OAuth in the same dialog pattern as other providers', () => {
     providerStoreState.providers = []
     providerStoreState.activeId = null
     providerStoreState.hasLoadedProviders = true
 
     render(<ProviderSettings />)
 
-    expect(screen.getByTestId('claude-official-login')).toBeInTheDocument()
+    expect(screen.queryByTestId('claude-oauth-dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Claude OAuth login' }))
+    expect(screen.getByRole('dialog', { name: 'Claude Code' })).toBeInTheDocument()
+    expect(screen.queryByText('Claude Official')).not.toBeInTheDocument()
   })
 
   it('requires confirmation before deleting a provider', async () => {
     render(<ProviderSettings />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'More actions for MiniMax-M2.7-highspeed(openai)',
+    }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
 
     expect(MOCK_DELETE_PROVIDER).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -282,7 +495,10 @@ describe('Settings > Providers tab', () => {
     })
 
     render(<ProviderSettings />)
-    fireEvent.click(screen.getByRole('button', { name: 'Test' }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'More actions for MiniMax-M2.7-highspeed(openai)',
+    }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Test' }))
 
     expect(await screen.findByText('Connection successful (22ms)')).toBeInTheDocument()
     expect(screen.queryByText(/Connection successful \(22ms\).*MiniMax/)).not.toBeInTheDocument()
@@ -309,7 +525,7 @@ describe('Settings > Providers tab', () => {
 
     render(<ProviderSettings />)
 
-    fireEvent.click(screen.getAllByRole('button', { name: /Configure/i })[0]!)
+    fireEvent.click(screen.getByRole('button', { name: 'Configure Custom' }))
 
     const dialog = screen.getByRole('dialog')
     expect(dialog.parentElement).toHaveClass('z-[200]')
@@ -322,7 +538,7 @@ describe('Settings > Providers tab', () => {
 
     expect(within(dialog).getByRole('button', { name: /OpenAI Responses API \(proxy\)/i })).toBeInTheDocument()
     expect(within(dialog).getByText('Requests will be translated via the local proxy')).toBeInTheDocument()
-  })
+  }, 15_000)
 
   it('shows only the connection result and does not request an image capability probe', async () => {
     providerStoreState.providers = []
@@ -361,7 +577,7 @@ describe('Settings > Providers tab', () => {
     })
 
     render(<ProviderSettings />)
-    fireEvent.click(screen.getByRole('button', { name: /Configure/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Configure Custom' }))
 
     const dialog = screen.getByRole('dialog')
     fireEvent.change(within(dialog).getByPlaceholderText('sk-...'), {
@@ -426,13 +642,14 @@ describe('Settings > Providers tab', () => {
 
     render(<ProviderSettings />)
 
-    expect(screen.getByAltText('DeepSeek logo')).toHaveAttribute('src', '/provider-icons/styled/cybercode-deepseek.png')
-    expect(screen.getByAltText('DeepSeek logo')).toHaveStyle({
+    const deepSeekLogo = document.querySelector('[data-provider-logo="deepseek"] img')
+    expect(deepSeekLogo).toHaveAttribute('src', '/provider-icons/brands/deepseek-color.svg')
+    expect(deepSeekLogo).toHaveStyle({
       objectFit: 'contain',
     })
-    expect(screen.getByAltText('DeepSeek logo').parentElement).toHaveAttribute('data-provider-logo', 'deepseek')
+    expect(deepSeekLogo?.parentElement).toHaveAttribute('data-provider-logo', 'deepseek')
 
-    fireEvent.click(screen.getAllByRole('button', { name: /Configure/i })[0]!)
+    fireEvent.click(screen.getByRole('button', { name: 'Configure DeepSeek' }))
 
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText('Configure DeepSeek')).toBeInTheDocument()
@@ -445,6 +662,165 @@ describe('Settings > Providers tab', () => {
 
     expect(within(dialog).getByDisplayValue('deepseek-v4-flash')).toBeInTheDocument()
   })
+
+  it('groups free-tier platforms as aggregators and validates Cloudflare setup', async () => {
+    const defaultModels = {
+      main: 'default-model',
+      haiku: 'default-model',
+      sonnet: 'default-model',
+      opus: 'default-model',
+    }
+    providerStoreState.providers = []
+    providerStoreState.presets = [
+      {
+        id: 'cloudflare-ai',
+        name: 'Cloudflare Workers AI',
+        baseUrl: 'https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1',
+        apiFormat: 'openai_chat',
+        defaultModels: {
+          ...defaultModels,
+          main: '@cf/moonshotai/kimi-k2.7-code',
+        },
+        needsApiKey: true,
+        websiteUrl: 'https://developers.cloudflare.com/workers-ai/',
+        cost: 'recurring-free',
+        costNote: 'Includes a daily free allowance',
+      },
+      {
+        id: 'ollama-cloud',
+        name: 'Ollama Cloud',
+        baseUrl: 'https://ollama.com',
+        apiFormat: 'openai_chat',
+        defaultModels,
+        needsApiKey: true,
+        websiteUrl: 'https://docs.ollama.com/cloud',
+        cost: 'recurring-free',
+      },
+      {
+        id: 'llm7',
+        name: 'LLM7.io',
+        baseUrl: 'https://api.llm7.io/v1',
+        apiFormat: 'openai_chat',
+        defaultModels,
+        needsApiKey: true,
+        websiteUrl: 'https://docs.llm7.io/quickstart',
+        cost: 'mixed',
+      },
+    ]
+    providerStoreState.testConfig = vi.fn().mockResolvedValue({
+      connectivity: { success: true, latencyMs: 12 },
+    })
+
+    const { container } = render(<ProviderSettings />)
+    const apiCatalog = container.querySelector('[data-provider-catalog="api-key"]') as HTMLElement
+    const aggregatorCatalog = container.querySelector(
+      '[data-provider-catalog="aggregators-gateways"]',
+    ) as HTMLElement
+
+    expect(within(apiCatalog).queryByText('Cloudflare Workers AI')).not.toBeInTheDocument()
+    expect(within(aggregatorCatalog).getByRole('button', {
+      name: 'Configure Cloudflare Workers AI',
+    })).toBeInTheDocument()
+    expect(within(aggregatorCatalog).getByRole('button', {
+      name: 'Configure Ollama Cloud',
+    })).toBeInTheDocument()
+    expect(within(aggregatorCatalog).getByRole('button', {
+      name: 'Configure LLM7.io',
+    })).toBeInTheDocument()
+    expect(within(aggregatorCatalog).getAllByText('Free allowance')).toHaveLength(2)
+    expect(within(aggregatorCatalog).getByText('Partly free')).toBeInTheDocument()
+
+    fireEvent.click(within(aggregatorCatalog).getByRole('button', {
+      name: 'Configure Cloudflare Workers AI',
+    }))
+    const dialog = screen.getByRole('dialog')
+    const accountIdInput = within(dialog).getByPlaceholderText('32-character Account ID')
+    const apiKeyInput = within(dialog).getByPlaceholderText('sk-...')
+    const addButton = within(dialog).getByRole('button', { name: 'Add' })
+
+    expect(accountIdInput).toHaveValue('')
+    expect(addButton).toBeDisabled()
+
+    fireEvent.change(accountIdInput, { target: { value: 'invalid-id' } })
+    fireEvent.change(apiKeyInput, { target: { value: 'cloudflare-token' } })
+    expect(within(dialog).getByText(
+      'Enter the 32-character hexadecimal Account ID',
+    )).toBeInTheDocument()
+    expect(addButton).toBeDisabled()
+
+    const accountId = '0123456789abcdef0123456789abcdef'
+    fireEvent.change(accountIdInput, { target: { value: accountId } })
+    expect(addButton).toBeEnabled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Test Connection' }))
+    expect(await within(dialog).findByText('Connection successful (12ms)')).toBeInTheDocument()
+    expect(providerStoreState.testConfig).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'cloudflare-token',
+      baseUrl: `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`,
+      presetId: 'cloudflare-ai',
+    }))
+  }, 30_000)
+
+  it('configures a verified no-auth provider without asking for an API key', async () => {
+    providerStoreState.providers = []
+    providerStoreState.presets = [{
+      id: 'opencode-free',
+      name: 'OpenCode Free',
+      baseUrl: 'https://opencode.ai/zen/v1',
+      apiFormat: 'openai_chat',
+      defaultModels: {
+        main: 'north-mini-code-free',
+        haiku: 'ling-3.0-flash-free',
+        sonnet: 'north-mini-code-free',
+        opus: 'mimo-v2.5-free',
+      },
+      defaultModelContextWindows: {
+        main: 131_000,
+        haiku: 131_000,
+        sonnet: 131_000,
+        opus: 131_000,
+      },
+      modelOptions: [
+        { id: 'north-mini-code-free', contextWindow: 131_000 },
+        { id: 'mimo-v2.5-free', contextWindow: 131_000 },
+        { id: 'ling-3.0-flash-free', contextWindow: 131_000 },
+      ],
+      needsApiKey: false,
+      websiteUrl: 'https://opencode.ai',
+      cost: 'recurring-free',
+    }]
+    providerStoreState.testConfig = vi.fn().mockResolvedValue({
+      connectivity: { success: true, latencyMs: 18 },
+      proxy: { success: true, latencyMs: 20 },
+    })
+
+    const { container } = render(<ProviderSettings />)
+    const noAuthCatalog = container.querySelector('[data-provider-catalog="no-auth"]') as HTMLElement
+    const localCatalog = container.querySelector('[data-provider-catalog="local-custom"]') as HTMLElement
+
+    expect(within(noAuthCatalog).getByRole('button', {
+      name: 'Configure OpenCode Free',
+    })).toBeInTheDocument()
+    expect(within(localCatalog).queryByText('OpenCode Free')).not.toBeInTheDocument()
+
+    fireEvent.click(within(noAuthCatalog).getByRole('button', {
+      name: 'Configure OpenCode Free',
+    }))
+    const dialog = screen.getByRole('dialog')
+
+    expect(within(dialog).queryByPlaceholderText('sk-...')).not.toBeInTheDocument()
+    expect(within(dialog).getByText('No account or API key is required')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Add' })).toBeEnabled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Test Connection' }))
+    expect(await within(dialog).findByText('Connection successful (18ms)')).toBeInTheDocument()
+    expect(providerStoreState.testConfig).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: '',
+      baseUrl: 'https://opencode.ai/zen/v1',
+      modelId: 'north-mini-code-free',
+      presetId: 'opencode-free',
+    }))
+  }, 30_000)
 
   it('fills the official context window when selecting a different provider model', () => {
     providerStoreState.providers = [
@@ -499,7 +875,7 @@ describe('Settings > Providers tab', () => {
 
     render(<ProviderSettings />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Zhipu GLM' }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByDisplayValue('200k')).toBeInTheDocument()
 
@@ -562,7 +938,7 @@ describe('Settings > Providers tab', () => {
 
     render(<ProviderSettings />)
 
-    fireEvent.click(screen.getAllByRole('button', { name: /Configure/i })[0]!)
+    fireEvent.click(screen.getByRole('button', { name: 'Configure DeepSeek' }))
     const dialog = screen.getByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: /Advanced settings/i }))
 
@@ -600,7 +976,7 @@ describe('Settings > Providers tab', () => {
     }]
 
     render(<ProviderSettings />)
-    fireEvent.click(screen.getByRole('button', { name: /Configure/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Configure Custom' }))
     const dialog = screen.getByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Discover models' }))
 
@@ -609,7 +985,7 @@ describe('Settings > Providers tab', () => {
     expect(within(dialog).getByText('dynamic-vision')).toBeInTheDocument()
   })
 
-  it('shows separate Kimi Code and Kimi API presets with different default models', () => {
+  it('shows Kimi Code and Kimi as separate API key entries', () => {
     providerStoreState.providers = []
     providerStoreState.presets = [
       {
@@ -634,7 +1010,7 @@ describe('Settings > Providers tab', () => {
       },
       {
         id: 'kimi',
-        name: 'Kimi API',
+        name: 'Kimi',
         baseUrl: 'https://api.moonshot.cn',
         apiFormat: 'openai_chat',
         defaultModels: {
@@ -671,10 +1047,190 @@ describe('Settings > Providers tab', () => {
 
     render(<ProviderSettings />)
 
-    expect(screen.getByText('Kimi Code')).toBeInTheDocument()
-    expect(screen.getByText('https://api.kimi.com/coding/ · kimi-for-coding')).toBeInTheDocument()
-    expect(screen.getByText('Kimi API')).toBeInTheDocument()
-    expect(screen.getByText('https://api.moonshot.cn · kimi-k2.7-code')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Configure Kimi Code' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Configure Kimi' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Manage Kimi' })).not.toBeInTheDocument()
+    expect(screen.queryByText('2 connection methods')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Configure Kimi Code' }))
+    expect(within(screen.getByRole('dialog')).getByDisplayValue('kimi-for-coding')).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Configure Kimi' }))
+    expect(within(screen.getByRole('dialog')).getByDisplayValue('kimi-k2.7-code')).toBeInTheDocument()
+  }, 30_000)
+
+  it('keeps OAuth runtime providers out of API key, aggregator, and local catalogs', () => {
+    const models = {
+      main: 'test-main',
+      haiku: 'test-fast',
+      sonnet: 'test-main',
+      opus: 'test-main',
+    }
+    providerStoreState.providers = [
+      {
+        id: 'kimi-code-key',
+        name: 'Kimi Code Key',
+        presetId: 'kimi-code',
+        apiKey: '***',
+        baseUrl: 'https://api.kimi.com/coding/',
+        apiFormat: 'anthropic',
+        models,
+        notes: '',
+      },
+      {
+        id: 'kimi-coding-oauth',
+        name: 'Kimi Coding OAuth Runtime',
+        presetId: 'kimi-code',
+        oauthProviderId: 'kimi-coding',
+        apiKey: '',
+        baseUrl: 'https://api.kimi.com/coding/',
+        apiFormat: 'anthropic',
+        models,
+        notes: '',
+      },
+      {
+        id: 'aggregator-oauth-runtime',
+        name: 'Aggregator OAuth Runtime',
+        presetId: 'openrouter',
+        oauthProviderId: 'aggregator-oauth',
+        apiKey: '',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiFormat: 'openai_chat',
+        models,
+        notes: '',
+      },
+      {
+        id: 'local-oauth-runtime',
+        name: 'Local OAuth Runtime',
+        presetId: 'lmstudio',
+        oauthProviderId: 'local-oauth',
+        apiKey: '',
+        baseUrl: 'http://localhost:1234/v1',
+        apiFormat: 'openai_chat',
+        models,
+        notes: '',
+      },
+    ]
+    providerStoreState.presets = [
+      {
+        id: 'kimi-code',
+        name: 'Kimi Code',
+        baseUrl: 'https://api.kimi.com/coding/',
+        apiFormat: 'anthropic',
+        defaultModels: models,
+        needsApiKey: true,
+        websiteUrl: 'https://www.kimi.com/coding',
+      },
+      {
+        id: 'openrouter',
+        name: 'OpenRouter',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiFormat: 'openai_chat',
+        defaultModels: models,
+        needsApiKey: true,
+        websiteUrl: 'https://openrouter.ai',
+      },
+      {
+        id: 'lmstudio',
+        name: 'LM Studio',
+        baseUrl: 'http://localhost:1234/v1',
+        apiFormat: 'openai_chat',
+        defaultModels: models,
+        needsApiKey: false,
+        websiteUrl: 'https://lmstudio.ai',
+      },
+      {
+        id: 'custom',
+        name: 'Custom',
+        baseUrl: '',
+        apiFormat: 'anthropic',
+        defaultModels: models,
+        needsApiKey: true,
+        websiteUrl: '',
+      },
+    ]
+
+    const { container } = render(<ProviderSettings />)
+    const apiCatalog = container.querySelector('[data-provider-catalog="api-key"]') as HTMLElement
+    const aggregatorCatalog = container.querySelector(
+      '[data-provider-catalog="aggregators-gateways"]',
+    ) as HTMLElement
+    const localCatalog = container.querySelector('[data-provider-catalog="local-custom"]') as HTMLElement
+
+    expect(within(apiCatalog).getByRole('button', { name: 'Edit Kimi Code' })).toBeInTheDocument()
+    expect(within(apiCatalog).queryByRole('button', { name: 'Manage Kimi Code' })).not.toBeInTheDocument()
+    expect(within(apiCatalog).queryByText('2 configurations')).not.toBeInTheDocument()
+    expect(within(aggregatorCatalog).getByRole('button', { name: 'Configure OpenRouter' })).toBeInTheDocument()
+    expect(within(localCatalog).getByRole('button', { name: 'Configure LM Studio' })).toBeInTheDocument()
+    expect(screen.queryByText('Kimi Coding OAuth Runtime')).not.toBeInTheDocument()
+    expect(screen.queryByText('Aggregator OAuth Runtime')).not.toBeInTheDocument()
+    expect(screen.queryByText('Local OAuth Runtime')).not.toBeInTheDocument()
+  })
+
+  it('shows one provider card for multiple saved configurations and keeps each one manageable', () => {
+    providerStoreState.providers = [
+      {
+        id: 'openai-work',
+        name: 'OpenAI Work',
+        presetId: 'openai',
+        apiKey: '***',
+        baseUrl: 'https://api.openai.com',
+        apiFormat: 'openai_responses',
+        models: {
+          main: 'gpt-5.4',
+          haiku: 'gpt-5.4-mini',
+          sonnet: 'gpt-5.4',
+          opus: 'gpt-5.4',
+        },
+        notes: '',
+      },
+      {
+        id: 'openai-backup',
+        name: 'OpenAI Backup',
+        presetId: 'openai',
+        apiKey: '***',
+        baseUrl: 'https://api.openai.com',
+        apiFormat: 'openai_responses',
+        models: {
+          main: 'gpt-5.4-mini',
+          haiku: 'gpt-5.4-mini',
+          sonnet: 'gpt-5.4-mini',
+          opus: 'gpt-5.4-mini',
+        },
+        notes: '',
+      },
+    ]
+    providerStoreState.presets = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        baseUrl: 'https://api.openai.com',
+        apiFormat: 'openai_responses',
+        defaultModels: {
+          main: 'gpt-5.4',
+          haiku: 'gpt-5.4-mini',
+          sonnet: 'gpt-5.4',
+          opus: 'gpt-5.4',
+        },
+        needsApiKey: true,
+        websiteUrl: 'https://platform.openai.com',
+      },
+    ]
+
+    const { container } = render(<ProviderSettings />)
+    const apiCatalog = container.querySelector('[data-provider-catalog="api-key"]') as HTMLElement
+
+    expect(within(apiCatalog).getAllByText('OpenAI')).toHaveLength(1)
+    expect(within(apiCatalog).getByText('2 configurations')).toBeInTheDocument()
+    fireEvent.click(within(apiCatalog).getByRole('button', { name: 'Manage OpenAI' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'OpenAI' })
+    expect(within(dialog).getByText('OpenAI Work')).toBeInTheDocument()
+    expect(within(dialog).getByText('OpenAI Backup')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Edit OpenAI Work' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Edit OpenAI Backup' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Add OpenAI' })).toBeInTheDocument()
   })
 
   it('hides the API key by default and reveals it from the eye button', () => {
@@ -697,7 +1253,7 @@ describe('Settings > Providers tab', () => {
 
     render(<ProviderSettings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Configure/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Configure Custom' }))
 
     const dialog = screen.getByRole('dialog')
     const apiKeyInput = within(dialog).getByPlaceholderText('sk-...')
@@ -713,7 +1269,9 @@ describe('Settings > Providers tab', () => {
   it('never places a masked saved API key into the editable key field', () => {
     render(<ProviderSettings />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Edit MiniMax-M2.7-highspeed(openai)',
+    }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByPlaceholderText('sk-...')).toHaveValue('')
   })

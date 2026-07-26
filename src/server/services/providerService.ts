@@ -15,7 +15,15 @@ import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenai
 import { openaiChatToAnthropic } from '../proxy/transform/openaiChatToAnthropic.js'
 import { openaiResponsesToAnthropic } from '../proxy/transform/openaiResponsesToAnthropic.js'
 import { buildOpenAICompatibleUrl } from '../proxy/openaiCompatUrl.js'
-import type { AnthropicRequest, AnthropicResponse } from '../proxy/transform/types.js'
+import {
+  prepareCodexResponsesRequest,
+  readCodexResponsesCompletion,
+} from '../proxy/codexResponses.js'
+import type {
+  AnthropicRequest,
+  AnthropicResponse,
+  OpenAIResponsesRequest,
+} from '../proxy/transform/types.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
 import {
   CYBERCODE_MODEL_CONTEXT_WINDOWS_ENV,
@@ -48,6 +56,7 @@ import {
   isKimiK3ModelId,
   requiresEnabledThinkingParamForModel,
 } from '../../utils/model/thinkingPolicy.js'
+import { providerOAuthService } from './providerOAuthService.js'
 
 const MANAGED_ENV_KEYS = [
   'ANTHROPIC_BASE_URL',
@@ -107,6 +116,11 @@ const STALE_PRESET_CONTEXT_WINDOWS: Record<string, ReadonlySet<number>> = {
   minimax: new Set([1_000_000]),
   lmstudio: new Set([200_000]),
   ollama: new Set([256_000]),
+}
+
+type ProviderTestRuntime = {
+  oauthProviderId?: string
+  headers?: Record<string, string>
 }
 
 function getPresetDefaultEnv(presetId: string): Record<string, string> {
@@ -633,13 +647,15 @@ export class ProviderService {
     if (idx === -1) throw ApiError.notFound(`Provider not found: ${id}`)
 
     const existing = index.providers[idx]
+    const isOAuthManaged = Boolean(existing.oauthProviderId)
     const updated: SavedProvider = {
       ...existing,
+      ...(input.presetId !== undefined && !isOAuthManaged && { presetId: input.presetId }),
       ...(input.name !== undefined && { name: input.name }),
       ...(input.apiKey !== undefined &&
         !isMaskedApiKey(input.apiKey) && { apiKey: input.apiKey }),
-      ...(input.baseUrl !== undefined && { baseUrl: input.baseUrl }),
-      ...(input.apiFormat !== undefined && { apiFormat: input.apiFormat }),
+      ...(input.baseUrl !== undefined && !isOAuthManaged && { baseUrl: input.baseUrl }),
+      ...(input.apiFormat !== undefined && !isOAuthManaged && { apiFormat: input.apiFormat }),
       ...(input.models !== undefined && { models: normalizeProviderModels(input.models) }),
       ...(input.modelCatalog !== undefined && { modelCatalog: input.modelCatalog }),
       ...(input.modelContextWindows !== undefined && {
@@ -699,6 +715,62 @@ export class ProviderService {
     index.activeId = null
     await this.writeIndex(index)
     await this.clearProviderFromSettings()
+  }
+
+  async upsertOAuthProvider(
+    oauthProviderId: string,
+    definition: {
+      presetId: string
+      name: string
+      baseUrl: string
+      apiFormat: ApiFormat
+      models: ModelMapping
+      modelContextWindows?: ModelContextWindows
+    },
+  ): Promise<SavedProvider> {
+    const index = await this.readIndex()
+    const existingIndex = index.providers.findIndex(
+      (provider) => provider.oauthProviderId === oauthProviderId,
+    )
+    const existing = existingIndex >= 0 ? index.providers[existingIndex] : undefined
+    const provider: SavedProvider = {
+      id: existing?.id ?? crypto.randomUUID(),
+      presetId: definition.presetId,
+      name: existing?.name ?? definition.name,
+      apiKey: '',
+      oauthProviderId,
+      baseUrl: definition.baseUrl,
+      apiFormat: definition.apiFormat,
+      models: existing?.models ?? normalizeProviderModels(definition.models),
+      ...(existing?.modelCatalog && { modelCatalog: existing.modelCatalog }),
+      ...(existing?.imageSupportMode && { imageSupportMode: existing.imageSupportMode }),
+      ...(existing?.notes && { notes: existing.notes }),
+      ...(definition.modelContextWindows && {
+        modelContextWindows: compactModelContextWindows(definition.modelContextWindows),
+      }),
+    }
+
+    if (existingIndex >= 0) index.providers[existingIndex] = provider
+    else index.providers.push(provider)
+    await this.writeIndex(index)
+
+    if (index.activeId === provider.id) await this.syncToSettings(provider)
+    return provider
+  }
+
+  async removeOAuthProvider(oauthProviderId: string): Promise<void> {
+    const index = await this.readIndex()
+    const providerIndex = index.providers.findIndex(
+      (provider) => provider.oauthProviderId === oauthProviderId,
+    )
+    if (providerIndex < 0) return
+
+    const provider = index.providers[providerIndex]!
+    const wasActive = index.activeId === provider.id
+    index.providers.splice(providerIndex, 1)
+    if (wasActive) index.activeId = null
+    await this.writeIndex(index)
+    if (wasActive) await this.clearProviderFromSettings()
   }
 
   // --- Settings sync ---
@@ -906,6 +978,7 @@ export class ProviderService {
     baseUrl: string
     apiKey: string
     apiFormat: ApiFormat
+    oauthProviderId?: string
   } | null> {
     if (providerId) {
       const provider = await this.getProvider(providerId)
@@ -913,6 +986,7 @@ export class ProviderService {
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         apiFormat: provider.apiFormat ?? 'anthropic',
+        ...(provider.oauthProviderId && { oauthProviderId: provider.oauthProviderId }),
       }
     }
 
@@ -924,6 +998,7 @@ export class ProviderService {
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
       apiFormat: provider.apiFormat ?? 'anthropic',
+      ...(provider.oauthProviderId && { oauthProviderId: provider.oauthProviderId }),
     }
   }
 
@@ -931,6 +1006,7 @@ export class ProviderService {
     baseUrl: string
     apiKey: string
     apiFormat: ApiFormat
+    oauthProviderId?: string
   } | null> {
     return this.getProviderForProxy()
   }
@@ -957,13 +1033,26 @@ export class ProviderService {
     const modelId = models.main
     const apiFormat = overrides?.apiFormat ?? provider.apiFormat ?? 'anthropic'
     const preset = PROVIDER_PRESETS.find((item) => item.id === provider.presetId)
+    const oauthRuntime = provider.oauthProviderId
+      ? await providerOAuthService.runtimeAuth(provider.oauthProviderId)
+      : null
     const apiKey =
+      oauthRuntime?.token ||
       provider.apiKey ||
       preset?.defaultEnv?.ANTHROPIC_API_KEY ||
       preset?.defaultEnv?.ANTHROPIC_AUTH_TOKEN ||
-      (preset?.needsApiKey === false ? 'local-provider' : '')
+      ''
 
-    if (!baseUrl || !apiKey) {
+    if (provider.oauthProviderId && !oauthRuntime) {
+      return {
+        connectivity: {
+          success: false,
+          latencyMs: 0,
+          error: 'OAuth connection is unavailable. Reconnect this account and try again.',
+        },
+      }
+    }
+    if (!baseUrl || (preset?.needsApiKey !== false && !apiKey)) {
       return { connectivity: { success: false, latencyMs: 0, error: 'Missing baseUrl or apiKey' } }
     }
     return this.testProviderConfig({
@@ -974,13 +1063,29 @@ export class ProviderService {
       presetId: provider.presetId,
       probeImages: false,
       apiFormat,
+    }, {
+      oauthProviderId: provider.oauthProviderId,
+      headers: oauthRuntime?.headers,
     })
   }
 
-  async testProviderConfig(input: TestProviderInput): Promise<ProviderTestResult> {
+  async testProviderConfig(
+    input: TestProviderInput,
+    runtime?: ProviderTestRuntime,
+  ): Promise<ProviderTestResult> {
     const format: ApiFormat = input.apiFormat ?? 'anthropic'
     const base = input.baseUrl.replace(/\/+$/, '')
-    const apiKey = input.apiKey.trim() || 'local-provider'
+    const apiKey = input.apiKey.trim()
+    const preset = PROVIDER_PRESETS.find((item) => item.id === input.presetId)
+    if (!base || (!apiKey && preset?.needsApiKey !== false)) {
+      return {
+        connectivity: {
+          success: false,
+          latencyMs: 0,
+          error: 'Missing baseUrl or apiKey',
+        },
+      }
+    }
     const models = normalizeProviderModels(
       input.models ?? {
         main: input.modelId,
@@ -1018,6 +1123,7 @@ export class ProviderService {
       apiKey,
       mainCheck.requestedModel,
       format,
+      runtime,
     )
     const modelChecks = [{
       roles: mainCheck.roles,
@@ -1036,7 +1142,13 @@ export class ProviderService {
         .map(async (check) => ({
           roles: check.roles,
           requestedModel: check.requestedModel,
-          result: await this.testConnectivity(base, apiKey, check.requestedModel, format),
+          result: await this.testConnectivity(
+            base,
+            apiKey,
+            check.requestedModel,
+            format,
+            runtime,
+          ),
         })),
     )
     modelChecks.push(...secondaryChecks)
@@ -1056,6 +1168,7 @@ export class ProviderService {
         apiKey,
         mainCheck.requestedModel,
         format,
+        runtime,
       )
     }
 
@@ -1086,10 +1199,17 @@ export class ProviderService {
     apiKey: string,
     modelId: string,
     format: ApiFormat,
+    runtime?: ProviderTestRuntime,
   ): Promise<ProviderTestStepResult> {
     const start = Date.now()
     try {
-      const { url, headers, body } = buildDirectTestRequest(base, apiKey, modelId, format)
+      const { url, headers, body } = buildDirectTestRequest(
+        base,
+        apiKey,
+        modelId,
+        format,
+        runtime,
+      )
       let response = await fetch(url, {
         method: 'POST',
         headers,
@@ -1097,9 +1217,12 @@ export class ProviderService {
         signal: AbortSignal.timeout(30000),
       })
 
-      let resBody = await response.json().catch(() => null) as Record<string, unknown> | null
+      let resBody = runtime?.oauthProviderId === 'codex' && response.ok
+        ? await readCodexResponsesCompletion(response) as unknown as Record<string, unknown>
+        : await response.json().catch(() => null) as Record<string, unknown> | null
       if (
         !response.ok &&
+        runtime?.oauthProviderId !== 'codex' &&
         !('thinking' in body) &&
         isOnlyEnabledThinkingAllowedResponse(resBody)
       ) {
@@ -1154,6 +1277,7 @@ export class ProviderService {
     apiKey: string,
     modelId: string,
     format: 'openai_chat' | 'openai_responses',
+    runtime?: ProviderTestRuntime,
   ): Promise<ProviderTestStepResult> {
     const start = Date.now()
     try {
@@ -1175,14 +1299,17 @@ export class ProviderService {
         })
         upstreamUrl = buildOpenAICompatibleUrl(base, 'chat/completions')
       } else {
-        transformedBody = anthropicToOpenaiResponses(anthropicReq)
+        const responsesRequest = anthropicToOpenaiResponses(anthropicReq)
+        transformedBody = runtime?.oauthProviderId === 'codex'
+          ? prepareCodexResponsesRequest(responsesRequest)
+          : responsesRequest
         upstreamUrl = buildOpenAICompatibleUrl(base, 'responses')
       }
 
       // Call upstream with transformed request
       const response = await fetch(upstreamUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        headers: buildOptionalBearerHeaders(apiKey, runtime?.headers),
         body: JSON.stringify(transformedBody),
         signal: AbortSignal.timeout(30000),
       })
@@ -1195,7 +1322,9 @@ export class ProviderService {
       }
 
       // Transform response back to Anthropic format
-      const responseBody = await response.json()
+      const responseBody = runtime?.oauthProviderId === 'codex'
+        ? await readCodexResponsesCompletion(response)
+        : await response.json()
       const anthropicRes = format === 'openai_chat'
         ? openaiChatToAnthropic(responseBody, modelId)
         : openaiResponsesToAnthropic(responseBody, modelId)
@@ -1226,13 +1355,15 @@ function buildDirectTestRequest(
   apiKey: string,
   modelId: string,
   format: ApiFormat,
+  runtime?: ProviderTestRuntime,
 ): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
   const prompt = 'Say "ok" and nothing else.'
+  const bearerHeaders = buildOptionalBearerHeaders(apiKey, runtime?.headers)
 
   if (format === 'openai_chat') {
     return {
       url: buildOpenAICompatibleUrl(base, 'chat/completions'),
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      headers: bearerHeaders,
       body: withProviderSpecificTestDefaults(base, modelId, format, {
         model: modelId,
         max_tokens: 16,
@@ -1241,22 +1372,47 @@ function buildDirectTestRequest(
     }
   }
   if (format === 'openai_responses') {
+    const body: OpenAIResponsesRequest = {
+      model: modelId,
+      max_output_tokens: 16,
+      input: [{ type: 'message', role: 'user', content: prompt }],
+    }
     return {
       url: buildOpenAICompatibleUrl(base, 'responses'),
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: { model: modelId, max_output_tokens: 16, input: [{ type: 'message', role: 'user', content: prompt }] },
+      headers: bearerHeaders,
+      body: runtime?.oauthProviderId === 'codex'
+        ? prepareCodexResponsesRequest(body)
+        : body,
     }
   }
   // anthropic
+  const anthropicHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+  }
+  if (apiKey.trim()) anthropicHeaders['x-api-key'] = apiKey
+  Object.assign(anthropicHeaders, runtime?.headers)
   return {
     url: `${base}/v1/messages`,
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    headers: anthropicHeaders,
     body: withProviderSpecificTestDefaults(base, modelId, format, {
       model: modelId,
       max_tokens: 16,
       messages: [{ role: 'user', content: prompt }],
     }),
   }
+}
+
+function buildOptionalBearerHeaders(
+  apiKey: string,
+  extraHeaders?: Record<string, string>,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  if (apiKey.trim()) headers.Authorization = `Bearer ${apiKey}`
+  Object.assign(headers, extraHeaders)
+  return headers
 }
 
 function withProviderSpecificTestDefaults(

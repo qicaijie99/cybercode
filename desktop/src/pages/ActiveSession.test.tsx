@@ -218,8 +218,10 @@ describe('ActiveSession task polling', () => {
     render(<ActiveSession sessionId={sessionId} isActive={true} />)
 
     const composerShell = screen.getByTestId('chat-input').parentElement
+    const chatLayout = composerShell?.closest('[data-chat-layout]')
     expect(composerShell).toHaveClass('pointer-events-auto')
     expect(composerShell).not.toHaveClass('pointer-events-none')
+    expect(chatLayout).toBeTruthy()
     expect(screen.getByTestId('chat-bottom-overlay')).toHaveClass(
       'right-[var(--chat-message-scrollbar-gutter)]',
     )

@@ -1,9 +1,11 @@
 import type { UIMessage } from '../../types/chat'
+import { useTranslation } from '../../i18n'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { MessageActionBar } from './MessageActionBar'
 import { InlineImageGallery } from './InlineImageGallery'
 import { MessageExecutionLog } from './MessageExecutionLog'
 import { SmoothStreamingText } from './SmoothStreamingText'
+import { useMessageActionVisibility } from './useMessageActionVisibility'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
@@ -51,26 +53,41 @@ export function AssistantMessage({
   isBranching = false,
   branchDisabled = false,
 }: Props) {
+  const t = useTranslation()
+  const {
+    actionsVisible,
+    showActions,
+    scheduleHideActions,
+    hideActions,
+  } = useMessageActionVisibility()
   const layout = !isStreaming && isDocumentLike(content) ? 'document' : 'bubble'
   const useStableBubbleWidth = layout === 'document' || content.length >= 48
 
   return (
-    <div className="group/msg flex w-full justify-center px-[24px] py-[8px]">
+    <div
+      data-message-hover-group
+      className="flex w-full justify-center px-[24px] py-[8px]"
+    >
       <div
         data-chat-content-column
         data-message-shell="assistant"
         data-layout={layout}
         className="flex w-full max-w-[878px] flex-col items-start"
       >
-        <div className="relative w-full">
+        <div
+          className="pointer-events-none relative w-full"
+        >
           <div
+            data-message-hover-trigger
             data-message-bubble="assistant"
+            onPointerEnter={showActions}
+            onPointerLeave={scheduleHideActions}
             className={
               layout === 'document'
-                ? 'w-full rounded-[24px] rounded-bl-[8px] border border-[var(--color-border)] bg-[var(--color-message-assistant-bg)] px-[24px] py-[16px] text-[var(--color-text-primary)]'
+                ? 'pointer-events-auto w-full rounded-[24px] rounded-bl-[8px] border border-[var(--color-border)] bg-[var(--color-message-assistant-bg)] px-[24px] py-[16px] text-[var(--color-text-primary)]'
                 : useStableBubbleWidth
-                  ? 'w-full max-w-[85%] rounded-[24px] rounded-bl-[8px] border border-[var(--color-border)] bg-[var(--color-message-assistant-bg)] px-[24px] py-[16px] text-[var(--color-text-primary)]'
-                : 'w-fit max-w-[85%] rounded-[24px] rounded-bl-[8px] border border-[var(--color-border)] bg-[var(--color-message-assistant-bg)] px-[24px] py-[16px] text-[var(--color-text-primary)]'
+                  ? 'pointer-events-auto w-full max-w-[85%] rounded-[24px] rounded-bl-[8px] border border-[var(--color-border)] bg-[var(--color-message-assistant-bg)] px-[24px] py-[16px] text-[var(--color-text-primary)]'
+                  : 'pointer-events-auto w-fit max-w-[85%] rounded-[24px] rounded-bl-[8px] border border-[var(--color-border)] bg-[var(--color-message-assistant-bg)] px-[24px] py-[16px] text-[var(--color-text-primary)]'
             }
           >
             <div className="chat-bubble-text text-[15px] font-normal leading-relaxed tracking-normal text-[var(--color-text-primary)]">
@@ -101,19 +118,26 @@ export function AssistantMessage({
             resultMap={resultMap}
             childToolCallsByParent={childToolCallsByParent}
             isActive={isToolExecutionActive}
+            onPointerEnter={showActions}
+            onPointerLeave={scheduleHideActions}
           />
         )}
 
-        <div className="pointer-events-none ml-[16px] mt-[8px] min-h-6 opacity-0 transition-opacity group-hover/msg:pointer-events-auto group-hover/msg:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
+        <div
+          data-actions-visible={actionsVisible ? 'true' : 'false'}
+          className="message-action-visibility ml-[16px] min-h-6"
+        >
           <MessageActionBar
             copyText={isStreaming ? undefined : content}
-            copyLabel="Copy reply"
+            copyLabel={t('chat.copyReply')}
             onBranch={isStreaming ? undefined : onBranch}
             branchLabel={branchLabel}
             branchDisabledLabel={branchDisabledLabel}
             branching={isBranching}
             branchDisabled={branchDisabled}
             align="start"
+            onPointerEnter={showActions}
+            onPointerLeave={hideActions}
           />
         </div>
       </div>
