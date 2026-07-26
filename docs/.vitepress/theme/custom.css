@@ -597,6 +597,9 @@ html {
 }
 
 .home-community-anchor {
+  position: fixed;
+  top: 0;
+  left: 0;
   display: block;
   width: 0;
   height: 0;
@@ -697,8 +700,8 @@ html {
 .home-community-modal__qr-link {
   position: relative;
   display: block;
-  width: min(100%, 270px);
-  aspect-ratio: 1;
+  width: min(100%, 250px);
+  aspect-ratio: 1284 / 1750;
   margin: 20px auto 0;
   overflow: hidden;
   line-height: 0;
@@ -725,7 +728,7 @@ html {
   display: block;
   width: 100%;
   height: auto;
-  transform: translateY(-12%);
+  transform: translateY(-9%);
 }
 
 .home-community-modal__number {
@@ -943,7 +946,7 @@ html {
   }
 
   .home-community-modal__qr-link {
-    width: min(100%, 250px);
+    width: min(100%, 230px);
   }
 
   .VPHomeFeatures {
