@@ -15,6 +15,9 @@ hero:
     - theme: alt
       text: 下载桌面端
       link: https://github.com/wk42worldworld/cybercode/releases/latest
+    - theme: alt
+      text: 加入用户群
+      link: '#join-community'
 
 features:
   - title: 完整 TUI 交互

@@ -1,6 +1,6 @@
 import DefaultTheme from 'vitepress/theme'
 import mediumZoom from 'medium-zoom'
-import { Fragment, h, onMounted, watch, nextTick } from 'vue'
+import { h, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vitepress'
 import HomeCliInstall from './HomeCliInstall.vue'
 import HomeCommunity from './HomeCommunity.vue'
@@ -14,10 +14,8 @@ export default {
   extends: DefaultTheme,
   Layout: () =>
     h(DefaultTheme.Layout, null, {
-      'home-hero-after': () => h(Fragment, null, [
-        h(HomeCliInstall),
-        h(HomeCommunity),
-      ]),
+      'home-hero-actions-after': () => h(HomeCommunity),
+      'home-hero-after': () => h(HomeCliInstall),
     }),
   setup() {
     const route = useRoute()

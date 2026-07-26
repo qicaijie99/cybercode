@@ -46,7 +46,7 @@
 </p>
 
 <p align="center">
-  <a href="#安装命令行版本">安装 CLI</a> · <a href="#为什么是-cybercode">为什么</a> · <a href="#快速对比">对比</a> · <a href="#图形界面速览">图形界面</a> · <a href="#功能">功能</a> · <a href="#从源码运行">从源码运行</a> · <a href="#分章节教程">分章节教程</a> · <a href="#功能模块教程">模块教程</a> · <a href="docs/guide/env-vars.md">环境变量</a> · <a href="#社区与传播">社区</a> · <a href="#更多文档">更多文档</a>
+  <a href="https://wk42worldworld.github.io/cybercode/guide/quick-start.html#安装-cli推荐">安装 CLI</a> · <a href="https://wk42worldworld.github.io/cybercode/">为什么</a> · <a href="https://wk42worldworld.github.io/cybercode/desktop/03-features.html">对比</a> · <a href="https://wk42worldworld.github.io/cybercode/desktop/">图形界面</a> · <a href="https://wk42worldworld.github.io/cybercode/desktop/03-features.html">功能</a> · <a href="https://wk42worldworld.github.io/cybercode/guide/quick-start.html#从源码运行">从源码运行</a> · <a href="https://wk42worldworld.github.io/cybercode/guide/quick-start.html">分章节教程</a> · <a href="https://wk42worldworld.github.io/cybercode/desktop/03-features.html">模块教程</a> · <a href="https://wk42worldworld.github.io/cybercode/guide/env-vars.html">环境变量</a> · <a href="https://wk42worldworld.github.io/cybercode/#join-community">社区</a> · <a href="https://wk42worldworld.github.io/cybercode/guide/quick-start.html">更多文档</a>
 </p>
 
 ## 加入用户群
