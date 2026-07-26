@@ -250,6 +250,13 @@ jobs:
           done
           exit "$missing"
 
+      - name: Import Apple code-signing certificate
+        if: startsWith(matrix.platform, 'macos') && vars.ENABLE_APPLE_NOTARIZATION == 'true'
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
       # ── Build Tauri app ──────────────────────────────────────
       - name: Build Tauri app
         if: vars.ENABLE_APPLE_NOTARIZATION != 'true' || !startsWith(matrix.platform, 'macos')
