@@ -44,6 +44,16 @@
   <a href="#安装命令行版本">安装 CLI</a> · <a href="#为什么是-cybercode">为什么</a> · <a href="#快速对比">对比</a> · <a href="#图形界面速览">图形界面</a> · <a href="#功能">功能</a> · <a href="#从源码运行">从源码运行</a> · <a href="#分章节教程">分章节教程</a> · <a href="#功能模块教程">模块教程</a> · <a href="docs/guide/env-vars.md">环境变量</a> · <a href="#社区与传播">社区</a> · <a href="#更多文档">更多文档</a>
 </p>
 
+## 加入用户群
+
+<p align="center">
+  <a href="docs/public/images/cybercode-qq-community.png">
+    <img src="docs/public/images/cybercode-qq-community.png" alt="CyberCode AI研究中心 QQ 群二维码，群号 463169230" width="300">
+  </a>
+</p>
+
+<p align="center"><strong>AI研究中心 QQ 群：463169230</strong><br>扫码加入，交流使用心得、反馈问题和关注新功能。</p>
+
 ---
 
 ## 安装命令行版本

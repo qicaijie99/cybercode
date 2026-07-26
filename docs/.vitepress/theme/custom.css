@@ -594,6 +594,89 @@ html {
   letter-spacing: 0;
 }
 
+.home-community {
+  border-top: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg-soft);
+}
+
+.home-community__inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+  align-items: center;
+  gap: clamp(48px, 8vw, 120px);
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 72px 24px 80px;
+}
+
+.home-community__copy {
+  max-width: 620px;
+}
+
+.home-community__eyebrow {
+  margin: 0 0 12px;
+  color: var(--vp-c-brand-1);
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+.home-community__copy h2 {
+  margin: 0;
+  border: 0;
+  color: var(--vp-c-text-1);
+  font-size: 36px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.home-community__copy > p:not(.home-community__eyebrow, .home-community__number) {
+  margin: 18px 0 0;
+  color: var(--vp-c-text-2);
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.home-community__number {
+  display: inline-block;
+  margin: 24px 0 0;
+  padding-top: 14px;
+  border-top: 2px solid var(--vp-c-brand-1);
+  color: var(--vp-c-text-1);
+  font-family: var(--vp-font-family-mono);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.home-community__qr-link {
+  display: block;
+  width: 100%;
+  line-height: 0;
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    filter 180ms ease;
+}
+
+.home-community__qr-link:hover,
+.home-community__qr-link:focus-visible {
+  transform: translateY(-4px);
+  filter: drop-shadow(0 14px 24px rgba(8, 104, 247, 0.12));
+}
+
+.home-community__qr-link:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 5px;
+}
+
+.home-community__qr {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 @media (max-width: 1199px) {
   .VPHome .VPHero .main {
     width: 57%;
@@ -666,6 +749,11 @@ html {
 
   .VPHome .VPHero .actions {
     justify-content: center;
+  }
+
+  .home-community__inner {
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 310px);
+    gap: 42px;
   }
 }
 
@@ -754,6 +842,26 @@ html {
 
   .home-cli-install__intro h2 {
     font-size: 27px;
+  }
+
+  .home-community__inner {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 32px;
+    padding: 52px 20px 60px;
+    text-align: center;
+  }
+
+  .home-community__copy h2 {
+    font-size: 29px;
+  }
+
+  .home-community__number {
+    margin-top: 20px;
+  }
+
+  .home-community__qr-link {
+    width: min(100%, 320px);
   }
 
   .VPHomeFeatures {
