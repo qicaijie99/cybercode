@@ -54,6 +54,7 @@ export type SettingsTab =
   | 'general'
   | 'adapters'
   | 'terminal'
+  | 'ssh'
   | 'mcp'
   | 'agents'
   | 'memory'

@@ -15,6 +15,7 @@ import { ComputerUseSettings } from '../../pages/ComputerUseSettings'
 import { McpSettings } from '../../pages/McpSettings'
 import { ScheduledTasks } from '../../pages/ScheduledTasks'
 import { TerminalSettings } from '../../pages/TerminalSettings'
+import { SSHSettings } from '../../pages/SSHSettings'
 import { TokenOptimization } from '../../pages/TokenOptimization'
 import { KnowledgeSpace } from '../../pages/KnowledgeSpace'
 import { AgentMigration } from '../../pages/AgentMigration'
@@ -170,7 +171,7 @@ function PanelBody({ view, children }: { view: SettingsPanelView; children: Reac
     )
   }
 
-  if (view === 'terminal' || view === 'scheduled') {
+  if (view === 'terminal' || view === 'scheduled' || view === 'ssh') {
     return (
       <div className="settings-panel-body settings-panel-content min-h-0 flex-1 flex flex-col overflow-hidden bg-[var(--color-background)] pt-[10px]">
         {children}
@@ -197,6 +198,8 @@ function renderPanelContent(view: SettingsPanelView): ReactNode {
       return <AdapterSettings />
     case 'terminal':
       return <TerminalSettings active workspace />
+    case 'ssh':
+      return <SSHSettings />
     case 'mcp':
       return <McpSettings />
     case 'agents':
