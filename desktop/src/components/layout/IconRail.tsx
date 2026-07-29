@@ -8,6 +8,7 @@ import {
   Download,
   Ellipsis,
   Github,
+  Globe,
   Grid,
   MessageSquare,
   Monitor,
@@ -155,6 +156,13 @@ export function IconRail({ __testTopRailHeight }: IconRailProps = {}) {
       label: t('settings.tab.computerUse'),
       onClick: () => handlePanelView('computerUse'),
       icon: Monitor,
+    },
+    {
+      key: 'ssh',
+      active: isPanelActive('ssh'),
+      label: t('settings.tab.ssh'),
+      onClick: () => handlePanelView('ssh'),
+      icon: Globe,
     },
   ], [handlePanelView, isPanelActive, sidebarOpen, t, toggleSidebar])
 

@@ -94,6 +94,26 @@ export function startServer(port = PORT, host = HOST) {
       }
 
       // WebSocket upgrade
+      if (url.pathname.startsWith('/ws-ssh/')) {
+        const sshSessionId = url.pathname.split('/').pop() || ''
+        if (!sshSessionId || !/^[0-9a-zA-Z_-]{1,64}$/.test(sshSessionId)) {
+          return new Response('Invalid SSH session ID', { status: 400 })
+        }
+        const upgraded = server.upgrade(req, {
+          data: {
+            sessionId: sshSessionId,
+            connectedAt: Date.now(),
+            channel: 'ssh',
+            sdkToken: null,
+            serverPort: port,
+            serverHost: localConnectHost,
+          },
+        })
+        if (upgraded) return undefined
+        return new Response('WebSocket upgrade failed', { status: 400 })
+      }
+
+      // WebSocket upgrade
       if (url.pathname.startsWith('/ws/')) {
         // Enforce authentication when required
         if (authRequired) {

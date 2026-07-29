@@ -29,6 +29,7 @@ import { handleWebSessionProvidersApi } from './api/web-session-providers.js'
 import { handleMediaProvidersApi } from './api/media-providers.js'
 import { handleGatewayApi } from './api/gateway.js'
 import { handleUsbMigrationApi } from './api/usb-migration.js'
+import { handleSSHApi } from './api/ssh.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
@@ -120,6 +121,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'gateway':
       return handleGatewayApi(req, url, segments)
+
+    case 'ssh':
+      return handleSSHApi(req, url, segments)
 
     case 'plugins':
       return handlePluginsApi(req, url, segments)

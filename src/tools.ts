@@ -9,6 +9,7 @@ import { FileWriteTool } from './tools/FileWriteTool/FileWriteTool.js'
 import { GlobTool } from './tools/GlobTool/GlobTool.js'
 import { NotebookEditTool } from './tools/NotebookEditTool/NotebookEditTool.js'
 import { WebFetchTool } from './tools/WebFetchTool/WebFetchTool.js'
+import { SSHTool } from './tools/SSHTool/SSHTool.js'
 import { TaskStopTool } from './tools/TaskStopTool/TaskStopTool.js'
 import { BriefTool } from './tools/BriefTool/BriefTool.js'
 import { PromptMemoryTool } from './tools/PromptMemoryTool/PromptMemoryTool.js'
@@ -214,6 +215,7 @@ export function getAllBaseTools(): Tools {
     FileWriteTool,
     NotebookEditTool,
     WebFetchTool,
+    SSHTool,
     TodoWriteTool,
     GoalStatusTool,
     WebSearchTool,

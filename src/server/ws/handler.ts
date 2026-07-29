@@ -41,6 +41,7 @@ import { recordLearnedImageSupport } from '../../utils/model/imageCapabilityRegi
 import type { SavedProvider } from '../types/provider.js'
 import { routingService } from '../routing/routingService.js'
 import { CYBERCODE_MODEL_CONTEXT_WINDOWS_ENV } from '../../utils/modelContextWindows.js'
+import { getSSHSession, setSSHSessionCallbacks, writeToSSHSession, killSSHSession } from '../api/ssh.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -125,6 +126,24 @@ export const handleWebSocket = {
   open(ws: ServerWebSocket<WebSocketData>) {
     const { sessionId, channel, sdkToken } = ws.data
 
+    if (channel === 'ssh') {
+      const session = getSSHSession(sessionId)
+      if (!session) {
+        ws.close(1008, 'SSH session not found')
+        return
+      }
+      setSSHSessionCallbacks(
+        sessionId,
+        (data) => ws.send(JSON.stringify({ type: 'ssh_output', data })),
+        (code) => {
+          ws.send(JSON.stringify({ type: 'ssh_exit', code }))
+          ws.close(1000, 'SSH session ended')
+        },
+      )
+      ws.send(JSON.stringify({ type: 'ssh_connected', sessionId }))
+      return
+    }
+
     if (channel === 'sdk') {
       if (!conversationService.authorizeSdkConnection(sessionId, sdkToken)) {
         console.warn(`[WS] Rejected SDK connection for session: ${sessionId}`)
@@ -161,6 +180,21 @@ export const handleWebSocket = {
   },
 
   message(ws: ServerWebSocket<WebSocketData>, rawMessage: string | Buffer) {
+    if (ws.data.channel === 'ssh') {
+      const payload = typeof rawMessage === 'string' ? rawMessage : rawMessage.toString()
+      try {
+        const msg = JSON.parse(payload)
+        if (msg.type === 'ssh_input' && msg.data) {
+          writeToSSHSession(ws.data.sessionId, msg.data)
+        } else if (msg.type === 'ssh_resize') {
+          // resize is handled client-side via escape sequences
+        }
+      } catch {
+        writeToSSHSession(ws.data.sessionId, payload)
+      }
+      return
+    }
+
     if (ws.data.channel === 'sdk') {
       const payload = typeof rawMessage === 'string' ? rawMessage : rawMessage.toString()
       conversationService.handleSdkPayload(ws.data.sessionId, payload)
@@ -229,6 +263,11 @@ export const handleWebSocket = {
 
   close(ws: ServerWebSocket<WebSocketData>, code: number, reason: string) {
     const { sessionId, channel } = ws.data
+
+    if (channel === 'ssh') {
+      setSSHSessionCallbacks(sessionId, null, null)
+      return
+    }
 
     if (channel === 'sdk') {
       console.log(`[WS] SDK disconnected from session: ${sessionId} (${code}: ${reason})`)
