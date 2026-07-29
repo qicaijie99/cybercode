@@ -303,6 +303,29 @@ export function isFreeRouteTarget(presetId: string, modelId: string): boolean {
   return cost === 'recurring-free' || cost === 'uncapped'
 }
 
+export function isProviderRuntimeReady(
+  provider: SavedProvider,
+  preset?: ProviderPreset,
+): boolean {
+  return Boolean(
+    provider.baseUrl.trim() &&
+    provider.models.main.trim() &&
+    (
+      provider.apiKey.trim() ||
+      provider.oauthProviderId ||
+      preset?.needsApiKey === false
+    ),
+  )
+}
+
+export function isProviderRuntimeRoutable(
+  provider: SavedProvider,
+  preset?: ProviderPreset,
+): boolean {
+  return getSourceMetadata(provider.presetId).routable !== false &&
+    isProviderRuntimeReady(provider, preset)
+}
+
 function uniqueModels(provider: SavedProvider | undefined, preset: ProviderPreset) {
   const models = new Map<string, { id: string; contextWindow?: number; supportsImages?: boolean }>()
   const add = (id: string | undefined, contextWindow?: number, supportsImages?: boolean) => {
@@ -341,12 +364,9 @@ export function buildRoutingSource(
 ): RoutingSource {
   const metadata = getSourceMetadata(provider?.presetId ?? preset.id)
   const configured = preset.id === 'official' || Boolean(provider)
-  const hasRuntimeTarget = Boolean(
-    provider &&
-    provider.baseUrl.trim() &&
-    provider.models.main.trim() &&
-    (provider.apiKey.trim() || provider.oauthProviderId || preset.needsApiKey === false),
-  )
+  const hasRuntimeTarget = provider
+    ? isProviderRuntimeRoutable(provider, preset)
+    : false
 
   return {
     id: provider?.id ?? `preset:${preset.id}`,
@@ -354,7 +374,7 @@ export function buildRoutingSource(
     presetId: provider?.presetId ?? preset.id,
     name: provider?.name ?? preset.name,
     configured,
-    routable: metadata.routable !== false && hasRuntimeTarget,
+    routable: hasRuntimeTarget,
     cost: metadata.cost,
     auth: provider?.oauthProviderId ? 'oauth' : metadata.auth,
     risk: metadata.risk,

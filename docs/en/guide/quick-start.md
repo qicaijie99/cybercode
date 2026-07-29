@@ -68,6 +68,8 @@ You can activate a saved provider or repeat the provider, model, and API-key flo
 
 The desktop app and TUI share provider settings. For connection tests and advanced per-role model mappings, open Settings -> Providers in the desktop app; saved changes are available to the TUI automatically.
 
+See [Models, Sync, and Smart Routing](./models-routing.md) for OAuth, web sessions, media providers, model synchronization, smart routes, and Agent Node. The TUI also supports `/provider sync`, `/routing`, and `/node` without an extra proxy installation.
+
 ### Local model note
 
 CyberCode includes protocol handling, but it does not replace the local inference application. Before selecting LM Studio or Ollama, install it, download a model, and start its local server:

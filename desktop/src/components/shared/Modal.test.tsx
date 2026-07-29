@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import '@testing-library/jest-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { Modal } from './Modal'
 
@@ -17,7 +18,15 @@ describe('Modal', () => {
 
     expect(container.contains(dialog)).toBe(false)
     expect(document.body.contains(dialog)).toBe(true)
-    expect(dialog.parentElement?.classList.contains('z-[200]')).toBe(true)
+    expect(dialog.parentElement).toHaveClass('viewport-overlay', 'z-[10000]')
+    expect(dialog).toHaveClass(
+      'viewport-overlay-surface',
+      'modal-dialog-surface',
+      'max-h-[calc(100dvh-24px)]',
+      'max-w-full',
+      'min-[721px]:max-h-[85dvh]',
+    )
+    expect(dialog).toHaveStyle({ maxWidth: '100%' })
   })
 
   it('closes when the backdrop is clicked', () => {

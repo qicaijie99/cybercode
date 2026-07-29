@@ -4,11 +4,13 @@ import { Folder } from 'lucide-react'
 import { sessionsApi, type RecentProject } from '../../api/sessions'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTranslation } from '../../i18n'
+import { subscribeToViewportChanges } from '../../lib/viewportEvents'
 import { Icon } from '../shared/Icon'
 
 type DropdownPos = {
   top: number
   left: number
+  maxHeight: number
   direction: 'up' | 'down'
 }
 
@@ -61,13 +63,17 @@ export function ProjectFilter({ variant = 'default' }: { variant?: 'default' | '
     if (!triggerRef.current) return
     const rect = triggerRef.current.getBoundingClientRect()
     const dropdownHeight = 420
-    const spaceAbove = rect.top
-    const spaceBelow = window.innerHeight - rect.bottom
+    const viewportMargin = 12
+    const dropdownGap = 8
+    const spaceAbove = rect.top - dropdownGap - viewportMargin
+    const spaceBelow = window.innerHeight - rect.bottom - dropdownGap - viewportMargin
     const direction = spaceBelow >= dropdownHeight || spaceBelow >= spaceAbove ? 'down' : 'up'
+    const availableHeight = direction === 'down' ? spaceBelow : spaceAbove
 
     setDropdownPos({
-      top: direction === 'down' ? rect.bottom + 8 : rect.top - 8,
+      top: direction === 'down' ? rect.bottom + dropdownGap : rect.top - dropdownGap,
       left: rect.left,
+      maxHeight: Math.max(48, Math.min(dropdownHeight, availableHeight)),
       direction,
     })
   }, [])
@@ -91,12 +97,7 @@ export function ProjectFilter({ variant = 'default' }: { variant?: 'default' | '
   useEffect(() => {
     if (!open) return
     updateDropdownPos()
-    window.addEventListener('scroll', updateDropdownPos, true)
-    window.addEventListener('resize', updateDropdownPos)
-    return () => {
-      window.removeEventListener('scroll', updateDropdownPos, true)
-      window.removeEventListener('resize', updateDropdownPos)
-    }
+    return subscribeToViewportChanges(updateDropdownPos)
   }, [open, updateDropdownPos])
 
   // Refresh cache when opening if expired, but don't show loading if we have cached data
@@ -225,10 +226,11 @@ export function ProjectFilter({ variant = 'default' }: { variant?: 'default' | '
       {createPortal(
         <div
           ref={dropdownRef}
-          className="w-[280px] max-w-[calc(100vw-32px)] overflow-hidden rounded-lg border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-dropdown)]"
+          className="w-[280px] max-w-[calc(100vw-32px)] overflow-y-auto overscroll-contain rounded-lg border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-dropdown)]"
           style={{
             position: 'fixed',
             left: dropdownPos ? Math.min(dropdownPos.left, window.innerWidth - Math.min(280, window.innerWidth - 32) - 16) : -9999,
+            maxHeight: dropdownPos?.maxHeight,
             ...(dropdownPos?.direction === 'down'
               ? { top: dropdownPos.top }
               : dropdownPos ? { bottom: window.innerHeight - dropdownPos.top } : { top: -9999 }),

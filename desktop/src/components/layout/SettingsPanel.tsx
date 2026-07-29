@@ -1,4 +1,5 @@
 import { useEffect, useState, memo, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AboutSettings,
   AgentsSettings,
@@ -18,6 +19,7 @@ import { TerminalSettings } from '../../pages/TerminalSettings'
 import { TokenOptimization } from '../../pages/TokenOptimization'
 import { KnowledgeSpace } from '../../pages/KnowledgeSpace'
 import { AgentMigration } from '../../pages/AgentMigration'
+import { GitWorkspace } from '../../pages/GitWorkspace'
 import { useUIStore, type SettingsPanelView } from '../../stores/uiStore'
 import { useTranslation } from '../../i18n'
 import { Icon } from '../shared/Icon'
@@ -37,9 +39,14 @@ function getSidebarMotionDurationMs() {
 type Props = {
   visible: boolean
   reserveRightRail?: boolean
+  reserveSidebar?: boolean
 }
 
-export function SettingsPanel({ visible, reserveRightRail = false }: Props) {
+export function SettingsPanel({
+  visible,
+  reserveRightRail = false,
+  reserveSidebar = false,
+}: Props) {
   const closeSettings = useUIStore((s) => s.closeSettings)
   const panelView = useUIStore((s) => s.settingsPanelView)
   const t = useTranslation()
@@ -88,27 +95,37 @@ export function SettingsPanel({ visible, reserveRightRail = false }: Props) {
   const isSettingsHome = displayedPanelView === 'settings'
   const isKnowledgeSpace = displayedPanelView === 'codeGraph'
   const isProviderWorkspace = displayedPanelView === 'providers'
+  const isGitWorkspace = displayedPanelView === 'git'
 
-  return (
+  return createPortal(
     <section
       role="region"
       aria-label={getPanelLabel(displayedPanelView, t)}
       data-testid="settings-panel"
-      data-layout={isProviderWorkspace ? 'drawer' : 'floating'}
+      data-layout={isProviderWorkspace ? 'drawer' : isGitWorkspace ? 'workspace-drawer' : 'floating'}
       data-state={providerClosing ? 'closing' : 'open'}
       data-reserve-right-rail={reserveRightRail ? 'true' : 'false'}
+      data-reserve-sidebar={reserveSidebar ? 'true' : 'false'}
       className={isProviderWorkspace
-        ? 'settings-provider-shell settings-ui native-ui-text absolute bottom-0 right-0 top-0 z-[100] flex overflow-hidden'
-        : `settings-ui settings-panel-overlay native-ui-text absolute bottom-0 left-0 top-0 z-[90] flex flex-col items-center justify-center bg-black/10 p-[16px] dark:bg-black/45 ${reserveRightRail ? 'settings-panel-overlay--reserve-right-rail right-[var(--chat-mode-sidebar-width)]' : 'right-0'}`}
+        ? `compact-density-scope settings-provider-shell settings-ui native-ui-text fixed bottom-0 top-0 z-[100] flex overflow-hidden ${reserveRightRail ? 'right-[var(--chat-mode-sidebar-width)]' : 'right-0'}`
+        : isGitWorkspace
+          ? `compact-density-scope git-workspace-shell settings-ui native-ui-text fixed bottom-0 top-0 z-[94] flex overflow-hidden ${reserveRightRail ? 'right-[var(--chat-mode-sidebar-width)]' : 'right-0'}`
+        : `compact-density-scope settings-ui settings-panel-overlay native-ui-text fixed bottom-0 top-0 z-[90] flex flex-col items-center justify-center bg-black/10 p-[16px] dark:bg-black/45 ${reserveSidebar ? 'settings-panel-overlay--reserve-sidebar' : ''} ${reserveRightRail ? 'settings-panel-overlay--reserve-right-rail' : ''}`}
     >
       <div
         data-testid="settings-panel-card"
         className={isProviderWorkspace
           ? `settings-provider-drawer flex h-full w-full max-w-none flex-col overflow-hidden bg-[var(--color-background)] ${providerClosing ? 'settings-provider-drawer--closing' : ''}`
+          : isGitWorkspace
+            ? 'git-workspace-drawer flex h-full w-full flex-col overflow-hidden border-l border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-window)]'
           : `settings-panel-card flex w-full flex-col overflow-hidden rounded-[14px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-window)] ${isKnowledgeSpace ? 'h-[92vh] max-w-[1480px]' : 'h-[88vh] max-w-[1100px]'}`}
       >
         <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
-          {isSettingsHome ? (
+          {isGitWorkspace ? (
+            <PanelBody key={displayedPanelView} view={displayedPanelView}>
+              <GitWorkspace />
+            </PanelBody>
+          ) : isSettingsHome ? (
             <div key="settings-home" className="settings-panel-content min-h-0 flex flex-1 flex-col overflow-hidden">
               <MemoSettings />
             </div>
@@ -126,7 +143,8 @@ export function SettingsPanel({ visible, reserveRightRail = false }: Props) {
           )}
         </div>
       </div>
-    </section>
+    </section>,
+    document.body,
   )
 }
 
@@ -162,7 +180,7 @@ function PanelHeader({
 }
 
 function PanelBody({ view, children }: { view: SettingsPanelView; children: ReactNode }) {
-  if (view === 'codeGraph') {
+  if (view === 'codeGraph' || view === 'git') {
     return (
       <div className="settings-panel-body settings-panel-content min-h-0 flex flex-1 overflow-hidden bg-[var(--color-background)]">
         {children}
@@ -217,6 +235,8 @@ function renderPanelContent(view: SettingsPanelView): ReactNode {
       return <TokenOptimization />
     case 'codeGraph':
       return <KnowledgeSpace />
+    case 'git':
+      return <GitWorkspace />
     case 'agentMigration':
       return <AgentMigration />
     case 'settings':
@@ -230,6 +250,7 @@ function getPanelLabel(view: SettingsPanelView, t: ReturnType<typeof useTranslat
   if (view === 'scheduled') return t('sidebar.scheduled')
   if (view === 'tokenOptimization') return t('tokenOptimization.title')
   if (view === 'codeGraph') return t('knowledgeSpace.title')
+  if (view === 'git') return t('git.title')
   if (view === 'agentMigration') return t('agentMigration.title')
   return t(`settings.tab.${view}` as never)
 }

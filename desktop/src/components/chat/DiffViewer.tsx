@@ -6,6 +6,10 @@ type Props = {
   filePath: string
   oldString: string
   newString: string
+  additions?: number
+  deletions?: number
+  showHeader?: boolean
+  maxHeightClassName?: string
 }
 
 function inferLanguage(filePath: string): string {
@@ -120,36 +124,48 @@ const diffStyles = {
   },
 }
 
-export function DiffViewer({ filePath, oldString, newString }: Props) {
+export function DiffViewer({
+  filePath,
+  oldString,
+  newString,
+  additions: additionsProp,
+  deletions: deletionsProp,
+  showHeader = true,
+  maxHeightClassName = 'max-h-[400px]',
+}: Props) {
   const language = inferLanguage(filePath)
 
   const oldLines = oldString.split('\n')
   const newLines = newString.split('\n')
-  const additions = newLines.filter((l, i) => l !== (oldLines[i] ?? null)).length
-  const deletions = oldLines.filter((l, i) => l !== (newLines[i] ?? null)).length
+  const additions = additionsProp
+    ?? newLines.filter((l, i) => l !== (oldLines[i] ?? null)).length
+  const deletions = deletionsProp
+    ?? oldLines.filter((l, i) => l !== (newLines[i] ?? null)).length
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-surface-container)]">
+    <div className={`overflow-hidden bg-[var(--color-surface-container)] ${showHeader ? 'rounded-[var(--radius-lg)]' : ''}`}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--color-border-separator)] bg-[var(--color-surface-container)] px-3 py-1.5">
-        <div className="min-w-0">
-          <div className="truncate font-[var(--font-mono)] text-[11px] text-[var(--color-text-tertiary)]">
-            {filePath}
+      {showHeader && (
+        <div className="flex items-center justify-between border-b border-[var(--color-border-separator)] bg-[var(--color-surface-container)] px-3 py-1.5">
+          <div className="min-w-0">
+            <div className="truncate font-[var(--font-mono)] text-[11px] text-[var(--color-text-tertiary)]">
+              {filePath}
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <span className="label-micro text-[var(--color-diff-added-text)]">+{additions}</span>
+              <span className="label-micro text-[var(--color-diff-removed-text)]">-{deletions}</span>
+            </div>
           </div>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="label-micro text-[var(--color-diff-added-text)]">+{additions}</span>
-            <span className="label-micro text-[var(--color-diff-removed-text)]">-{deletions}</span>
-          </div>
+          <CopyButton
+            text={`--- ${filePath}\n+++ ${filePath}`}
+            label="Copy path"
+            className="btn-ghost px-2 py-1 text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-brand)]"
+          />
         </div>
-        <CopyButton
-          text={`--- ${filePath}\n+++ ${filePath}`}
-          label="Copy path"
-          className="btn-ghost px-2 py-1 text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-brand)]"
-        />
-      </div>
+      )}
 
       {/* Diff area */}
-      <div className="max-h-[400px] overflow-auto bg-[var(--color-code-bg)]">
+      <div className={`${maxHeightClassName} overflow-auto bg-[var(--color-code-bg)]`}>
         <ReactDiffViewer
           oldValue={oldString}
           newValue={newString}

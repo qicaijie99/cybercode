@@ -18,6 +18,10 @@ vi.mock('../../hooks/useKeyboardShortcuts', () => ({
   useKeyboardShortcuts: vi.fn(),
 }))
 
+vi.mock('../../services/providerWorkspacePreload', () => ({
+  preloadProviderWorkspace: vi.fn(async () => {}),
+}))
+
 vi.mock('./IconRail', () => ({
   IconRail: () => <div data-testid="icon-rail" />,
 }))
@@ -35,7 +39,19 @@ vi.mock('./TabBar', () => ({
 }))
 
 vi.mock('./SettingsPanel', () => ({
-  SettingsPanel: () => <div data-testid="settings-panel" />,
+  SettingsPanel: ({
+    reserveRightRail,
+    reserveSidebar,
+  }: {
+    reserveRightRail?: boolean
+    reserveSidebar?: boolean
+  }) => (
+    <div
+      data-testid="settings-panel"
+      data-reserve-right-rail={String(Boolean(reserveRightRail))}
+      data-reserve-sidebar={String(Boolean(reserveSidebar))}
+    />
+  ),
 }))
 
 vi.mock('../chat/ChatModeSidebar', () => ({
@@ -135,12 +151,23 @@ describe('AppShell bootstrap', () => {
     render(<AppShell />)
 
     expect(await screen.findByTestId('content-router')).toBeInTheDocument()
+    expect(screen.getByTestId('chat-mode-sidebar')).toBeInTheDocument()
     expect(screen.queryByText('Local server failed to start')).not.toBeInTheDocument()
     await waitFor(() => expect(fetchAll).toHaveBeenCalled())
     expect(console.warn).toHaveBeenCalledWith(
       '[desktop] Failed to load startup settings:',
       expect.any(Error),
     )
+  })
+
+  it('keeps the right tool rail visible without an active conversation', async () => {
+    vi.mocked(initializeDesktopServerUrl).mockResolvedValue('http://127.0.0.1:3456')
+    useTabStore.setState({ tabs: [], activeTabId: null, recentSessionIds: [] })
+
+    render(<AppShell />)
+
+    expect(await screen.findByTestId('content-router')).toBeInTheDocument()
+    expect(screen.getByTestId('chat-mode-sidebar')).toBeInTheDocument()
   })
 
   it('keeps the single boot splash until settings finish loading', async () => {
@@ -217,18 +244,35 @@ describe('AppShell bootstrap', () => {
     render(<AppShell />)
 
     expect(await screen.findByTestId('content-router')).toBeInTheDocument()
-    expect(screen.getByTestId('app-sidebar-shell')).toHaveAttribute('data-state', 'open')
+    const sidebarShell = screen.getByTestId('app-sidebar-shell')
+    const settingsPanel = screen.getByTestId('settings-panel')
+    expect(sidebarShell.closest('.compact-density-scope')).toBeInTheDocument()
+    expect(sidebarShell).toHaveAttribute('data-state', 'open')
+    expect(sidebarShell).toHaveClass('border-r')
+    expect(sidebarShell).not.toHaveClass('border-r-0')
+    expect(settingsPanel).toHaveAttribute('data-reserve-sidebar', 'true')
 
     setCompactViewport(true)
 
     await waitFor(() => expect(useUIStore.getState().sidebarOpen).toBe(false))
-    expect(screen.getByTestId('app-sidebar-shell')).toHaveAttribute('data-state', 'closed')
+    expect(settingsPanel).toHaveAttribute('data-reserve-sidebar', 'false')
+    expect(sidebarShell).toHaveAttribute('data-state', 'closed')
+    expect(sidebarShell).toHaveClass('border-r-0')
+    expect(sidebarShell).not.toHaveClass('border-r')
 
     act(() => useUIStore.getState().setSidebarOpen(true))
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveClass('app-sidebar-backdrop')
-    expect(screen.getByTestId('app-sidebar-shell')).toHaveAttribute('data-state', 'open')
+    expect(sidebarShell).toHaveAttribute('data-state', 'open')
+    expect(sidebarShell).toHaveClass('border-r')
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    expect(useUIStore.getState().sidebarOpen).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Collapse sidebar' })).not.toBeInTheDocument()
+
+    act(() => useUIStore.getState().setSidebarOpen(true))
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+
+    act(() => useUIStore.getState().openSettings('settings'))
     expect(useUIStore.getState().sidebarOpen).toBe(false)
     expect(screen.queryByRole('button', { name: 'Collapse sidebar' })).not.toBeInTheDocument()
   })

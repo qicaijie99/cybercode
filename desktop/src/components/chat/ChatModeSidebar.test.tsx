@@ -19,12 +19,13 @@ describe('ChatModeSidebar', () => {
   it('renders the programming mode action', () => {
     render(<ChatModeSidebar label="编程模式" ariaLabel="聊天侧边栏" />)
 
-    expect(screen.getByLabelText('聊天侧边栏')).toHaveClass('z-[95]')
+    expect(screen.getByLabelText('聊天侧边栏')).toHaveClass('z-[105]')
     expect(screen.getByLabelText('聊天侧边栏')).toHaveClass('w-[var(--chat-mode-sidebar-width)]')
     expect(screen.getByRole('button', { name: '编程模式' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '记忆与进化' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Token 优化' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '知识空间' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '源代码管理' })).toBeInTheDocument()
   })
 
   it.each([
@@ -79,6 +80,20 @@ describe('ChatModeSidebar', () => {
     expect(graphButton).toHaveAttribute('data-active', 'true')
 
     fireEvent.click(graphButton)
+    expect(useUIStore.getState().settingsOpen).toBe(false)
+  })
+
+  it('opens and closes source control from the right rail', () => {
+    render(<ChatModeSidebar label="编程模式" ariaLabel="聊天侧边栏" />)
+
+    const gitButton = screen.getByRole('button', { name: '源代码管理' })
+    fireEvent.click(gitButton)
+
+    expect(useUIStore.getState().settingsOpen).toBe(true)
+    expect(useUIStore.getState().settingsPanelView).toBe('git')
+    expect(gitButton).toHaveAttribute('data-active', 'true')
+
+    fireEvent.click(gitButton)
     expect(useUIStore.getState().settingsOpen).toBe(false)
   })
 })

@@ -358,18 +358,42 @@
     "baseUrl": "https://api.openai.com",
     "apiFormat": "openai_responses",
     "defaultModels": {
-      "main": "gpt-5.5",
-      "haiku": "gpt-5.4-mini",
-      "sonnet": "gpt-5.5",
-      "opus": "gpt-5.5"
+      "main": "gpt-5.6-sol",
+      "haiku": "gpt-5.6-luna",
+      "sonnet": "gpt-5.6-terra",
+      "opus": "gpt-5.6-sol"
     },
     "defaultModelContextWindows": {
       "main": 1050000,
-      "haiku": 400000,
+      "haiku": 1050000,
       "sonnet": 1050000,
       "opus": 1050000
     },
     "modelOptions": [
+      {
+        "id": "gpt-5.6-sol",
+        "label": "GPT-5.6 Sol",
+        "contextWindow": 1050000,
+        "supportsImages": true
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "label": "GPT-5.6 Terra",
+        "contextWindow": 1050000,
+        "supportsImages": true
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "label": "GPT-5.6 Luna",
+        "contextWindow": 1050000,
+        "supportsImages": true
+      },
+      {
+        "id": "gpt-5.6",
+        "label": "GPT-5.6 (latest alias)",
+        "contextWindow": 1050000,
+        "supportsImages": true
+      },
       {
         "id": "gpt-5.5",
         "label": "GPT-5.5",

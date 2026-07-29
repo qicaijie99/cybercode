@@ -19,6 +19,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { ChatModeSidebar } from '../chat/ChatModeSidebar'
 import { useTranslation } from '../../i18n'
+import { preloadProviderWorkspace } from '../../services/providerWorkspacePreload'
 
 const BOOT_SPLASH_REMOVE_DELAY_MS = 16
 
@@ -43,9 +44,6 @@ export function AppShell() {
   const settingsOpen = useUIStore((s) => s.settingsOpen)
   const closeSettings = useUIStore((s) => s.closeSettings)
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const tabs = useTabStore((s) => s.tabs)
-  const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
-  const showChatModeSidebar = activeTab?.type === 'session'
   const t = useTranslation()
   const [ready, setReady] = useState(false)
   const [startupError, setStartupError] = useState<string | null>(null)
@@ -96,6 +94,13 @@ export function AppShell() {
         }
         return
       }
+
+      // Warm the provider workspace as soon as the local server is ready.
+      // This is intentionally not awaited, so startup stays responsive while
+      // provider and agent-node data are usually ready before either view opens.
+      void preloadProviderWorkspace().catch((error) => {
+        console.warn('[desktop] Provider workspace preload failed:', error)
+      })
 
       await Promise.all([
         fetchSettings().catch((error) => {
@@ -155,7 +160,7 @@ export function AppShell() {
 
   return (
     <div
-      className="flex h-screen w-screen overflow-hidden bg-transparent font-sans text-[var(--color-text-primary)]"
+      className="compact-density-scope flex h-screen w-screen overflow-hidden bg-transparent font-sans text-[var(--color-text-primary)]"
       data-compact-layout={compactLayout ? 'true' : 'false'}
     >
       <div className="relative flex h-full w-full overflow-hidden bg-transparent">
@@ -171,7 +176,7 @@ export function AppShell() {
         <div
           data-testid="app-sidebar-shell"
           data-state={sidebarOpen ? 'open' : 'closed'}
-          className={`app-sidebar-shell relative z-20 flex h-full shrink-0 overflow-hidden border-r border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] transition-[width] duration-[var(--motion-sidebar-duration)] ease-[var(--motion-sidebar-easing)] ${sidebarOpen ? 'w-[var(--sidebar-width)]' : 'w-0'}`}
+          className={`app-sidebar-shell relative z-20 flex h-full shrink-0 overflow-hidden bg-[var(--color-surface-sidebar)] transition-[width] duration-[var(--motion-sidebar-duration)] ease-[var(--motion-sidebar-easing)] ${sidebarOpen ? 'w-[var(--sidebar-width)] border-r border-[var(--color-border-separator)]' : 'w-0 border-r-0'}`}
         >
           <Sidebar />
         </div>
@@ -182,10 +187,12 @@ export function AppShell() {
           <TabBar />
           <ContentRouter />
         </main>
-        {showChatModeSidebar && (
-          <ChatModeSidebar label={t('chat.programmingMode')} ariaLabel={t('chat.sideRail')} />
-        )}
-        <SettingsPanel visible={settingsOpen} reserveRightRail={showChatModeSidebar} />
+        <ChatModeSidebar label={t('chat.programmingMode')} ariaLabel={t('chat.sideRail')} />
+        <SettingsPanel
+          visible={settingsOpen}
+          reserveRightRail
+          reserveSidebar={sidebarOpen && !compactLayout}
+        />
         <ToastContainer />
       </div>
     </div>

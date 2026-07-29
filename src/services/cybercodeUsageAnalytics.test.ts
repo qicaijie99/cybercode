@@ -100,6 +100,42 @@ describe('CyberCode anonymous usage analytics', () => {
     expect(fs.existsSync(path.join(configDir, 'cybercode'))).toBe(false)
   })
 
+  test('uses the China calendar day regardless of the machine time zone', async () => {
+    const previousTimeZone = process.env.TZ
+    process.env.TZ = 'America/Los_Angeles'
+    try {
+      const configDir = temporaryConfig()
+      let now = new Date('2026-07-18T15:59:00.000Z')
+      let fetchCalls = 0
+      const options = {
+        configDir,
+        endpoint: 'https://stats.example.test/heartbeat',
+        isDisabled: () => false,
+        now: () => now,
+        fetchImpl: async () => {
+          fetchCalls += 1
+          return new Response(null, { status: 204 })
+        },
+      }
+
+      expect(await reportCybercodeUsage('desktop', options)).toBe('sent')
+      now = new Date('2026-07-18T16:01:00.000Z')
+      expect(await reportCybercodeUsage('desktop', options)).toBe('sent')
+      expect(fetchCalls).toBe(2)
+
+      const state = JSON.parse(
+        fs.readFileSync(
+          path.join(configDir, 'cybercode', 'usage-analytics.json'),
+          'utf8',
+        ),
+      )
+      expect(state.lastReportedDay).toBe('2026-07-19')
+    } finally {
+      if (previousTimeZone === undefined) delete process.env.TZ
+      else process.env.TZ = previousTimeZone
+    }
+  })
+
   test('retries after network failures and rejects insecure remote endpoints', async () => {
     const configDir = temporaryConfig()
     let fetchCalls = 0
@@ -243,6 +279,68 @@ describe('CyberCode anonymous usage analytics', () => {
     expect(new Set(installationIds).size).toBe(1)
   })
 
+  test('repairs a damaged installation ID before reporting', async () => {
+    const configDir = temporaryConfig()
+    const cybercodeDir = path.join(configDir, 'cybercode')
+    const installationIdPath = path.join(cybercodeDir, 'installation-id')
+    fs.mkdirSync(cybercodeDir, { recursive: true })
+    fs.writeFileSync(installationIdPath, 'truncated')
+    let reportedId = ''
+
+    expect(
+      await reportCybercodeUsage('desktop', {
+        configDir,
+        endpoint: 'https://stats.example.test/heartbeat',
+        isDisabled: () => false,
+        getUserId: () => {
+          throw new Error('legacy configuration is unavailable')
+        },
+        fetchImpl: async (_input, init) => {
+          reportedId = (
+            JSON.parse(String(init?.body)) as { installationId: string }
+          ).installationId
+          return new Response(null, { status: 204 })
+        },
+      }),
+    ).toBe('sent')
+
+    expect(reportedId).toMatch(/^[a-f0-9]{64}$/)
+    expect(fs.readFileSync(installationIdPath, 'utf8').trim()).toBe(reportedId)
+    expect(fs.existsSync(`${installationIdPath}.lock`)).toBe(false)
+  })
+
+  test('recovers an abandoned installation ID lock', async () => {
+    const configDir = temporaryConfig()
+    const cybercodeDir = path.join(configDir, 'cybercode')
+    const installationIdPath = path.join(cybercodeDir, 'installation-id')
+    const lockPath = `${installationIdPath}.lock`
+    fs.mkdirSync(lockPath, { recursive: true })
+    const staleTime = new Date(Date.now() - 60_000)
+    fs.utimesSync(lockPath, staleTime, staleTime)
+    let reportedId = ''
+
+    expect(
+      await reportCybercodeUsage('desktop', {
+        configDir,
+        endpoint: 'https://stats.example.test/heartbeat',
+        isDisabled: () => false,
+        getUserId: () => {
+          throw new Error('legacy configuration is unavailable')
+        },
+        fetchImpl: async (_input, init) => {
+          reportedId = (
+            JSON.parse(String(init?.body)) as { installationId: string }
+          ).installationId
+          return new Response(null, { status: 204 })
+        },
+      }),
+    ).toBe('sent')
+
+    expect(reportedId).toMatch(/^[a-f0-9]{64}$/)
+    expect(fs.readFileSync(installationIdPath, 'utf8').trim()).toBe(reportedId)
+    expect(fs.existsSync(lockPath)).toBe(false)
+  })
+
   test('retries startup failures without waiting for the periodic interval', async () => {
     const configDir = temporaryConfig()
     const statePath = path.join(
@@ -269,7 +367,7 @@ describe('CyberCode anonymous usage analytics', () => {
     expect(fetchCalls).toBe(2)
     expect(
       JSON.parse(fs.readFileSync(statePath, 'utf8')),
-    ).toMatchObject({ lastReportedDay: localDay(new Date()) })
+    ).toMatchObject({ lastReportedDay: chinaDay(new Date()) })
   })
 })
 
@@ -287,9 +385,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void>
   }
 }
 
-function localDay(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
+function chinaDay(date: Date): string {
+  const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000)
+  const year = shifted.getUTCFullYear()
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(shifted.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }

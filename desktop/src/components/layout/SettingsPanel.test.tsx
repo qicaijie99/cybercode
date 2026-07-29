@@ -49,6 +49,10 @@ vi.mock('../../pages/KnowledgeSpace', () => ({
   KnowledgeSpace: () => <div data-testid="knowledge-space-panel" />,
 }))
 
+vi.mock('../../pages/GitWorkspace', () => ({
+  GitWorkspace: () => <div data-testid="git-workspace-panel" />,
+}))
+
 describe('SettingsPanel content routing', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'zh' })
@@ -65,20 +69,33 @@ describe('SettingsPanel content routing', () => {
   })
 
   it('renders the normal settings home for the settings button', () => {
-    render(<SettingsPanel visible />)
+    const { container } = render(<SettingsPanel visible />)
 
     expect(screen.getByTestId('settings-home')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-panel')).toHaveClass('z-[90]')
-    expect(screen.getByTestId('settings-panel')).toHaveClass('right-0')
+    const panel = screen.getByTestId('settings-panel')
+    expect(container.contains(panel)).toBe(false)
+    expect(document.body.contains(panel)).toBe(true)
+    expect(panel).toHaveClass('settings-panel-overlay', 'fixed', 'z-[90]')
+    expect(panel).toHaveAttribute('data-reserve-sidebar', 'false')
+    expect(panel).toHaveAttribute('data-reserve-right-rail', 'false')
   })
 
   it('keeps the chat-side rail clickable when opened from a project session', () => {
     render(<SettingsPanel visible reserveRightRail />)
 
-    expect(screen.getByTestId('settings-panel')).toHaveClass('right-[var(--chat-mode-sidebar-width)]')
     expect(screen.getByTestId('settings-panel')).toHaveClass('settings-panel-overlay--reserve-right-rail')
     expect(screen.getByTestId('settings-panel')).toHaveAttribute('data-reserve-right-rail', 'true')
-    expect(screen.getByTestId('settings-panel')).not.toHaveClass('right-0')
+  })
+
+  it('centers floating panels inside the workspace when the sidebar is visible', () => {
+    render(<SettingsPanel visible reserveSidebar reserveRightRail />)
+
+    const panel = screen.getByTestId('settings-panel')
+    expect(panel).toHaveClass(
+      'settings-panel-overlay--reserve-sidebar',
+      'settings-panel-overlay--reserve-right-rail',
+    )
+    expect(panel).toHaveAttribute('data-reserve-sidebar', 'true')
   })
 
   it('renders scheduled tasks inside the same floating panel shell', () => {
@@ -117,7 +134,14 @@ describe('SettingsPanel content routing', () => {
     const panel = screen.getByTestId('settings-panel')
     const card = screen.getByTestId('settings-panel-card')
     expect(panel).toHaveAttribute('data-layout', 'drawer')
-    expect(panel).toHaveClass('settings-provider-shell', 'right-0', 'z-[100]', 'overflow-hidden')
+    expect(panel).toHaveClass(
+      'settings-provider-shell',
+      'fixed',
+      'right-[var(--chat-mode-sidebar-width)]',
+      'z-[100]',
+      'overflow-hidden',
+    )
+    expect(panel).not.toHaveClass('right-0')
     expect(panel).not.toHaveClass('p-[16px]', 'bg-black/10', 'bg-[var(--color-background)]')
     expect(card).toHaveClass('settings-provider-drawer', 'h-full', 'w-full', 'max-w-none')
     expect(card).not.toHaveClass('h-[88vh]', 'max-w-[1100px]', 'rounded-[14px]')
@@ -172,5 +196,20 @@ describe('SettingsPanel content routing', () => {
     expect(screen.queryByTestId('token-optimization-panel')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '关闭' }).closest('header')).toHaveClass('h-[48px]')
     expect(screen.getByTestId('knowledge-space-panel').parentElement).not.toHaveClass('pt-[18px]')
+  })
+
+  it('opens source control as a right-side workspace drawer', () => {
+    useUIStore.setState({ settingsPanelView: 'git' })
+
+    render(<SettingsPanel visible reserveRightRail />)
+
+    const panel = screen.getByTestId('settings-panel')
+    const card = screen.getByTestId('settings-panel-card')
+    expect(panel).toHaveAttribute('aria-label', '本地更改')
+    expect(panel).toHaveAttribute('data-layout', 'workspace-drawer')
+    expect(panel).toHaveClass('git-workspace-shell', 'fixed', 'right-[var(--chat-mode-sidebar-width)]', 'z-[94]')
+    expect(panel).not.toHaveClass('settings-panel-overlay', 'bg-black/10')
+    expect(card).toHaveClass('git-workspace-drawer', 'h-full')
+    expect(screen.getByTestId('git-workspace-panel')).toBeInTheDocument()
   })
 })

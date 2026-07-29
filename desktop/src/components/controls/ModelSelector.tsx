@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronRight, Route } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { Check, ChevronRight, Route, Search, Server } from 'lucide-react'
 import { OFFICIAL_DEFAULT_MODEL_ID, OFFICIAL_MODELS } from '../../constants/modelCatalog'
 import { useTranslation } from '../../i18n'
+import { subscribeToViewportChanges } from '../../lib/viewportEvents'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
@@ -16,8 +18,16 @@ import {
   formatContextWindowInput,
   resolveRoleContextWindows,
 } from '../../utils/modelContextWindows'
+import {
+  isUneditedLegacyRouteProfile,
+  routeBuilderModeFor,
+} from '../../utils/routingRoutes'
 import { ProviderLogo } from '../providers/ProviderLogo'
 import { Icon } from '../shared/Icon'
+import {
+  ProviderModelBrowser,
+  type ProviderModelBrowserGroup,
+} from './ProviderModelBrowser'
 
 type ProviderChoice = {
   providerId: string | null
@@ -42,6 +52,19 @@ type Props = {
   variant?: 'default' | 'pill'
   openSignal?: number
 }
+
+type MenuPosition = {
+  top: number
+  left: number
+  width: number
+  maxHeight: number
+  direction: 'up' | 'down'
+}
+
+const MENU_WIDTH = 360
+const MENU_MAX_HEIGHT = 480
+const MENU_GAP = 10
+const VIEWPORT_MARGIN = 12
 
 function officialChoices(availableModels: ModelInfo[], isDefault: boolean, officialName: string): ProviderChoice {
   return {
@@ -218,6 +241,8 @@ export function ModelSelector({
     runtimeKey ? state.selections[runtimeKey] : undefined,
   )
   const [open, setOpen] = useState(false)
+  const [menuView, setMenuView] = useState<'routes' | 'models'>('models')
+  const [routeQuery, setRouteQuery] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   const requestedProvidersRef = useRef(false)
   const requestedRoutingRef = useRef(false)
@@ -233,6 +258,43 @@ export function ModelSelector({
   const isControlled = value !== undefined
   const isRuntimeControlled = runtimeValue !== undefined
   const isRuntimeScoped = isRuntimeControlled || (!isControlled && runtimeKey !== undefined)
+  const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const updateMenuPosition = useCallback(() => {
+    const trigger = triggerRef.current
+    if (!trigger) return
+
+    const rect = trigger.getBoundingClientRect()
+    const width = Math.min(
+      MENU_WIDTH,
+      Math.max(1, window.innerWidth - VIEWPORT_MARGIN * 2),
+    )
+    const maxLeft = Math.max(
+      VIEWPORT_MARGIN,
+      window.innerWidth - width - VIEWPORT_MARGIN,
+    )
+    const desiredLeft = align === 'left' ? rect.left : rect.right - width
+    const spaceAbove = rect.top - MENU_GAP - VIEWPORT_MARGIN
+    const spaceBelow = window.innerHeight - rect.bottom - MENU_GAP - VIEWPORT_MARGIN
+    const preferredDirection = placement === 'top' ? 'up' : 'down'
+    const preferredSpace = preferredDirection === 'up' ? spaceAbove : spaceBelow
+    const alternateSpace = preferredDirection === 'up' ? spaceBelow : spaceAbove
+    const direction = (
+      preferredSpace >= MENU_MAX_HEIGHT ||
+      preferredSpace >= alternateSpace
+    ) ? preferredDirection : preferredDirection === 'up' ? 'down' : 'up'
+    const availableHeight = direction === 'up' ? spaceAbove : spaceBelow
+
+    setMenuPosition({
+      top: direction === 'up' ? rect.top - MENU_GAP : rect.bottom + MENU_GAP,
+      left: Math.min(Math.max(desiredLeft, VIEWPORT_MARGIN), maxLeft),
+      width,
+      maxHeight: Math.max(48, Math.min(MENU_MAX_HEIGHT, availableHeight)),
+      direction,
+    })
+  }, [align, placement])
 
   useEffect(() => {
     if (!isRuntimeScoped || providersLoading || requestedProvidersRef.current) return
@@ -263,7 +325,9 @@ export function ModelSelector({
   useEffect(() => {
     if (!open) return
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -277,6 +341,16 @@ export function ModelSelector({
       document.removeEventListener('keydown', handleEsc)
     }
   }, [open])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPosition(null)
+      return
+    }
+
+    updateMenuPosition()
+    return subscribeToViewportChanges(updateMenuPosition)
+  }, [open, updateMenuPosition])
 
   useEffect(() => {
     if (openSignal === undefined || disabled) return
@@ -327,6 +401,17 @@ export function ModelSelector({
         profile.enabled && routingDashboard.routeAvailability[profile.id]?.available
       ))
     : []
+  const normalizedRouteQuery = routeQuery.trim().toLocaleLowerCase()
+  const visibleRouteProfiles = availableRouteProfiles.filter((profile) => {
+    if (!normalizedRouteQuery) return true
+    const isLegacyProfile = isUneditedLegacyRouteProfile(profile)
+    const behaviorName = isLegacyProfile
+      ? t(`settings.routing.strategy.${profile.strategy}.name` as never)
+      : t(`settings.routing.mode.${routeBuilderModeFor(profile.strategy)}.name` as never)
+    return [profile.name, profile.description, behaviorName].some((value) => (
+      value?.toLocaleLowerCase().includes(normalizedRouteQuery)
+    ))
+  })
 
   const selectedProviderChoice = activeRuntimeSelection && !activeRouteId
     ? providerChoices.find((choice) => choice.providerId === activeRuntimeSelection.providerId) ?? null
@@ -336,11 +421,13 @@ export function ModelSelector({
   const selectedRuntimeModel = activeRuntimeSelection && activeRouteProfile
     ? {
         id: activeRuntimeSelection.modelId,
-        name: translatedOrFallback(
-          t,
-          `settings.routing.profile.${activeRouteProfile.id}.name`,
-          activeRouteProfile.name,
-        ),
+        name: isUneditedLegacyRouteProfile(activeRouteProfile)
+          ? translatedOrFallback(
+              t,
+              `settings.routing.profile.${activeRouteProfile.id}.name`,
+              activeRouteProfile.name,
+            )
+          : activeRouteProfile.name,
         description: '',
         context: '',
         contextWindow: activeRuntimeSelection.contextWindow,
@@ -367,6 +454,48 @@ export function ModelSelector({
   const buttonProviderChoice = isRuntimeScoped
     ? activeRouteId ? null : selectedProviderChoice ?? defaultProviderChoice
     : defaultProviderChoice
+  const selectedModelGroupId = selectedProviderChoice
+    ? selectedProviderChoice.providerId ?? 'official'
+    : null
+  const runtimeModelGroups = useMemo<ProviderModelBrowserGroup[]>(
+    () => providerChoices.map((choice) => ({
+      id: choice.providerId ?? 'official',
+      name: choice.providerName,
+      logoId: choice.providerLogoId,
+      baseUrl: choice.providerBaseUrl,
+      modelHint: choice.providerModelHint,
+      badge: choice.isDefault ? t('settings.providers.default') : undefined,
+      models: choice.models.map((model) => ({
+        id: model.id,
+        label: model.name,
+        description: model.description,
+        context: model.context,
+      })),
+    })),
+    [providerChoices, t],
+  )
+  const standardModelGroups = useMemo<ProviderModelBrowserGroup[]>(
+    () => [{
+      id: 'official',
+      name: defaultProviderChoice?.providerName ?? t('settings.providers.officialName'),
+      logoId: defaultProviderChoice?.providerLogoId ?? 'official',
+      baseUrl: defaultProviderChoice?.providerBaseUrl,
+      modelHint: defaultProviderChoice?.providerModelHint,
+      models: availableModels.map((model) => ({
+        id: model.id,
+        label: model.name,
+        description: model.description,
+        context: model.context,
+      })),
+    }],
+    [availableModels, defaultProviderChoice, t],
+  )
+
+  useEffect(() => {
+    if (!open) return
+    setMenuView(activeRouteId ? 'routes' : 'models')
+    setRouteQuery('')
+  }, [activeRouteId, open])
 
   const handleRuntimeSelect = (selection: RuntimeSelection) => {
     if (onRuntimeChange) {
@@ -380,34 +509,42 @@ export function ModelSelector({
     setOpen(false)
   }
   const compactClassName = variant === 'pill'
-    ? 'model-selector-compact h-[34px] max-w-[176px] rounded-full border border-[var(--color-border-separator)] bg-[var(--color-surface-container-high)] px-[12px] text-[12px] font-semibold leading-normal text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
-    : 'model-selector-compact h-[34px] max-w-[176px] rounded-full border border-[var(--color-border-separator)] bg-[var(--color-surface-container-high)] px-[12px] text-[12px] font-semibold leading-normal text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
-  const compactLabelClassName = variant === 'pill' ? 'max-w-[118px]' : 'max-w-[118px]'
+    ? 'model-selector-compact h-[34px] max-w-[200px] rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-high)] px-[9px] text-[12px] font-semibold leading-normal text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+    : 'model-selector-compact h-[34px] max-w-[200px] rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-high)] px-[9px] text-[12px] font-semibold leading-normal text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+  const compactLabelClassName = variant === 'pill' ? 'max-w-[128px]' : 'max-w-[128px]'
 
   return (
     <div ref={ref} className="relative">
       <button
+        ref={triggerRef}
         onClick={() => !disabled && setOpen(!open)}
         disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={`${buttonModelLabel}${buttonProviderLabel ? ` · ${buttonProviderLabel}` : ''}`}
         className={`
           flex items-center gap-[8px] transition-colors disabled:cursor-not-allowed disabled:opacity-50
           ${compact
             ? compactClassName
-            : 'max-w-[280px] gap-2 rounded-md bg-[var(--color-surface-container)] border border-[var(--color-border)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
+            : 'min-h-[40px] max-w-[300px] gap-2 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
           }
         `}
       >
-        {!compact && buttonProviderChoice && (
+        {compact && activeRouteId ? (
+          <span className="flex size-[20px] shrink-0 items-center justify-center rounded-[5px] bg-[#1473e6]/10 text-[#1473e6] dark:bg-[#68adff]/12 dark:text-[#68adff]">
+            <Route size={12} strokeWidth={2} />
+          </span>
+        ) : buttonProviderChoice ? (
           <ProviderLogo
             name={buttonProviderChoice.providerName}
             providerId={buttonProviderChoice.providerLogoId}
             baseUrl={buttonProviderChoice.providerBaseUrl}
             modelId={buttonProviderChoice.providerModelHint}
-            size="sm"
+            size={compact ? 'xs' : 'sm'}
             active={open}
             decorative
           />
-        )}
+        ) : null}
         <span className={`min-w-0 truncate ${compact ? compactLabelClassName : 'flex-1 text-[14px] font-semibold text-[var(--color-text-primary)]'}`} style={compact ? undefined : { fontFamily: 'var(--font-headline)' }}>
           {buttonModelLabel}
         </span>
@@ -423,17 +560,29 @@ export function ModelSelector({
         )}
       </button>
 
-      {open && (
-        <div className={`absolute ${align === 'left' ? 'left-0' : 'right-0'} z-[140] w-[320px] overflow-hidden rounded-[24px] border-2 border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] animate-fade-in ${placement === 'bottom' ? 'top-full mt-1.5' : 'bottom-full mb-[10px]'}`}>
-          <div className="max-h-[420px] overflow-y-auto p-[8px]">
-            {/* Section label */}
-            <div className="flex items-center justify-between px-[10px] py-[8px]">
-              <div className="text-[13px] font-semibold leading-tight text-[var(--color-text-primary)]">
+      {open && menuPosition && createPortal(
+        <div
+          ref={menuRef}
+          className="settings-ui native-ui-text fixed z-[9999] flex flex-col overflow-hidden rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] animate-fade-in"
+          style={{
+            left: menuPosition.left,
+            width: menuPosition.width,
+            maxHeight: menuPosition.maxHeight,
+            ...(menuPosition.direction === 'down'
+              ? { top: menuPosition.top }
+              : { bottom: window.innerHeight - menuPosition.top }),
+          }}
+        >
+          <div className="shrink-0 border-b border-[var(--color-border-separator)] p-[10px]">
+            <div className="flex min-h-[28px] items-center justify-between gap-[10px] px-[2px]">
+              <div className="text-[13px] font-bold leading-tight text-[var(--color-text-primary)]">
                 {t('model.configuration')}
               </div>
               {buttonProviderLabel && (
-                <div className="flex max-w-[160px] items-center gap-[6px] rounded-full border border-[var(--color-border-separator)] bg-[var(--color-surface-container)] px-[7px] py-[4px] text-[11px] font-medium text-[var(--color-text-tertiary)]">
-                  {buttonProviderChoice && (
+                <div className="flex max-w-[178px] items-center gap-[6px] rounded-[6px] bg-[var(--color-surface-container-low)] px-[7px] py-[4px] text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                  {activeRouteId ? (
+                    <Route size={12} strokeWidth={2} className="shrink-0" />
+                  ) : buttonProviderChoice ? (
                     <ProviderLogo
                       name={buttonProviderChoice.providerName}
                       providerId={buttonProviderChoice.providerLogoId}
@@ -442,7 +591,7 @@ export function ModelSelector({
                       size="xs"
                       decorative
                     />
-                  )}
+                  ) : null}
                   <span className="min-w-0 truncate">
                     {buttonProviderLabel}
                   </span>
@@ -450,26 +599,76 @@ export function ModelSelector({
               )}
             </div>
 
-            {isRuntimeScoped ? (
-              <div className="space-y-[8px]">
-                {availableRouteProfiles.length > 0 && (
-                  <div className="rounded-[18px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] p-[6px]">
-                    <div className="flex items-center gap-[8px] px-[8px] py-[6px]">
-                      <div className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]">
-                        <Route size={15} strokeWidth={1.9} />
-                      </div>
-                      <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
-                        {t('settings.routing.tab.routing')}
-                      </span>
-                    </div>
+            {isRuntimeScoped && (
+              <div
+                role="tablist"
+                aria-label={t('model.selectionType')}
+                className="mt-[9px] grid grid-cols-2 rounded-[8px] bg-[var(--color-surface-container)] p-[3px]"
+              >
+                {([
+                  ['routes', t('model.routes'), availableRouteProfiles.length, Route],
+                  ['models', t('model.directModels'), runtimeModelGroups.reduce((count, group) => count + group.models.length, 0), Server],
+                ] as const).map(([view, label, count, ViewIcon]) => (
+                  <button
+                    key={view}
+                    type="button"
+                    role="tab"
+                    aria-selected={menuView === view}
+                    onClick={() => setMenuView(view)}
+                    className={`flex h-[34px] min-w-0 items-center justify-center gap-[6px] rounded-[6px] px-[8px] text-[11px] font-semibold transition-[background-color,color,box-shadow] ${
+                      menuView === view
+                        ? 'bg-[var(--color-surface-container-lowest)] text-[var(--color-text-primary)] shadow-[var(--shadow-sm)]'
+                        : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
+                    }`}
+                  >
+                    <ViewIcon size={13} strokeWidth={1.9} />
+                    <span className="truncate">{label}</span>
+                    <span className="text-[9px] text-[var(--color-text-tertiary)]">{count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
-                    <div className="space-y-[3px]">
-                      {availableRouteProfiles.map((profile) => {
-                        const isSelected = activeRouteId === profile.id
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-[10px]">
+            {isRuntimeScoped && menuView === 'routes' ? (
+              <div className="flex flex-col gap-[10px]">
+                <div className="relative">
+                  <Search
+                    size={15}
+                    strokeWidth={1.9}
+                    className="pointer-events-none absolute left-[11px] top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
+                  />
+                  <input
+                    value={routeQuery}
+                    onChange={(event) => setRouteQuery(event.target.value)}
+                    aria-label={t('model.searchRoutes')}
+                    placeholder={t('model.searchRoutes')}
+                    className="h-[38px] w-full rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] pl-[34px] pr-[11px] text-[12px] font-medium text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
+                  />
+                </div>
+                <div className="overflow-hidden rounded-[8px] border border-[var(--color-border-separator)]">
+                  {visibleRouteProfiles.length > 0 ? (
+                    <div className="divide-y divide-[var(--color-border-separator)]">
+                      {visibleRouteProfiles.map((profile) => {
+                        const selected = activeRouteId === profile.id
                         const availability = routingDashboard?.routeAvailability[profile.id]
+                        const legacy = isUneditedLegacyRouteProfile(profile)
+                        const behaviorName = legacy
+                          ? t(`settings.routing.strategy.${profile.strategy}.name` as never)
+                          : t(`settings.routing.mode.${routeBuilderModeFor(profile.strategy)}.name` as never)
+                        const routeName = legacy
+                          ? translatedOrFallback(
+                              t,
+                              `settings.routing.profile.${profile.id}.name`,
+                              profile.name,
+                            )
+                          : profile.name
                         return (
                           <button
-                            key={`route:${profile.id}`}
+                            key={profile.id}
+                            type="button"
+                            aria-pressed={selected}
                             onClick={() => handleRuntimeSelect({
                               kind: 'route',
                               providerId: null,
@@ -477,162 +676,85 @@ export function ModelSelector({
                               modelId: `cybercode-route-${profile.id}`,
                               contextWindow: availability?.contextWindow,
                             })}
-                            className={`group flex min-h-[48px] w-full items-center gap-[10px] rounded-[14px] px-[10px] py-[8px] text-left transition-colors ${
-                              isSelected
+                            className={`group flex min-h-[54px] w-full items-center gap-[10px] px-[11px] py-[8px] text-left transition-colors ${
+                              selected
                                 ? 'bg-[var(--color-surface-selected)]'
                                 : 'hover:bg-[var(--color-surface-hover)]'
                             }`}
                           >
-                            <div className="min-w-0 flex-1">
-                              <div className={`truncate text-[13px] ${
-                                isSelected
-                                  ? 'font-semibold text-[var(--color-text-primary)]'
-                                  : 'font-medium text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]'
-                              }`}>
-                                {translatedOrFallback(
-                                  t,
-                                  `settings.routing.profile.${profile.id}.name`,
-                                  profile.name,
-                                )}
-                              </div>
-                              <div className="mt-[2px] truncate text-[11px] font-medium text-[var(--color-text-tertiary)]">
-                                {t(`settings.routing.strategy.${profile.strategy}.name` as never)} · {t('settings.routing.candidates', { count: availability?.candidateCount ?? 0 })}
-                              </div>
-                            </div>
-                            {isSelected && (
-                              <div className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[var(--color-text-primary)] text-[var(--color-background)]">
-                                <Check size={13} strokeWidth={2.4} />
-                              </div>
-                            )}
+                            <span className="flex size-[30px] shrink-0 items-center justify-center rounded-[7px] bg-[#1473e6]/10 text-[#1473e6] dark:bg-[#68adff]/12 dark:text-[#68adff]">
+                              <Route size={15} strokeWidth={1.9} />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+                                {routeName}
+                              </span>
+                              <span className="mt-[2px] block truncate text-[10px] text-[var(--color-text-tertiary)]">
+                                {behaviorName} · {t('settings.routing.candidates', { count: availability?.candidateCount ?? 0 })}
+                              </span>
+                            </span>
+                            <span className={`flex size-[20px] shrink-0 items-center justify-center rounded-full border ${
+                              selected
+                                ? 'border-[#1473e6] bg-[#1473e6] text-white dark:border-[#68adff] dark:bg-[#68adff] dark:text-[#111315]'
+                                : 'border-[var(--color-border)] text-transparent group-hover:border-[var(--color-border-focus)]'
+                            }`}>
+                              <Check size={11} strokeWidth={2.5} />
+                            </span>
                           </button>
                         )
                       })}
                     </div>
-                  </div>
-                )}
-                {providerChoices.map((choice) => (
-                  <div key={choice.providerId ?? 'official'} className="rounded-[18px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] p-[6px]">
-                    <div className="flex items-center gap-[8px] px-[8px] py-[6px]">
-                      <ProviderLogo
-                        name={choice.providerName}
-                        providerId={choice.providerLogoId}
-                        baseUrl={choice.providerBaseUrl}
-                        modelId={choice.providerModelHint}
-                        size="sm"
-                        active={choice.isDefault}
-                        decorative
-                      />
-                      <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
-                        {choice.providerName}
-                      </span>
-                      {choice.isDefault && (
-                        <span className="shrink-0 rounded-full bg-[var(--color-surface-selected)] px-[8px] py-[3px] text-[10px] font-semibold text-[var(--color-text-secondary)]">
-                          {t('settings.providers.default')}
-                        </span>
-                      )}
+                  ) : (
+                    <div className="flex min-h-[112px] flex-col items-center justify-center gap-[7px] px-[20px] py-[24px] text-center">
+                      <Search size={17} strokeWidth={1.7} className="text-[var(--color-text-tertiary)]" />
+                      <p className="text-[11px] leading-[17px] text-[var(--color-text-tertiary)]">
+                        {t('model.noRoutes')}
+                      </p>
                     </div>
-
-                    <div className="space-y-[3px]">
-                      {choice.models.map((model) => {
-                        const isSelected =
-                          !activeRouteId &&
-                          activeRuntimeSelection?.providerId === choice.providerId &&
-                          activeRuntimeSelection.modelId === model.id
-                        return (
-                          <button
-                            key={`${choice.providerId ?? 'official'}:${model.id}`}
-                            onClick={() => handleRuntimeSelect({ providerId: choice.providerId, modelId: model.id, contextWindow: model.contextWindow })}
-                            className={`
-                              group flex min-h-[48px] w-full items-center gap-[10px] rounded-[14px] px-[10px] py-[8px] text-left transition-colors
-                              ${isSelected
-                                ? 'bg-[var(--color-surface-selected)]'
-                                : 'hover:bg-[var(--color-surface-hover)]'
-                              }
-                            `}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className={`truncate text-[13px] ${isSelected ? 'font-semibold text-[var(--color-text-primary)]' : 'font-medium text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]'}`}>
-                                {model.name}
-                              </div>
-                              {model.description && (
-                                <div className="mt-[2px] flex items-center gap-[6px] text-[11px] font-medium text-[var(--color-text-tertiary)]">
-                                  <span className="min-w-0 truncate">{model.description}</span>
-                                  {model.context && (
-                                    <span className="shrink-0 rounded-full border border-[var(--color-border-separator)] px-[6px] py-[1px] text-[10px] uppercase leading-4">
-                                      {model.context}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            {isSelected && (
-                              <div className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[var(--color-text-primary)] text-[var(--color-background)]">
-                                <Check size={13} strokeWidth={2.4} />
-                              </div>
-                            )}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
+                  )}
+                </div>
               </div>
             ) : (
-              <div className="space-y-[3px]">
-                {availableModels.map((model) => {
-                  const isSelected = model.id === selectedModel?.id
-                  return (
-                    <button
-                      key={model.id}
-                      onClick={() => {
-                        if (isControlled) {
-                          onChange?.(model.id)
-                        } else {
-                          void setModel(model.id)
-                        }
-                        setOpen(false)
-                      }}
-                      className={`
-                        group flex min-h-[48px] w-full items-center gap-[10px] rounded-[14px] px-[10px] py-[8px] text-left transition-colors
-                        ${isSelected
-                          ? 'bg-[var(--color-surface-selected)]'
-                          : 'hover:bg-[var(--color-surface-hover)]'
-                        }
-                      `}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className={`truncate text-[13px] ${isSelected ? 'font-semibold text-[var(--color-text-primary)]' : 'font-medium text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]'}`}>
-                          {model.name}
-                        </div>
-                        {model.description && (
-                          <div className="mt-[2px] flex items-center gap-[6px] text-[11px] font-medium text-[var(--color-text-tertiary)]">
-                            <span className="min-w-0 truncate">{model.description}</span>
-                            {model.context && (
-                              <span className="shrink-0 rounded-full border border-[var(--color-border-separator)] px-[6px] py-[1px] text-[10px] uppercase leading-4">
-                                {model.context}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      {isSelected && (
-                        <div className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[var(--color-text-primary)] text-[var(--color-background)]">
-                          <Check size={13} strokeWidth={2.4} />
-                        </div>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
+              <ProviderModelBrowser
+                groups={isRuntimeScoped ? runtimeModelGroups : standardModelGroups}
+                selectedGroupId={isRuntimeScoped ? selectedModelGroupId : 'official'}
+                selectedModelId={isRuntimeScoped
+                  ? activeRouteId ? undefined : activeRuntimeSelection?.modelId
+                  : selectedModel?.id}
+                searchLabel={t('model.searchModels')}
+                noMatchesLabel={t('model.noMatches')}
+                modelCountLabel={(count) => t('model.modelCount', { count })}
+                resetKey={`${open}:${menuView}`}
+                onSelect={(group, model) => {
+                  if (isRuntimeScoped) {
+                    const choice = providerChoices.find((item) => (
+                      (item.providerId ?? 'official') === group.id
+                    ))
+                    const sourceModel = choice?.models.find((item) => item.id === model.id)
+                    handleRuntimeSelect({
+                      providerId: choice?.providerId ?? null,
+                      modelId: model.id,
+                      contextWindow: sourceModel?.contextWindow,
+                    })
+                    return
+                  }
+                  if (isControlled) {
+                    onChange?.(model.id)
+                  } else {
+                    void setModel(model.id)
+                  }
+                  setOpen(false)
+                }}
+              />
             )}
           </div>
 
           {!isControlled && !isRuntimeScoped && (
-            <div className="border-t border-[var(--color-border-separator)] px-2.5 py-3">
-              <div className="px-2.5 mb-2 text-[13px] font-semibold text-[var(--color-text-primary)]">
+            <div className="shrink-0 border-t border-[var(--color-border-separator)] px-[10px] py-[9px]">
+              <div className="mb-[7px] px-[2px] text-[11px] font-semibold text-[var(--color-text-secondary)]">
                 {t('model.effort')}
               </div>
-              <div className="flex gap-1">
+              <div className="grid grid-cols-4 rounded-[7px] bg-[var(--color-surface-container)] p-[3px]">
                 {EFFORT_OPTIONS.map((opt) => {
                   const isSelected = opt.value === effortLevel
                   return (
@@ -642,13 +764,11 @@ export function ModelSelector({
                         void setEffort(opt.value)
                         setOpen(false)
                       }}
-                      className={`
-                        flex-1 rounded-lg py-1.5 text-center text-[11px] font-medium transition-colors
-                        ${isSelected
-                          ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)] font-semibold'
-                          : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-secondary)]'
-                        }
-                      `}
+                      className={`h-[30px] rounded-[5px] px-[4px] text-center text-[10px] font-medium transition-[background-color,color,box-shadow] ${
+                        isSelected
+                          ? 'bg-[var(--color-surface-container-lowest)] font-semibold text-[var(--color-text-primary)] shadow-[var(--shadow-sm)]'
+                          : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'
+                      }`}
                     >
                       {opt.label}
                     </button>
@@ -657,7 +777,8 @@ export function ModelSelector({
               </div>
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

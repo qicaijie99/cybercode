@@ -40,7 +40,9 @@ Slash commands are commands that start with `/`. They are not Windows backslashe
 | `/statusline` | `[instructions]` | Configure status line output. |
 | `/insights` | - | Generate a report about your CyberCode sessions. |
 | `/model` | `[model]` | Switch the model for the current session. |
-| `/provider` | `/providers` | Configure or switch providers; OpenAI-compatible APIs use the built-in protocol bridge. |
+| `/provider` | `/providers`; `status`, `sync`, `auto-sync on|off` | Configure or switch providers, inspect status, and synchronize compatible `/models` catalogs. OpenAI-compatible APIs use the built-in bridge. |
+| `/routing` | `/route`; `status`, `create`, `use`, `strategy`, `reset-health` | Create, inspect, and activate smart routes or reset route health. |
+| `/node` | `/agent-node`, `/gateway`; `status`, `start`, `stop`, `rotate`, `revoke` | Run the built-in agent node and manage its independent key, target scope, and request limit. |
 | `/effort` | `low`, `medium`, `high`, `max`, `auto` | Adjust model reasoning effort. |
 | `/fast` | `on`, `off` | Toggle fast mode when available. |
 | `/config` | `/settings` | Open the configuration panel. |

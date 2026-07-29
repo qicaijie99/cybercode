@@ -8,6 +8,10 @@ import {
   providerOAuthService,
   type ProviderOAuthId,
 } from '../services/providerOAuthService.js'
+import {
+  supportsProviderModelSync,
+  syncProviderModels,
+} from '../services/providerModelSyncService.js'
 
 const providerService = new ProviderService()
 const PollSchema = z.object({ sessionId: z.string().uuid() })
@@ -46,6 +50,22 @@ function parseProviderId(value: string | undefined): ProviderOAuthId {
     return value as ProviderOAuthId
   }
   throw ApiError.badRequest(`Unsupported OAuth provider: ${value ?? ''}`)
+}
+
+async function upsertConnectedProvider(providerId: ProviderOAuthId) {
+  const definition = OAUTH_PROVIDER_RUNTIME_DEFINITIONS[providerId]
+  const provider = await providerService.upsertOAuthProvider(providerId, definition)
+  if (!provider.modelSync?.enabled || !supportsProviderModelSync(provider)) return provider
+
+  try {
+    return (await syncProviderModels(provider.id, { force: true })).provider
+  } catch (error) {
+    console.warn(
+      `[provider-oauth] Initial ${provider.name} model synchronization failed:`,
+      error instanceof Error ? error.message : error,
+    )
+    return provider
+  }
 }
 
 export async function handleProviderOAuthApi(
@@ -94,8 +114,7 @@ export async function handleProviderOAuthApi(
       if (!parsed.success) throw ApiError.badRequest('sessionId is required')
       const result = await providerOAuthService.poll(providerId, parsed.data.sessionId)
       if (result.status === 'connected') {
-        const definition = OAUTH_PROVIDER_RUNTIME_DEFINITIONS[providerId]
-        const provider = await providerService.upsertOAuthProvider(providerId, definition)
+        const provider = await upsertConnectedProvider(providerId)
         return Response.json({ ...result, providerId: provider.id })
       }
       return Response.json(result)
@@ -114,8 +133,7 @@ export async function handleProviderOAuthApi(
         input,
         { autoDetect },
       )
-      const definition = OAUTH_PROVIDER_RUNTIME_DEFINITIONS[providerId]
-      const provider = await providerService.upsertOAuthProvider(providerId, definition)
+      const provider = await upsertConnectedProvider(providerId)
       return Response.json({ connection, providerId: provider.id })
     }
 

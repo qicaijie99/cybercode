@@ -13,6 +13,9 @@ const REQUEST_TIMEOUT_MS = 2500
 const STATE_VERSION = 1
 const STARTUP_RETRY_DELAYS_MS = [5_000, 30_000, 5 * 60_000] as const
 const INSTALLATION_ID_PATTERN = /^[a-f0-9]{64}$/
+const INSTALLATION_ID_LOCK_RETRY_DELAYS_MS = [5, 10, 20, 40, 80, 160] as const
+const INSTALLATION_ID_LOCK_STALE_MS = 30_000
+const CHINA_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000
 
 export type CybercodeUsageSurface = 'cli' | 'desktop'
 export type CybercodeUsageReportResult = 'sent' | 'skipped' | 'failed'
@@ -115,7 +118,7 @@ async function reportCybercodeUsageInternal(
   if (disabled) return 'skipped'
 
   const now = options.now?.() ?? new Date()
-  const reportDay = localDay(now)
+  const reportDay = chinaDay(now)
   const configDir = options.configDir ?? getClaudeConfigHomeDir()
   const statePath = path.join(
     configDir,
@@ -229,10 +232,11 @@ function resolveEndpoint(configured?: string): string | null {
   }
 }
 
-function localDay(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
+function chinaDay(date: Date): string {
+  const shifted = new Date(date.getTime() + CHINA_TIMEZONE_OFFSET_MS)
+  const year = shifted.getUTCFullYear()
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(shifted.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
 
@@ -259,28 +263,83 @@ async function getOrCreateInstallationId(
 
   try {
     await fs.mkdir(path.dirname(installationIdPath), { recursive: true })
-    const temporaryPath = `${installationIdPath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+    const lockPath = `${installationIdPath}.lock`
+    const acquiredLock = await acquireInstallationIdLock(
+      installationIdPath,
+      lockPath,
+    )
+    if (!acquiredLock) {
+      return (await readInstallationId(installationIdPath))
+        ?? (legacyUserId ? candidate : null)
+    }
+
     try {
-      await fs.writeFile(temporaryPath, `${candidate}\n`, {
-        encoding: 'utf8',
-        flag: 'wx',
-        mode: 0o600,
-      })
-      await fs.link(temporaryPath, installationIdPath)
-      return candidate
-    } catch (error) {
-      if (isAlreadyExistsError(error)) {
-        return await readInstallationId(installationIdPath)
+      const concurrentlyCreated = await readInstallationId(installationIdPath)
+      if (concurrentlyCreated) return concurrentlyCreated
+
+      // The lock lets us replace a truncated or otherwise invalid ID without
+      // allowing desktop and CLI startup to choose different identities.
+      await fs.rm(installationIdPath, { force: true, recursive: true })
+      const temporaryPath =
+        `${installationIdPath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+      try {
+        await fs.writeFile(temporaryPath, `${candidate}\n`, {
+          encoding: 'utf8',
+          flag: 'wx',
+          mode: 0o600,
+        })
+        await fs.rename(temporaryPath, installationIdPath)
+        return candidate
+      } finally {
+        await fs.rm(temporaryPath, { force: true }).catch(() => {})
       }
-      throw error
     } finally {
-      await fs.rm(temporaryPath, { force: true })
+      await fs.rm(lockPath, { force: true, recursive: true }).catch(() => {})
     }
   } catch {
     // A migrated ID is deterministic even when the config directory is
     // read-only. A newly generated ID must be persisted before it is sent,
     // otherwise every launch could be counted as a different installation.
     return legacyUserId ? candidate : null
+  }
+}
+
+async function acquireInstallationIdLock(
+  installationIdPath: string,
+  lockPath: string,
+): Promise<boolean> {
+  for (const delayMs of INSTALLATION_ID_LOCK_RETRY_DELAYS_MS) {
+    try {
+      await fs.mkdir(lockPath)
+      return true
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) throw error
+    }
+
+    if (await readInstallationId(installationIdPath)) return false
+    await new Promise(resolve => setTimeout(resolve, delayMs))
+  }
+
+  try {
+    const lock = await fs.stat(lockPath)
+    if (Date.now() - lock.mtimeMs <= INSTALLATION_ID_LOCK_STALE_MS) {
+      return false
+    }
+    await fs.rm(lockPath, { force: true, recursive: true })
+    await fs.mkdir(lockPath)
+    return true
+  } catch (error) {
+    if (isAlreadyExistsError(error)) return false
+    if (isMissingPathError(error)) {
+      try {
+        await fs.mkdir(lockPath)
+        return true
+      } catch (retryError) {
+        if (isAlreadyExistsError(retryError)) return false
+        throw retryError
+      }
+    }
+    throw error
   }
 }
 
@@ -331,6 +390,14 @@ function isAlreadyExistsError(error: unknown): boolean {
     error instanceof Error &&
     'code' in error &&
     (error as NodeJS.ErrnoException).code === 'EEXIST'
+  )
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
   )
 }
 

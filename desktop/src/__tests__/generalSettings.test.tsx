@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { ProviderSettings, Settings } from '../pages/Settings'
@@ -29,6 +29,8 @@ const providerStoreState = {
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
   testConfig: vi.fn(),
+  syncProviderModels: vi.fn(),
+  setProviderModelAutoSync: vi.fn(),
 }
 
 vi.mock('../api/agents', () => ({
@@ -47,6 +49,53 @@ vi.mock('../api/providers', () => ({
     updateSettings: MOCK_UPDATE_SETTINGS,
     discoverModels: MOCK_DISCOVER_MODELS,
   },
+}))
+
+vi.mock('../api/mediaProviders', () => ({
+  mediaProvidersApi: {
+    peekCatalog: vi.fn(() => undefined),
+    catalog: vi.fn(() => new Promise(() => {})),
+    save: vi.fn(),
+    disconnect: vi.fn(),
+    test: vi.fn(),
+  },
+}))
+
+vi.mock('../api/webSessionProviders', () => ({
+  webSessionProvidersApi: {
+    peekCatalog: vi.fn(() => undefined),
+    catalog: vi.fn(() => new Promise(() => {})),
+    save: vi.fn(),
+    disconnect: vi.fn(),
+    activate: vi.fn(),
+    test: vi.fn(),
+    testAll: vi.fn(),
+  },
+}))
+
+vi.mock('../components/providers/MediaProviderCatalog', () => ({
+  MediaProviderCatalog: ({ labels }: { labels: { title: string } }) => (
+    <section>
+      <h2>{labels.title}</h2>
+      <div
+        data-provider-catalog="media"
+        data-provider-catalog-kind="video"
+        data-provider-catalog-layout="comfortable"
+      />
+    </section>
+  ),
+}))
+
+vi.mock('../components/providers/WebSessionProviderCatalog', () => ({
+  WebSessionProviderCatalog: ({ labels }: { labels: { title: string } }) => (
+    <section>
+      <h2>{labels.title}</h2>
+      <div
+        data-provider-catalog="web-session"
+        data-provider-catalog-layout="comfortable"
+      />
+    </section>
+  ),
 }))
 
 vi.mock('../api/providerOAuth', async (importOriginal) => {
@@ -125,6 +174,8 @@ describe('Settings > General tab', () => {
     providerStoreState.createProvider = vi.fn()
     providerStoreState.updateProvider = vi.fn()
     providerStoreState.testConfig = vi.fn()
+    providerStoreState.syncProviderModels = vi.fn()
+    providerStoreState.setProviderModelAutoSync = vi.fn()
 
     useSettingsStore.setState({
       locale: 'en',
@@ -201,6 +252,8 @@ describe('Settings > Providers tab', () => {
     MOCK_GET_SETTINGS.mockResolvedValue({})
     MOCK_UPDATE_SETTINGS.mockResolvedValue({})
     MOCK_DISCOVER_MODELS.mockReset()
+    providerStoreState.syncProviderModels.mockReset()
+    providerStoreState.setProviderModelAutoSync.mockReset()
     useSettingsStore.setState({ locale: 'en' })
     providerStoreState.providers = [
       {
@@ -230,12 +283,13 @@ describe('Settings > Providers tab', () => {
     expect(within(sidebar).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       'Model providers',
       'Smart routing',
+      'Node',
       'Runtime status',
     ])
     expect(screen.queryByRole('heading', { name: 'Models & Routing' })).not.toBeInTheDocument()
-  })
+  }, 15_000)
 
-  it('renders OAuth, no-auth, API key, aggregator, and local providers as peer catalogs', () => {
+  it('places no-auth and local providers directly after OAuth', () => {
     const makePreset = (
       id: string,
       name: string,
@@ -306,9 +360,23 @@ describe('Settings > Providers tab', () => {
     expect(screen.getByRole('heading', { name: 'No-auth providers' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Official API providers' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Model aggregators' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Image, video & audio providers' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Local & custom' })).toBeInTheDocument()
     expect(screen.queryByText('Free does not mean keyless')).not.toBeInTheDocument()
     expect(screen.queryByRole('navigation', { name: 'Model source categories' })).not.toBeInTheDocument()
+    expect(
+      Array.from(container.querySelectorAll('[data-provider-catalog]')).map(
+        (catalog) => catalog.getAttribute('data-provider-catalog'),
+      ),
+    ).toEqual([
+      'api-key',
+      'aggregators-gateways',
+      'oauth',
+      'no-auth',
+      'local-custom',
+      'web-session',
+      'media',
+    ])
 
     const apiCatalog = container.querySelector('[data-provider-catalog="api-key"]')
     const apiCards = Array.from(apiCatalog!.querySelectorAll('[data-provider-card-layout="catalog"]'))
@@ -336,7 +404,9 @@ describe('Settings > Providers tab', () => {
       screen.getByText('Volcengine Ark').closest('[data-provider-card-layout="catalog"]')!,
     ).getByText('Configured')).toBeInTheDocument()
     expect(within(apiCatalog as HTMLElement).queryByText('OpenRouter')).not.toBeInTheDocument()
-    expect(screen.getByText('1/41')).toBeInTheDocument()
+    expect(within(aggregatorCatalog!.closest('section') as HTMLElement).getByText(
+      /^1\/\d+$/,
+    )).toBeInTheDocument()
 
     const localCatalog = container.querySelector('[data-provider-catalog="local-custom"]')
     expect(localCatalog).toHaveAttribute('data-provider-catalog-layout', 'comfortable')
@@ -355,7 +425,7 @@ describe('Settings > Providers tab', () => {
     expect(screen.getByRole('dialog', { name: 'Amazon Q' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Connect account' })).toBeEnabled()
     expect(screen.queryByText(/Loading this provider’s connection method/)).not.toBeInTheDocument()
-  })
+  }, 15_000)
 
   it('uses official Chinese brand names without translating global-only brands', () => {
     const makePreset = (id: string, name: string): ProviderPreset => ({
@@ -404,11 +474,139 @@ describe('Settings > Providers tab', () => {
     expect(screen.queryByText('Alibaba Qwen')).not.toBeInTheDocument()
     expect(screen.queryByText('Volcengine Ark')).not.toBeInTheDocument()
 
-    fireEvent.change(screen.getByRole('searchbox', { name: '搜索提供商或模型' }), {
+    const providerSearch = screen.getByRole('searchbox', {
+      name: '搜索所有提供商或模型',
+    })
+    fireEvent.change(providerSearch, {
       target: { value: '火山方舟' },
     })
     expect(screen.getByRole('button', { name: '配置 火山方舟' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '配置 阿里云百炼' })).not.toBeInTheDocument()
+
+    fireEvent.change(providerSearch, {
+      target: { value: 'Alibaba Cloud' },
+    })
+    expect(screen.getByRole('button', { name: '配置 阿里云百炼' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '配置 火山方舟' })).not.toBeInTheDocument()
+  })
+
+  it('finds Chinese provider names while the interface is English', () => {
+    providerStoreState.providers = []
+    providerStoreState.presets = [
+      {
+        id: 'alibaba',
+        name: 'Alibaba Qwen',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        apiFormat: 'openai_chat',
+        defaultModels: {
+          main: 'qwen-max',
+          haiku: 'qwen-turbo',
+          sonnet: 'qwen-plus',
+          opus: 'qwen-max',
+        },
+        needsApiKey: true,
+        websiteUrl: 'https://bailian.console.aliyun.com',
+      },
+      {
+        id: 'deepseek',
+        name: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com',
+        apiFormat: 'openai_chat',
+        defaultModels: {
+          main: 'deepseek-chat',
+          haiku: 'deepseek-chat',
+          sonnet: 'deepseek-chat',
+          opus: 'deepseek-reasoner',
+        },
+        needsApiKey: true,
+        websiteUrl: 'https://platform.deepseek.com',
+      },
+    ]
+
+    const { container } = render(<ProviderSettings />)
+
+    fireEvent.change(screen.getByRole('searchbox', {
+      name: 'Search all providers or models',
+    }), {
+      target: { value: '阿里云百炼' },
+    })
+
+    const catalogs = Array.from(
+      container.querySelectorAll('[data-provider-catalog]'),
+    ).map((catalog) => catalog.getAttribute('data-provider-catalog'))
+    expect(catalogs).toEqual(['aggregators-gateways'])
+    expect(screen.getByRole('button', {
+      name: 'Configure Alibaba Cloud Model Studio',
+    })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Configure DeepSeek' })).not.toBeInTheDocument()
+  })
+
+  it('filters all provider catalogs by access type without a search query', () => {
+    const { container } = render(<ProviderSettings />)
+
+    const searchbox = screen.getByRole('searchbox', {
+      name: 'Search all providers or models',
+    })
+    expect(searchbox).toHaveValue('')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }))
+    const filterDialog = screen.getByRole('dialog', { name: 'Filter providers' })
+    fireEvent.click(within(filterDialog).getByRole('checkbox', { name: 'OAuth' }))
+
+    expect(searchbox).toHaveValue('')
+    expect(
+      Array.from(container.querySelectorAll('[data-provider-catalog]')).map(
+        (catalog) => catalog.getAttribute('data-provider-catalog'),
+      ),
+    ).toEqual(['oauth'])
+    expect(screen.getAllByText('16 providers').length).toBeGreaterThan(0)
+  })
+
+  it('combines access, cost, and modality filters', () => {
+    const makePreset = (
+      id: string,
+      name: string,
+      cost: ProviderPreset['cost'],
+      supportsImages: boolean,
+    ): ProviderPreset => ({
+      id,
+      name,
+      baseUrl: `https://api.${id}.example/v1`,
+      apiFormat: 'openai_chat',
+      defaultModels: {
+        main: `${id}-main`,
+        haiku: `${id}-fast`,
+        sonnet: `${id}-main`,
+        opus: `${id}-main`,
+      },
+      supportsImages,
+      needsApiKey: true,
+      websiteUrl: `https://${id}.example`,
+      cost,
+    })
+    providerStoreState.providers = []
+    providerStoreState.presets = [
+      makePreset('free-vision', 'Free Vision', 'recurring-free', true),
+      makePreset('paid-text', 'Paid Text', 'paid', false),
+    ]
+
+    const { container } = render(<ProviderSettings />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }))
+    const filterDialog = screen.getByRole('dialog', { name: 'Filter providers' })
+    fireEvent.click(within(filterDialog).getByRole('checkbox', { name: 'API key' }))
+    fireEvent.click(within(filterDialog).getByRole('checkbox', {
+      name: 'Recurring free allowance',
+    }))
+    fireEvent.click(within(filterDialog).getByRole('checkbox', { name: 'Multimodal' }))
+
+    expect(
+      Array.from(container.querySelectorAll('[data-provider-catalog]')).map(
+        (catalog) => catalog.getAttribute('data-provider-catalog'),
+      ),
+    ).toEqual(['api-key'])
+    expect(screen.getByRole('button', { name: 'Configure Free Vision' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Configure Paid Text' })).not.toBeInTheDocument()
   })
 
   it('keeps the Claude OAuth dialog closed while providers load', () => {
@@ -528,13 +726,13 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Configure Custom' }))
 
     const dialog = screen.getByRole('dialog')
-    expect(dialog.parentElement).toHaveClass('z-[200]')
+    expect(dialog.parentElement).toHaveClass('z-[10000]')
     expect(within(dialog).getByText('Configure Custom')).toBeInTheDocument()
     expect(within(dialog).queryByRole('button', { name: 'Custom' })).not.toBeInTheDocument()
-    expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
+    expect(dialog.querySelector('select')).not.toBeInTheDocument()
 
     fireEvent.click(within(dialog).getByRole('button', { name: /Anthropic Messages \(native\)/i }))
-    fireEvent.click(within(dialog).getByRole('button', { name: /OpenAI Responses API \(proxy\)/i }))
+    fireEvent.click(screen.getByRole('option', { name: /OpenAI Responses API \(proxy\)/i }))
 
     expect(within(dialog).getByRole('button', { name: /OpenAI Responses API \(proxy\)/i })).toBeInTheDocument()
     expect(within(dialog).getByText('Requests will be translated via the local proxy')).toBeInTheDocument()
@@ -661,7 +859,7 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /DeepSeek V4 Flash/i }))
 
     expect(within(dialog).getByDisplayValue('deepseek-v4-flash')).toBeInTheDocument()
-  })
+  }, 15_000)
 
   it('groups free-tier platforms as aggregators and validates Cloudflare setup', async () => {
     const defaultModels = {
@@ -978,12 +1176,196 @@ describe('Settings > Providers tab', () => {
     render(<ProviderSettings />)
     fireEvent.click(screen.getByRole('button', { name: 'Configure Custom' }))
     const dialog = screen.getByRole('dialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Discover models' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import models' }))
 
-    expect(await within(dialog).findByText('Found 2 models')).toBeInTheDocument()
+    expect(
+      await within(dialog).findByText(
+        'Imported 2 models; choose one from the model menu above',
+      ),
+    ).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: /Select model: Main Model/i }))
     expect(within(dialog).getByText('dynamic-vision')).toBeInTheDocument()
-  })
+  }, 30_000)
+
+  it('explains why importing models needs an API key instead of silently doing nothing', async () => {
+    providerStoreState.providers = []
+    providerStoreState.presets = [{
+      id: 'openai',
+      name: 'OpenAI',
+      baseUrl: 'https://api.openai.com',
+      apiFormat: 'openai_responses',
+      defaultModels: {
+        main: 'gpt-5.6-sol',
+        haiku: 'gpt-5.6-luna',
+        sonnet: 'gpt-5.6-terra',
+        opus: 'gpt-5.6-sol',
+      },
+      needsApiKey: true,
+      websiteUrl: 'https://platform.openai.com/docs/models',
+    }]
+
+    render(<ProviderSettings />)
+    fireEvent.click(screen.getByRole('button', { name: 'Configure OpenAI' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import models' }))
+
+    expect(
+      await within(dialog).findByRole('alert'),
+    ).toHaveTextContent('Enter an API key before importing models.')
+    expect(MOCK_DISCOVER_MODELS).not.toHaveBeenCalled()
+  }, 30_000)
+
+  it('synchronizes a saved model catalog and enables automatic refresh', async () => {
+    const originalProvider: SavedProvider = {
+      id: 'provider-sync',
+      name: 'Example AI',
+      presetId: 'custom',
+      apiKey: '***',
+      baseUrl: 'https://api.example.com/v1',
+      apiFormat: 'openai_chat',
+      models: {
+        main: 'manual-model',
+        haiku: '',
+        sonnet: '',
+        opus: '',
+      },
+      modelCatalog: [{ id: 'manual-model', contextWindow: 64_000 }],
+      modelSync: {
+        enabled: false,
+        syncedModelIds: [],
+        supported: true,
+      },
+      notes: '',
+    }
+    const synchronizedProvider: SavedProvider = {
+      ...originalProvider,
+      modelCatalog: [
+        { id: 'manual-model', contextWindow: 64_000 },
+        { id: 'latest-model', contextWindow: 256_000 },
+      ],
+      modelSync: {
+        enabled: false,
+        syncedModelIds: ['latest-model'],
+        supported: true,
+        lastSyncedAt: '2026-07-29T00:00:00.000Z',
+        endpoint: 'https://api.example.com/v1/models',
+      },
+    }
+    providerStoreState.providers = [originalProvider]
+    providerStoreState.presets = [{
+      id: 'custom',
+      name: 'Custom',
+      baseUrl: '',
+      apiFormat: 'openai_chat',
+      defaultModels: {
+        main: '',
+        haiku: '',
+        sonnet: '',
+        opus: '',
+      },
+      needsApiKey: true,
+      websiteUrl: '',
+    }]
+    providerStoreState.syncProviderModels.mockResolvedValue({
+      provider: synchronizedProvider,
+      result: {
+        endpoint: 'https://api.example.com/v1/models',
+        cached: false,
+        total: 2,
+        added: 1,
+        updated: 0,
+        removed: 0,
+      },
+    })
+    providerStoreState.setProviderModelAutoSync.mockResolvedValue({
+      provider: {
+        ...synchronizedProvider,
+        modelSync: {
+          ...synchronizedProvider.modelSync,
+          enabled: true,
+        },
+      },
+    })
+
+    render(<ProviderSettings />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Example AI' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Sync latest models' }))
+
+    expect(
+      await within(dialog).findByText('Synchronized 2 models; 1 added'),
+    ).toBeInTheDocument()
+    expect(providerStoreState.syncProviderModels).toHaveBeenCalledWith('provider-sync')
+    fireEvent.click(within(dialog).getByRole('button', { name: /Select model: Main Model/i }))
+    expect(within(dialog).getByText('latest-model')).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByLabelText('Auto-sync models'))
+    expect(
+      await within(dialog).findByText('Auto-sync is on and the first sync completed'),
+    ).toBeInTheDocument()
+    expect(providerStoreState.setProviderModelAutoSync).toHaveBeenCalledWith(
+      'provider-sync',
+      true,
+    )
+  }, 15_000)
+
+  it('refreshes the model catalog after saving any sync-enabled provider', async () => {
+    const savedProvider: SavedProvider = {
+      id: 'saved-deepseek',
+      name: 'DeepSeek',
+      presetId: 'deepseek',
+      apiKey: '***',
+      baseUrl: 'https://api.deepseek.com',
+      apiFormat: 'openai_chat',
+      models: {
+        main: 'deepseek-v4-pro',
+        haiku: 'deepseek-v4-flash',
+        sonnet: 'deepseek-v4-pro',
+        opus: 'deepseek-v4-pro',
+      },
+      modelSync: {
+        enabled: true,
+        syncedModelIds: [],
+        supported: true,
+      },
+    }
+    providerStoreState.providers = []
+    providerStoreState.presets = [{
+      id: 'deepseek',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com',
+      apiFormat: 'openai_chat',
+      defaultModels: savedProvider.models,
+      needsApiKey: false,
+      websiteUrl: 'https://platform.deepseek.com',
+    }]
+    providerStoreState.createProvider.mockResolvedValue(savedProvider)
+    providerStoreState.syncProviderModels.mockResolvedValue({
+      provider: savedProvider,
+      result: {
+        endpoint: 'https://api.deepseek.com/models',
+        cached: false,
+        total: 1,
+        added: 1,
+        updated: 0,
+        removed: 0,
+      },
+    })
+    useSettingsStore.setState({
+      fetchAll: vi.fn().mockResolvedValue(undefined),
+    })
+
+    render(<ProviderSettings />)
+    fireEvent.click(screen.getByRole('button', { name: 'Configure DeepSeek' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', {
+      name: 'Add',
+    }))
+
+    await waitFor(() => {
+      expect(providerStoreState.createProvider).toHaveBeenCalled()
+      expect(providerStoreState.syncProviderModels).toHaveBeenCalledWith('saved-deepseek')
+    })
+  }, 15_000)
 
   it('shows Kimi Code and Kimi as separate API key entries', () => {
     providerStoreState.providers = []

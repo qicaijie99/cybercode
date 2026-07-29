@@ -199,7 +199,7 @@ class GeoResolver:
                 return UNKNOWN_LOCATION
             try:
                 record = self._reader.get(address)
-            except (KeyError, TypeError, ValueError):
+            except Exception:
                 return UNKNOWN_LOCATION
 
         if not isinstance(record, dict):
@@ -852,6 +852,9 @@ class UsageRequestHandler(BaseHTTPRequestHandler):
     login_html: bytes
     static_assets: Dict[str, tuple]
 
+    def do_HEAD(self) -> None:
+        self.do_GET()
+
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
         if path == "/api/cybercode-usage/login":
@@ -907,7 +910,8 @@ class UsageRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "public, max-age=86400")
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
             return
 
         if path == "/cybercode-stats/login":
@@ -933,7 +937,12 @@ class UsageRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/cybercode-usage/summary":
-            self._json(200, self.store.summary())
+            try:
+                summary = self.store.summary()
+            except sqlite3.Error:
+                self._json(503, {"error": "Storage unavailable"})
+                return
+            self._json(200, summary)
             return
 
         self.send_response(200)
@@ -948,7 +957,8 @@ class UsageRequestHandler(BaseHTTPRequestHandler):
             "form-action 'self'; base-uri 'none'",
         )
         self.end_headers()
-        self.wfile.write(self.dashboard_html)
+        if self.command != "HEAD":
+            self.wfile.write(self.dashboard_html)
 
     def _authorized(self) -> bool:
         if self._basic_authorized():
@@ -1048,7 +1058,8 @@ class UsageRequestHandler(BaseHTTPRequestHandler):
             "form-action 'self'; base-uri 'none'",
         )
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _redirect(
         self,
@@ -1092,7 +1103,8 @@ class UsageRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _security_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")

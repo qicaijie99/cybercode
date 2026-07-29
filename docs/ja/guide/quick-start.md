@@ -60,6 +60,8 @@ TUI で次を実行します。
 
 デスクトップ版と TUI はプロバイダー設定を共有します。詳細な接続テストや役割別モデルの割り当ては、デスクトップ版の Settings -> Providers で設定できます。
 
+OAuth、Web セッション、メディア provider、モデル同期、スマート route、Agent node は [モデル接続、同期、スマートルーティング](./models-routing.md) を参照してください。TUI でも追加 proxy なしで `/provider sync`、`/routing`、`/node` を使用できます。
+
 ### ローカルモデルについて
 
 LM Studio または Ollama を使う場合は、対応アプリのインストール、モデルのダウンロード、ローカルサーバーの起動が必要です。追加のプロトコルプロキシは不要です。

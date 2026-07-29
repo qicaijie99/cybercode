@@ -45,7 +45,7 @@ export function ConfirmDialog({
 
   return (
     createPortal(
-      <div className="settings-ui native-ui-text fixed inset-0 z-[200] flex items-center justify-center p-6 animate-fade-in">
+      <div className="viewport-overlay settings-ui native-ui-text z-[10000] animate-fade-in">
         <div
           className="absolute inset-0 bg-[var(--color-overlay-scrim)] opacity-70"
           onClick={handleClose}
@@ -54,9 +54,9 @@ export function ConfirmDialog({
           role="dialog"
           aria-modal="true"
           aria-label={title}
-          className="relative flex w-full max-w-[360px] flex-col overflow-hidden rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] animate-modal-in"
+          className="viewport-overlay-surface relative flex max-h-[calc(100dvh-24px)] w-full max-w-[360px] flex-col overflow-hidden rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] animate-modal-in"
         >
-          <div className="flex items-start justify-between gap-4 px-4 pb-3 pt-4">
+          <div className="flex min-h-0 items-start justify-between gap-4 overflow-y-auto px-4 pb-3 pt-4">
             <div className="min-w-0">
               <h2 className="text-[14px] font-semibold leading-5 text-[var(--color-text-primary)]">
                 {title}
@@ -75,7 +75,7 @@ export function ConfirmDialog({
               <Icon name="close" size={13} />
             </button>
           </div>
-          <div className="flex justify-end gap-2 px-4 pb-4 pt-1">
+          <div className="flex shrink-0 flex-wrap justify-end gap-2 px-4 pb-4 pt-1">
             <Button
               variant="ghost"
               size="sm"

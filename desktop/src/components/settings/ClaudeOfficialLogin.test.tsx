@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
-const { shellOpenMock } = vi.hoisted(() => ({
-  shellOpenMock: vi.fn(),
+const { openExternalUrlMock } = vi.hoisted(() => ({
+  openExternalUrlMock: vi.fn(),
 }))
 
-vi.mock('@tauri-apps/plugin-shell', () => ({
-  open: shellOpenMock,
+vi.mock('../../lib/openExternalUrl', () => ({
+  openExternalUrl: openExternalUrlMock,
 }))
 
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -22,8 +22,8 @@ describe('ClaudeOAuthDialog', () => {
   const stopPolling = vi.fn()
 
   beforeEach(() => {
-    shellOpenMock.mockReset()
-    shellOpenMock.mockResolvedValue(undefined)
+    openExternalUrlMock.mockReset()
+    openExternalUrlMock.mockResolvedValue(undefined)
     fetchStatus.mockReset()
     fetchStatus.mockResolvedValue(undefined)
     login.mockReset()
@@ -60,10 +60,16 @@ describe('ClaudeOAuthDialog', () => {
     )
 
     expect(screen.getByRole('dialog', { name: 'Claude Code' })).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'CyberCode will reuse your Claude Code OAuth session or local sign-in.',
+    )
+    expect(
+      screen.queryByRole('button', { name: 'I understand, continue' }),
+    ).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Connect account' }))
 
     await waitFor(() => {
-      expect(shellOpenMock).toHaveBeenCalledWith('https://claude.ai/oauth/authorize')
+      expect(openExternalUrlMock).toHaveBeenCalledWith('https://claude.ai/oauth/authorize')
     })
     expect(startPolling).toHaveBeenCalledOnce()
     expect(
@@ -95,6 +101,7 @@ describe('ClaudeOAuthDialog', () => {
     )
 
     expect(screen.getByText('Claude MAX')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Set default' }))
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
 

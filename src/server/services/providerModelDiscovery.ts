@@ -3,12 +3,16 @@ import type {
   ApiFormat,
   ProviderModelInfo,
 } from '../types/provider.js'
+import { discoverModelsDevModels } from './modelsDevCatalog.js'
 
 type DiscoveryInput = {
   baseUrl: string
   apiKey?: string
   apiFormat: ApiFormat
   presetId?: string
+  endpoint?: string
+  headers?: Record<string, string>
+  cacheScope?: string
 }
 
 export type ProviderModelDiscoveryResult = {
@@ -21,6 +25,7 @@ type DiscoveryOptions = {
   fetchImpl?: typeof fetch
   timeoutMs?: number
   force?: boolean
+  catalogFallback?: boolean
 }
 
 type CachedDiscovery = {
@@ -105,7 +110,7 @@ function modelRecords(body: unknown): Array<Record<string, unknown>> {
 }
 
 function modelId(record: Record<string, unknown>): string | undefined {
-  for (const key of ['id', 'model', 'name', 'key']) {
+  for (const key of ['slug', 'id', 'model', 'name', 'key']) {
     const value = record[key]
     if (typeof value === 'string' && value.trim()) return value.trim()
   }
@@ -136,6 +141,8 @@ function findContextWindow(value: unknown, depth = 0): number | undefined {
     'max_input_tokens',
     'maxInputTokens',
     'loaded_context_length',
+    'max_context_window',
+    'maxContextWindow',
   ]
   for (const key of directKeys) {
     const parsed = parsePositiveInteger(record[key])
@@ -204,9 +211,11 @@ function toModelInfo(record: Record<string, unknown>): ProviderModelInfo | undef
     id,
     ...(typeof record.display_name === 'string'
       ? { label: record.display_name }
-      : typeof record.name === 'string' && record.name !== id
-        ? { label: record.name }
-        : {}),
+      : typeof record.displayName === 'string'
+        ? { label: record.displayName }
+        : typeof record.name === 'string' && record.name !== id
+          ? { label: record.name }
+          : {}),
     ...(contextWindow && { contextWindow }),
     ...(imageSupport !== undefined && { supportsImages: imageSupport }),
   }
@@ -224,17 +233,46 @@ function dedupeModels(models: ProviderModelInfo[]): ProviderModelInfo[] {
       id: existing?.id ?? model.id.trim(),
     })
   }
-  return [...byId.values()].sort((a, b) =>
-    a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' })
-  )
+  return [...byId.values()].sort(compareModels)
+}
+
+function numericSegments(modelId: string): number[] {
+  return [...modelId.matchAll(/\d+/g)].map((match) => Number.parseInt(match[0], 10))
+}
+
+function modelTierRank(modelId: string): number {
+  const normalized = modelId.toLowerCase()
+  if (/(?:^|[-_.])sol(?:$|[-_.])/.test(normalized)) return 0
+  if (/(?:^|[-_.])terra(?:$|[-_.])/.test(normalized)) return 1
+  if (/(?:^|[-_.])luna(?:$|[-_.])/.test(normalized)) return 2
+  return 3
+}
+
+function compareModels(left: ProviderModelInfo, right: ProviderModelInfo): number {
+  const leftNumbers = numericSegments(left.id)
+  const rightNumbers = numericSegments(right.id)
+  if (leftNumbers.length > 0 && rightNumbers.length > 0) {
+    const length = Math.max(leftNumbers.length, rightNumbers.length)
+    for (let index = 0; index < length; index += 1) {
+      const difference = (rightNumbers[index] ?? -1) - (leftNumbers[index] ?? -1)
+      if (difference !== 0) return difference
+    }
+  }
+  const tierDifference = modelTierRank(left.id) - modelTierRank(right.id)
+  if (tierDifference !== 0) return tierDifference
+  return left.id.localeCompare(right.id, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
 }
 
 function authHeaders(input: DiscoveryInput): Record<string, string> {
   const key = input.apiKey?.trim()
-  if (!key) return { Accept: 'application/json' }
   const headers: Record<string, string> = {
     Accept: 'application/json',
+    ...input.headers,
   }
+  if (!key) return headers
   if (input.apiFormat === 'anthropic') {
     headers['x-api-key'] = key
     headers['anthropic-version'] = '2023-06-01'
@@ -280,6 +318,8 @@ async function enrichOllamaModels(
 }
 
 function discoveryEndpoints(input: DiscoveryInput): string[] {
+  if (input.endpoint) return [input.endpoint]
+
   const endpoints: string[] = []
   if (isOllama(input)) endpoints.push(`${originOf(input.baseUrl)}/api/tags`)
   if (isLmStudio(input)) endpoints.push(`${originOf(input.baseUrl)}/api/v1/models`)
@@ -302,6 +342,7 @@ export async function discoverProviderModels(
     input.presetId ?? '',
     input.apiFormat,
     input.baseUrl.replace(/\/+$/, '').toLowerCase(),
+    input.cacheScope ?? '',
   ].join('|')
   const cached = cache.get(cacheKey)
   if (!options.force && cached && cached.expiresAt > Date.now()) {
@@ -309,6 +350,7 @@ export async function discoverProviderModels(
   }
 
   let lastError = ''
+  let authenticationRejected = false
   for (const endpoint of discoveryEndpoints(input)) {
     try {
       const response = await fetchImpl(endpoint, {
@@ -316,11 +358,33 @@ export async function discoverProviderModels(
         signal: AbortSignal.timeout(timeoutMs),
       })
       if (!response.ok) {
-        lastError = `HTTP ${response.status}`
+        if (response.status === 401 || response.status === 403) {
+          authenticationRejected = true
+        }
+        const raw = await response.text().catch(() => '')
+        let detail = raw.trim().slice(0, 300)
+        try {
+          const parsed = JSON.parse(raw) as Record<string, unknown>
+          const nested = parsed.error &&
+            typeof parsed.error === 'object' &&
+            !Array.isArray(parsed.error)
+            ? parsed.error as Record<string, unknown>
+            : undefined
+          const message = nested?.message ?? parsed.message ?? parsed.error_description
+          if (typeof message === 'string' && message.trim()) detail = message.trim()
+        } catch {
+          // Plain-text provider errors are already useful.
+        }
+        lastError = `HTTP ${response.status}${detail ? `: ${detail}` : ''}`
         continue
       }
 
       let models = modelRecords(await response.json())
+        .filter((record) =>
+          record.hidden !== true &&
+          record.visibility !== 'hide' &&
+          record.visibility !== 'hidden'
+        )
         .map(toModelInfo)
         .filter((model): model is ProviderModelInfo => model !== undefined)
       if (models.length === 0) {
@@ -352,6 +416,33 @@ export async function discoverProviderModels(
       return { models, endpoint, cached: false }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  if (options.catalogFallback && !authenticationRejected) {
+    try {
+      const catalog = await discoverModelsDevModels(input.presetId, {
+        fetchImpl,
+        timeoutMs,
+      })
+      if (catalog?.models.length) {
+        // models.dev already returns a deduplicated, release-date-first list.
+        // Keep that ordering so newly released models are not pushed behind
+        // older IDs by the endpoint-oriented numeric sorter above.
+        const models = catalog.models
+        cache.set(cacheKey, {
+          expiresAt: Date.now() + CACHE_TTL_MS,
+          endpoint: catalog.endpoint,
+          models,
+        })
+        return {
+          models,
+          endpoint: catalog.endpoint,
+          cached: false,
+        }
+      }
+    } catch {
+      // Preserve the provider endpoint error; the bundled catalog remains available.
     }
   }
 

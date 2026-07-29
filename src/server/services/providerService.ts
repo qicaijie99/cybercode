@@ -42,6 +42,8 @@ import type {
   ApiFormat,
   ModelContextWindows,
   ModelMapping,
+  ProviderModelInfo,
+  ProviderModelSyncState,
 } from '../types/provider.js'
 import { resolveProviderImageSupport } from './modelImageSupport.js'
 import { resolveProviderImageSupportDynamically } from './modelImageCapabilityProbe.js'
@@ -57,6 +59,20 @@ import {
   requiresEnabledThinkingParamForModel,
 } from '../../utils/model/thinkingPolicy.js'
 import { providerOAuthService } from './providerOAuthService.js'
+import {
+  CODEX_DEFAULT_MODEL_CONTEXT_WINDOWS,
+  CODEX_DEFAULT_MODELS,
+  CODEX_FALLBACK_MODEL_CATALOG,
+  isLegacyCodexContextWindows,
+  isLegacyCodexDefaultModels,
+} from './codexModelCatalog.js'
+import { shouldEnableProviderModelSynchronization } from './providerModelSyncPolicy.js'
+import {
+  getWebSessionProviderIdFromPreset,
+  getWebSessionPresetId,
+  getWebSessionProvider,
+  type WebSessionProviderId,
+} from '../../shared/webSessionProviders.js'
 
 const MANAGED_ENV_KEYS = [
   'ANTHROPIC_BASE_URL',
@@ -160,6 +176,96 @@ function normalizeProviderModels(models: ModelMapping): ModelMapping {
     sonnet: models.sonnet.trim() || main,
     opus: models.opus.trim() || main,
   }
+}
+
+function mergeModelCatalog(
+  defaults: ProviderModelInfo[] | undefined,
+  existing: ProviderModelInfo[] | undefined,
+): ProviderModelInfo[] | undefined {
+  if (!defaults?.length && !existing?.length) return undefined
+
+  const models = new Map<string, ProviderModelInfo>()
+  for (const model of defaults ?? []) {
+    models.set(model.id.trim().toLowerCase(), { ...model, id: model.id.trim() })
+  }
+  for (const model of existing ?? []) {
+    const key = model.id.trim().toLowerCase()
+    if (!key) continue
+    models.set(key, {
+      ...models.get(key),
+      ...model,
+      id: model.id.trim(),
+    })
+  }
+  return [...models.values()]
+}
+
+function migrateManagedProviderModelDefaults(provider: SavedProvider): SavedProvider {
+  if (provider.oauthProviderId === 'codex') {
+    const shouldMigrateModels = isLegacyCodexDefaultModels(provider.models)
+    const shouldSeedCatalog =
+      provider.modelCatalog === undefined ||
+      provider.modelSync === undefined
+    const modelCatalog = shouldSeedCatalog
+      ? mergeModelCatalog(CODEX_FALLBACK_MODEL_CATALOG, provider.modelCatalog)
+      : provider.modelCatalog
+    const fallbackIds = CODEX_FALLBACK_MODEL_CATALOG.map((model) => model.id)
+    const nextModelSync: ProviderModelSyncState = provider.modelSync === undefined
+      ? {
+          enabled: true,
+          syncedModelIds: fallbackIds,
+        }
+      : shouldSeedCatalog
+        ? {
+            ...provider.modelSync,
+            syncedModelIds: [
+              ...new Set([
+                ...(provider.modelSync.syncedModelIds ?? []),
+                ...fallbackIds,
+              ]),
+            ],
+          }
+        : provider.modelSync
+    const catalogChanged =
+      JSON.stringify(modelCatalog) !== JSON.stringify(provider.modelCatalog)
+    const modelSyncChanged =
+      JSON.stringify(nextModelSync) !== JSON.stringify(provider.modelSync)
+
+    if (
+      !shouldMigrateModels &&
+      !catalogChanged &&
+      !modelSyncChanged
+    ) {
+      return provider
+    }
+
+    return {
+      ...provider,
+      ...(shouldMigrateModels && {
+        models: { ...CODEX_DEFAULT_MODELS },
+        ...(isLegacyCodexContextWindows(provider.modelContextWindows) && {
+          modelContextWindows: { ...CODEX_DEFAULT_MODEL_CONTEXT_WINDOWS },
+        }),
+      }),
+      ...(modelCatalog && { modelCatalog }),
+      modelSync: nextModelSync,
+    }
+  }
+
+  if (
+    provider.modelSync === undefined &&
+    shouldEnableProviderModelSynchronization(provider)
+  ) {
+    return {
+      ...provider,
+      modelSync: {
+        enabled: true,
+        syncedModelIds: [],
+      },
+    }
+  }
+
+  return provider
 }
 
 function migrateLegacyPresetModelIds(provider: SavedProvider): ModelMapping {
@@ -307,6 +413,12 @@ function migrateProviderIndex(index: ProvidersIndex): { index: ProvidersIndex; c
     if (contextWindowMigration !== migrated) {
       changed = true
       migrated = contextWindowMigration
+    }
+
+    const managedModelMigration = migrateManagedProviderModelDefaults(migrated)
+    if (managedModelMigration !== migrated) {
+      changed = true
+      migrated = managedModelMigration
     }
 
     return migrated
@@ -635,6 +747,12 @@ export class ProviderService {
         input.supportsImages !== undefined && { supportsImages: input.supportsImages }),
       ...(input.notes !== undefined && { notes: input.notes }),
     }
+    if (shouldEnableProviderModelSynchronization(provider)) {
+      provider.modelSync = {
+        enabled: true,
+        syncedModelIds: [],
+      }
+    }
 
     index.providers.push(provider)
     await this.writeIndex(index)
@@ -674,6 +792,32 @@ export class ProviderService {
     await this.writeIndex(index)
 
     if (index.activeId === id) {
+      await this.syncToSettings(updated)
+    }
+
+    return updated
+  }
+
+  async updateProviderModelSync(
+    id: string,
+    input: {
+      modelCatalog?: ProviderModelInfo[]
+      modelSync: ProviderModelSyncState
+    },
+  ): Promise<SavedProvider> {
+    const index = await this.readIndex()
+    const idx = index.providers.findIndex((provider) => provider.id === id)
+    if (idx === -1) throw ApiError.notFound(`Provider not found: ${id}`)
+
+    const updated: SavedProvider = {
+      ...index.providers[idx],
+      ...(input.modelCatalog !== undefined && { modelCatalog: input.modelCatalog }),
+      modelSync: input.modelSync,
+    }
+    index.providers[idx] = updated
+    await this.writeIndex(index)
+
+    if (index.activeId === id && input.modelCatalog !== undefined) {
       await this.syncToSettings(updated)
     }
 
@@ -726,6 +870,8 @@ export class ProviderService {
       apiFormat: ApiFormat
       models: ModelMapping
       modelContextWindows?: ModelContextWindows
+      modelCatalog?: ProviderModelInfo[]
+      modelSyncEnabled?: boolean
     },
   ): Promise<SavedProvider> {
     const index = await this.readIndex()
@@ -733,6 +879,10 @@ export class ProviderService {
       (provider) => provider.oauthProviderId === oauthProviderId,
     )
     const existing = existingIndex >= 0 ? index.providers[existingIndex] : undefined
+    const modelCatalog = existing?.modelCatalog !== undefined
+      ? existing.modelCatalog
+      : mergeModelCatalog(definition.modelCatalog, undefined)
+    const defaultSyncedModelIds = definition.modelCatalog?.map((model) => model.id) ?? []
     const provider: SavedProvider = {
       id: existing?.id ?? crypto.randomUUID(),
       presetId: definition.presetId,
@@ -742,12 +892,25 @@ export class ProviderService {
       baseUrl: definition.baseUrl,
       apiFormat: definition.apiFormat,
       models: existing?.models ?? normalizeProviderModels(definition.models),
-      ...(existing?.modelCatalog && { modelCatalog: existing.modelCatalog }),
+      ...(modelCatalog && { modelCatalog }),
       ...(existing?.imageSupportMode && { imageSupportMode: existing.imageSupportMode }),
       ...(existing?.notes && { notes: existing.notes }),
-      ...(definition.modelContextWindows && {
-        modelContextWindows: compactModelContextWindows(definition.modelContextWindows),
-      }),
+      ...(existing?.modelContextWindows
+        ? { modelContextWindows: existing.modelContextWindows }
+        : definition.modelContextWindows && {
+            modelContextWindows: compactModelContextWindows(definition.modelContextWindows),
+          }),
+    }
+    if (existing?.modelSync) {
+      provider.modelSync = existing.modelSync
+    } else if (
+      definition.modelSyncEnabled ||
+      shouldEnableProviderModelSynchronization(provider)
+    ) {
+      provider.modelSync = {
+        enabled: true,
+        syncedModelIds: defaultSyncedModelIds,
+      }
     }
 
     if (existingIndex >= 0) index.providers[existingIndex] = provider
@@ -771,6 +934,98 @@ export class ProviderService {
     if (wasActive) index.activeId = null
     await this.writeIndex(index)
     if (wasActive) await this.clearProviderFromSettings()
+  }
+
+  async upsertWebSessionProvider(
+    providerId: WebSessionProviderId,
+    credential: string | undefined,
+    modelId?: string,
+  ): Promise<SavedProvider> {
+    const definition = getWebSessionProvider(providerId)
+    if (!definition) throw ApiError.badRequest(`Unknown Web Cookie provider: ${providerId}`)
+
+    const selectedModel = modelId?.trim() || definition.defaultModel
+    const index = await this.readIndex()
+    const presetId = getWebSessionPresetId(providerId)
+    const existingIndex = index.providers.findIndex(
+      (provider) => provider.presetId === presetId,
+    )
+    const existing = existingIndex >= 0 ? index.providers[existingIndex] : undefined
+    const normalizedCredential = credential?.trim() || existing?.apiKey || ''
+    if (!normalizedCredential) throw ApiError.badRequest('A session credential is required')
+    const provider: SavedProvider = {
+      id: existing?.id ?? crypto.randomUUID(),
+      presetId,
+      name: existing?.name ?? definition.names.en,
+      apiKey: normalizedCredential,
+      baseUrl: definition.website,
+      apiFormat: 'openai_chat',
+      models: {
+        main: selectedModel,
+        haiku: selectedModel,
+        sonnet: selectedModel,
+        opus: selectedModel,
+      },
+      modelCatalog: definition.models.map((model) => ({
+        id: model.id,
+        label: model.label,
+      })),
+      imageSupportMode: 'disabled',
+      notes: 'CyberCode Web Cookie Provider',
+    }
+
+    if (existingIndex >= 0) index.providers[existingIndex] = provider
+    else index.providers.push(provider)
+    await this.writeIndex(index)
+
+    if (index.activeId === provider.id) await this.syncToSettings(provider)
+    return provider
+  }
+
+  async removeWebSessionProvider(providerId: WebSessionProviderId): Promise<void> {
+    const index = await this.readIndex()
+    const presetId = getWebSessionPresetId(providerId)
+    const providerIndex = index.providers.findIndex(
+      (provider) => provider.presetId === presetId,
+    )
+    if (providerIndex < 0) return
+
+    const provider = index.providers[providerIndex]!
+    const wasActive = index.activeId === provider.id
+    index.providers.splice(providerIndex, 1)
+    if (wasActive) index.activeId = null
+    await this.writeIndex(index)
+    if (wasActive) await this.clearProviderFromSettings()
+  }
+
+  async refreshWebSessionCredential(
+    providerRecordId: string,
+    credential: string,
+  ): Promise<boolean> {
+    const normalizedCredential = credential.trim()
+    if (!normalizedCredential || normalizedCredential.length > 64_000) return false
+
+    const index = await this.readIndex()
+    const providerIndex = index.providers.findIndex(
+      (provider) => provider.id === providerRecordId,
+    )
+    if (providerIndex < 0) return false
+
+    const existing = index.providers[providerIndex]!
+    if (!getWebSessionProviderIdFromPreset(existing.presetId)) return false
+    if (existing.apiKey === normalizedCredential) return false
+
+    const updated = {
+      ...existing,
+      apiKey: normalizedCredential,
+    }
+    index.providers[providerIndex] = updated
+    await this.writeIndex(index)
+
+    if (index.activeId === providerRecordId) {
+      await this.syncToSettings(updated)
+    }
+    return true
   }
 
   // --- Settings sync ---
@@ -974,40 +1229,18 @@ export class ProviderService {
 
   // --- Proxy support ---
 
-  async getProviderForProxy(providerId?: string): Promise<{
-    baseUrl: string
-    apiKey: string
-    apiFormat: ApiFormat
-    oauthProviderId?: string
-  } | null> {
+  async getProviderForProxy(providerId?: string): Promise<SavedProvider | null> {
     if (providerId) {
-      const provider = await this.getProvider(providerId)
-      return {
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        apiFormat: provider.apiFormat ?? 'anthropic',
-        ...(provider.oauthProviderId && { oauthProviderId: provider.oauthProviderId }),
-      }
+      return this.getProvider(providerId)
     }
 
     const index = await this.readIndex()
     if (!index.activeId) return null
     const provider = index.providers.find((p) => p.id === index.activeId)
-    if (!provider) return null
-    return {
-      baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
-      apiFormat: provider.apiFormat ?? 'anthropic',
-      ...(provider.oauthProviderId && { oauthProviderId: provider.oauthProviderId }),
-    }
+    return provider ?? null
   }
 
-  async getActiveProviderForProxy(): Promise<{
-    baseUrl: string
-    apiKey: string
-    apiFormat: ApiFormat
-    oauthProviderId?: string
-  } | null> {
+  async getActiveProviderForProxy(): Promise<SavedProvider | null> {
     return this.getProviderForProxy()
   }
 

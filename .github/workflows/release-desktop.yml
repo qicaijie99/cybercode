@@ -282,10 +282,55 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CYBERCODE_REQUIRE_OFFICIAL_MAC_SIGNING: '1'
         with:
           projectPath: desktop
           tauriScript: bunx tauri
           args: ${{ matrix.tauri_args }} --config src-tauri/tauri.release-ci.json
+
+      - name: Verify macOS Computer Use helper identity
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        env:
+          REQUIRE_OFFICIAL: ${{ vars.ENABLE_APPLE_NOTARIZATION == 'true' && '1' || '0' }}
+          EXPECTED_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          helper_app="$(find desktop/src-tauri/target \
+            -type d \
+            -name 'CyberCode Computer Use.app' \
+            -path '*/bundle/macos/CyberCode.app/Contents/Resources/*' \
+            | head -n 1)"
+          if [ -z "$helper_app" ]; then
+            echo "::error::Packaged CyberCode Computer Use helper was not found."
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$helper_app"
+          identifier="$(codesign -d --verbose=4 "$helper_app" 2>&1 | awk -F= '/^Identifier=/{print $2; exit}')"
+          if [ "$identifier" != "com.cybercode.computer-use" ]; then
+            echo "::error::Unexpected Computer Use helper identifier: $identifier"
+            exit 1
+          fi
+
+          if [ "$REQUIRE_OFFICIAL" = "1" ]; then
+            team_id="$(codesign -d --verbose=4 "$helper_app" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2; exit}')"
+            if [ -z "$team_id" ] || [ "$team_id" = "not set" ]; then
+              echo "::error::Notarized macOS releases require an officially signed Computer Use helper."
+              exit 1
+            fi
+            if [ -n "$EXPECTED_TEAM_ID" ] && [ "$team_id" != "$EXPECTED_TEAM_ID" ]; then
+              echo "::error::Computer Use helper Team ID $team_id does not match $EXPECTED_TEAM_ID."
+              exit 1
+            fi
+          else
+            requirement="$(codesign -d -r- "$helper_app" 2>&1)"
+            if ! grep -Fq 'designated => identifier "com.cybercode.computer-use"' <<<"$requirement"; then
+              echo "::error::Ad-hoc Computer Use helper is missing its stable designated requirement."
+              exit 1
+            fi
+          fi
 
       - name: Collect release assets
         shell: bash

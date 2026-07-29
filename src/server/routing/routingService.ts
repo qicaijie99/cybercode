@@ -13,6 +13,7 @@ import {
   getRouteTargetCost,
   getSourceMetadata,
   isFreeRouteTarget,
+  isProviderRuntimeRoutable,
 } from './sourceCatalog.js'
 import {
   RoutingConfigSchema,
@@ -68,69 +69,23 @@ function createHealthState(): HealthState {
   }
 }
 
-const DEFAULT_PROFILES: RouteProfile[] = [
-  {
-    id: 'balanced',
-    name: 'Balanced',
-    description: 'Balances health, speed, cost and available context.',
-    enabled: true,
-    strategy: 'auto',
-    strictFree: false,
-    allowExperimental: false,
-    maxAttempts: 3,
-    targets: [],
-  },
-  {
-    id: 'coding-first',
-    name: 'Coding first',
-    description: 'Prefers healthy models with more remaining context.',
-    enabled: true,
-    strategy: 'headroom',
-    strictFree: false,
-    allowExperimental: false,
-    maxAttempts: 3,
-    targets: [],
-  },
-  {
-    id: 'free-first',
-    name: 'Free first',
-    description: 'Uses only sources classified as free or local.',
-    enabled: true,
-    strategy: 'cost-optimized',
-    strictFree: true,
-    allowExperimental: false,
-    maxAttempts: 3,
-    targets: [],
-  },
-  {
-    id: 'fastest',
-    name: 'Fastest',
-    description: 'Learns from recent response latency.',
-    enabled: true,
-    strategy: 'p2c',
-    strictFree: false,
-    allowExperimental: false,
-    maxAttempts: 3,
-    targets: [],
-  },
-  {
-    id: 'stable',
-    name: 'Stable',
-    description: 'Prefers stable sources and the last known good target.',
-    enabled: true,
-    strategy: 'lkgp',
-    strictFree: false,
-    allowExperimental: false,
-    maxAttempts: 3,
-    targets: [],
-  },
-]
-
 const DEFAULT_CONFIG: RoutingConfig = {
   version: 1,
   enabled: true,
-  profiles: DEFAULT_PROFILES,
+  profiles: [],
 }
+
+const LEGACY_BUILT_IN_ROUTES = new Map<string, {
+  name: string
+  strategy: RoutingStrategy
+  strictFree: boolean
+}>([
+  ['balanced', { name: 'Balanced', strategy: 'auto', strictFree: false }],
+  ['coding-first', { name: 'Coding first', strategy: 'headroom', strictFree: false }],
+  ['free-first', { name: 'Free first', strategy: 'cost-optimized', strictFree: true }],
+  ['fastest', { name: 'Fastest', strategy: 'p2c', strictFree: false }],
+  ['stable', { name: 'Stable', strategy: 'lkgp', strictFree: false }],
+])
 
 const PROVIDER_PRESET_BY_ID = new Map(PROVIDER_PRESETS.map((preset) => [preset.id, preset]))
 const RETRYABLE_STATUS = new Set([400, 401, 402, 403, 404, 408, 409, 413, 422, 425, 429])
@@ -224,6 +179,40 @@ function averageLatency(health: HealthState): number {
   return health.successes > 0 ? health.latencyTotalMs / health.successes : Number.POSITIVE_INFINITY
 }
 
+function normalizeLegacyBuiltInRoutes(config: RoutingConfig): {
+  config: RoutingConfig
+  changed: boolean
+} {
+  let changed = false
+  const profiles = config.profiles.map((profile) => {
+    const legacyRoute = LEGACY_BUILT_IN_ROUTES.get(profile.id)
+    const stillUsesLegacyTargets = profile.targets.every((target) => !target.modelId)
+    if (
+      !legacyRoute ||
+      profile.name !== legacyRoute.name ||
+      !stillUsesLegacyTargets ||
+      (
+        profile.strategy === legacyRoute.strategy &&
+        profile.strictFree === legacyRoute.strictFree
+      )
+    ) {
+      return profile
+    }
+
+    changed = true
+    return {
+      ...profile,
+      strategy: legacyRoute.strategy,
+      strictFree: legacyRoute.strictFree,
+    }
+  })
+
+  return {
+    config: changed ? { ...config, profiles } : config,
+    changed,
+  }
+}
+
 function weightedOrder(candidates: Candidate[]): Candidate[] {
   const remaining = [...candidates]
   const ordered: Candidate[] = []
@@ -266,13 +255,16 @@ export class RoutingService {
 
   private async readConfig(): Promise<RoutingConfig> {
     try {
-      const parsed = RoutingConfigSchema.parse(JSON.parse(await fs.readFile(this.configPath, 'utf-8')))
-      const savedById = new Map(parsed.profiles.map((profile) => [profile.id, profile]))
-      const profiles = DEFAULT_PROFILES.map((profile) => savedById.get(profile.id) ?? profile)
-      for (const profile of parsed.profiles) {
-        if (!profiles.some((entry) => entry.id === profile.id)) profiles.push(profile)
+      const parsed = RoutingConfigSchema.parse(
+        JSON.parse(await fs.readFile(this.configPath, 'utf-8')),
+      )
+      const normalized = normalizeLegacyBuiltInRoutes(parsed)
+      if (normalized.changed) {
+        await this.writeConfig(normalized.config).catch((error) => {
+          console.warn('[routing] Could not persist legacy route migration:', error)
+        })
       }
-      return { ...parsed, profiles }
+      return normalized.config
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         console.warn('[routing] Ignoring invalid routing config:', error)
@@ -541,18 +533,22 @@ export class RoutingService {
     providers: SavedProvider[],
     request: { estimatedTokens: number; requiresImages: boolean },
   ): Promise<Candidate[]> {
-    const targetByProvider = new Map(profile.targets.map((target) => [target.providerId, target]))
     const candidates: Candidate[] = []
-    for (const [index, provider] of providers.entries()) {
-      const explicitTarget = targetByProvider.get(provider.id)
-      if (profile.targets.length > 0 && !explicitTarget) continue
+    const providerById = new Map(providers.map((provider) => [provider.id, provider]))
+    const routeEntries = profile.targets.length > 0
+      ? profile.targets.flatMap((target, index) => {
+          const provider = providerById.get(target.providerId)
+          return provider ? [{ provider, target, index }] : []
+        })
+      : providers.map((provider, index) => ({ provider, target: undefined, index }))
+
+    for (const { provider, target: explicitTarget, index } of routeEntries) {
       const metadata = getSourceMetadata(provider.presetId)
-      if (metadata.routable === false) continue
       if (!profile.allowExperimental && metadata.risk !== 'stable') continue
       const preset = PROVIDER_PRESET_BY_ID.get(provider.presetId)
-      if (preset?.needsApiKey !== false && !provider.apiKey.trim()) continue
+      if (!isProviderRuntimeRoutable(provider, preset)) continue
       const modelId = explicitTarget?.modelId?.trim() || provider.models.main.trim()
-      if (!provider.baseUrl.trim() || !modelId) continue
+      if (!modelId) continue
       if (profile.strictFree && !isFreeRouteTarget(provider.presetId, modelId)) continue
       const contextWindow = this.providerService.getProviderModelContextWindowMap(provider)[modelId]
       if (contextWindow && contextWindow < request.estimatedTokens) continue

@@ -17,7 +17,7 @@ export function SettingsPage({
   return (
     <div
       data-settings-layout={layout}
-      className={`settings-page flex w-full flex-col gap-[20px] ${
+      className={`settings-page flex min-w-0 w-full flex-col gap-[20px] ${
         layout === 'workspace' ? 'max-w-none' : 'mx-auto max-w-[896px]'
       }`}
     >
@@ -57,7 +57,7 @@ export function SettingsSection({
   return (
     <section className="overflow-hidden rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
       {hasHeader && (
-        <header className="flex min-h-[64px] items-center justify-between gap-[16px] border-b border-[var(--color-border-separator)] px-[20px] py-[12px]">
+        <header className="settings-section-header flex min-h-[64px] items-center justify-between gap-[16px] border-b border-[var(--color-border-separator)] px-[20px] py-[12px]">
           <div className="min-w-0">
             {title && (
               <h2 className="text-[13px] font-bold tracking-normal text-[var(--color-text-primary)]">
@@ -94,7 +94,7 @@ export function SettingsRow({
   const hasLabel = !!(label || hint)
   return (
     <div
-      className={`flex min-h-[64px] gap-[16px] px-[20px] py-[12px] ${align === 'start' ? 'items-start' : 'items-center'} ${hasLabel ? '' : 'justify-end'}`}
+      className={`settings-row flex min-h-[64px] gap-[16px] px-[20px] py-[12px] ${align === 'start' ? 'items-start' : 'items-center'} ${hasLabel ? '' : 'justify-end'}`}
     >
       {hasLabel && (
         <div className="min-w-0 flex-1">
@@ -110,7 +110,7 @@ export function SettingsRow({
           )}
         </div>
       )}
-      <div className="flex-shrink-0">{children}</div>
+      <div className="settings-row-control min-w-0 flex-shrink-0">{children}</div>
     </div>
   )
 }
@@ -125,7 +125,7 @@ export function SegmentedControl<T extends string>({
   onChange: (next: T) => void
 }) {
   return (
-    <div className="inline-flex h-[36px] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-[3px]">
+    <div className="settings-segmented-control inline-flex h-[36px] max-w-full items-center overflow-x-auto rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-[3px]">
       {items.map((item) => {
         const isActive = item.value === value
         return (
@@ -133,7 +133,7 @@ export function SegmentedControl<T extends string>({
             key={item.value}
             type="button"
             onClick={() => onChange(item.value)}
-            className={`flex h-[28px] min-w-[60px] cursor-pointer items-center justify-center rounded-full px-[12px] text-[13px] font-bold tracking-normal transition-colors duration-150 ${
+            className={`settings-segmented-option flex h-[28px] min-w-[60px] cursor-pointer items-center justify-center rounded-full px-[12px] text-[13px] font-bold tracking-normal transition-colors duration-150 ${
               isActive
                 ? 'bg-black text-white shadow-[0_3px_10px_rgba(0,0,0,0.10)] dark:bg-white dark:text-black'
                 : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'

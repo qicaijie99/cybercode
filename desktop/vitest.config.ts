@@ -17,6 +17,7 @@ export default defineConfig({
     setupFiles: ['./src/test-setup.ts'],
     exclude: [
       ...configDefaults.exclude,
+      'e2e/**',
       'sidecars/**/*.test.ts',
       'scripts/sidecarTarget.test.ts',
     ],

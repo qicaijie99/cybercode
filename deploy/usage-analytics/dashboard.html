@@ -1223,7 +1223,9 @@
       let insightIndex = 0
       let previousSummary
       let statusResetTimer
+      let resizeTimer
       let growthSequence = 0
+      let loadInFlight = false
       const renderSignatures = new Map()
 
       function escapeHtml(value) {
@@ -1264,6 +1266,61 @@
         const changed = renderSignatures.get(key) !== signature
         renderSignatures.set(key, signature)
         return changed
+      }
+
+      function nonNegativeInteger(value, label) {
+        const numeric = Number(value)
+        if (!Number.isSafeInteger(numeric) || numeric < 0) {
+          throw new Error(`Invalid ${label}`)
+        }
+        return numeric
+      }
+
+      function validateSummary(data) {
+        if (!data || typeof data !== 'object' || !Array.isArray(data.trend)) {
+          throw new Error('Invalid summary')
+        }
+        if (data.trend.length !== 30 || !/^\d{4}-\d{2}-\d{2}$/.test(String(data.today || ''))) {
+          throw new Error('Invalid trend window')
+        }
+
+        const totalUsers = nonNegativeInteger(data.totalUsers, 'total users')
+        const todayActive = nonNegativeInteger(data.todayActive, 'today active')
+        const newToday = nonNegativeInteger(data.newToday, 'new today')
+        const returningToday = nonNegativeInteger(data.returningToday, 'returning today')
+        const active7d = nonNegativeInteger(data.active7d, '7-day active')
+        const active30d = nonNegativeInteger(data.active30d, '30-day active')
+        let previousDay = ''
+        let previousCumulative = -1
+
+        for (const row of data.trend) {
+          const day = String(row?.day || '')
+          const active = nonNegativeInteger(row?.active, 'trend active')
+          const newlySeen = nonNegativeInteger(row?.new, 'trend new')
+          const cumulative = nonNegativeInteger(row?.cumulative, 'trend cumulative')
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || (previousDay && day <= previousDay)) {
+            throw new Error('Invalid trend dates')
+          }
+          if (newlySeen > active || active > cumulative || cumulative < previousCumulative) {
+            throw new Error('Inconsistent trend counts')
+          }
+          previousDay = day
+          previousCumulative = cumulative
+        }
+
+        const latest = data.trend[data.trend.length - 1]
+        if (
+          latest.day !== data.today
+          || Number(latest.active) !== todayActive
+          || Number(latest.new) !== newToday
+          || Number(latest.cumulative) !== totalUsers
+          || returningToday !== todayActive - newToday
+          || active7d > active30d
+          || active30d > totalUsers
+        ) {
+          throw new Error('Summary and trend do not match')
+        }
+        return data
       }
 
       function calculateGrowth(data) {
@@ -1887,7 +1944,12 @@
               const date = entries[0]?.axisValue || ''
               return [
                 `<strong>${escapeHtml(date)}</strong>`,
-                ...entries.map(point => `${point.marker}${escapeHtml(point.seriesName)}　<strong>${formatter.format(point.value || 0)}</strong>`),
+                ...entries.map(point => {
+                  const seriesName = point.seriesName === '累计用户'
+                    ? '累计用户（右轴）'
+                    : `${point.seriesName}（左轴）`
+                  return `${point.marker}${escapeHtml(seriesName)}　<strong>${formatter.format(point.value || 0)}</strong>`
+                }),
               ].join('<br>')
             },
           },
@@ -1907,7 +1969,12 @@
           yAxis: [
             {
               type: 'value',
+              position: 'left',
+              min: 0,
               minInterval: 1,
+              name: compact ? '' : '活跃 / 新增',
+              nameGap: 10,
+              nameTextStyle: { color: '#6f7b80', fontSize: 9 },
               axisLine: { show: false },
               axisTick: { show: false },
               axisLabel: { color: '#6f7b80', fontSize: 9 },
@@ -1915,7 +1982,12 @@
             },
             {
               type: 'value',
+              position: 'right',
+              min: 0,
               minInterval: 1,
+              name: compact ? '' : '累计',
+              nameGap: 10,
+              nameTextStyle: { color: '#8d8064', fontSize: 9 },
               axisLine: { show: false },
               axisTick: { show: false },
               axisLabel: { color: '#8d8064', fontSize: 9 },
@@ -1926,32 +1998,34 @@
             {
               name: '日活用户',
               type: 'line',
-              smooth: .28,
+              smooth: false,
               showSymbol: !compact,
               symbol: 'circle',
               symbolSize: 5,
               lineStyle: { width: 2, color: '#5bc7eb' },
               itemStyle: { color: '#5bc7eb' },
               areaStyle: { color: 'rgba(91, 199, 235, .08)' },
+              yAxisIndex: 0,
               data: rows.map(item => Number(item.active || 0)),
             },
             {
               name: '新增用户',
               type: 'line',
-              smooth: .28,
+              smooth: false,
               showSymbol: !compact,
               symbol: 'circle',
               symbolSize: 5,
               lineStyle: { width: 2, color: '#70eea5' },
               itemStyle: { color: '#70eea5' },
               areaStyle: { color: 'rgba(112, 238, 165, .055)' },
+              yAxisIndex: 0,
               data: rows.map(item => Number(item.new || 0)),
             },
             {
               name: '累计用户',
               type: 'line',
               yAxisIndex: 1,
-              smooth: .2,
+              smooth: false,
               showSymbol: !compact,
               symbol: 'diamond',
               symbolSize: 6,
@@ -2018,12 +2092,14 @@
       }
 
       async function load() {
+        if (loadInFlight) return
+        loadInFlight = true
         refreshButtons.forEach(button => { button.disabled = true })
         document.getElementById('error').classList.remove('visible')
         try {
           const response = await fetch('/api/cybercode-usage/summary', { cache: 'no-store' })
           if (!response.ok) throw new Error(`HTTP ${response.status}`)
-          const data = await response.json()
+          const data = validateSummary(await response.json())
           const growth = calculateGrowth(data)
           const animateUpdate = Boolean(previousSummary) && Object.keys(growth).length > 0
           metricIds.forEach(id => animateMetric(
@@ -2058,6 +2134,7 @@
           document.getElementById('updatedAt').textContent = '读取失败'
           document.getElementById('error').classList.add('visible')
         } finally {
+          loadInFlight = false
           refreshButtons.forEach(button => { button.disabled = false })
         }
       }
@@ -2072,6 +2149,12 @@
         geoChart && geoChart.resize()
         chinaGeoChart && chinaGeoChart.resize()
         trendChart && trendChart.resize()
+        window.clearTimeout(resizeTimer)
+        resizeTimer = window.setTimeout(() => {
+          if (!previousSummary) return
+          if (trendChart) setTrend(previousSummary.trend || [], false)
+          if (chinaGeoChart) setChinaGeoMap(previousSummary.chinaProvinces || [])
+        }, 120)
       })
       setupMotion()
       load()

@@ -5,6 +5,10 @@ import * as path from 'path'
 
 import { handleProvidersApi } from '../api/providers.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
+import {
+  clearModelsDevCatalogCache,
+  warmModelsDevCatalog,
+} from '../services/modelsDevCatalog.js'
 
 const AGGREGATOR_GATEWAY_PROVIDER_IDS = [
   'openrouter',
@@ -54,12 +58,14 @@ let tmpDir: string
 let originalConfigDir: string | undefined
 
 beforeEach(async () => {
+  clearModelsDevCatalogCache()
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'provider-presets-test-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = tmpDir
 })
 
 afterEach(async () => {
+  clearModelsDevCatalogCache()
   if (originalConfigDir !== undefined) {
     process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   } else {
@@ -110,6 +116,48 @@ describe('provider presets API', () => {
     expect(body.presets.find((preset) => preset.id === 'opencode-free')).toMatchObject({
       cost: 'recurring-free',
     })
+  })
+
+  test('places live catalog models before bundled fallback models', async () => {
+    await warmModelsDevCatalog({
+      force: true,
+      fetchImpl: (async () => Response.json({
+        openai: {
+          models: {
+            'gpt-live-new': {
+              id: 'gpt-live-new',
+              name: 'GPT Live New',
+              tool_call: true,
+              release_date: '2026-07-30',
+              modalities: {
+                input: ['text', 'image'],
+                output: ['text'],
+              },
+              limit: { context: 1_050_000 },
+            },
+          },
+        },
+      })) as typeof fetch,
+    })
+    const { req, url, segments } = makeRequest('GET', '/api/providers/presets')
+    const response = await handleProvidersApi(req, url, segments)
+    const body = await response.json() as {
+      presets: Array<{
+        id: string
+        modelOptions?: Array<{ id: string; contextWindow?: number }>
+      }>
+    }
+    const openai = body.presets.find((preset) => preset.id === 'openai')
+
+    expect(openai?.modelOptions?.[0]).toEqual({
+      id: 'gpt-live-new',
+      label: 'GPT Live New',
+      contextWindow: 1_050_000,
+      supportsImages: true,
+    })
+    expect(openai?.modelOptions?.some(
+      (model) => model.id === 'gpt-5.6-sol',
+    )).toBe(true)
   })
 
   test('configured presets include built-in official and custom entries', () => {
@@ -275,12 +323,12 @@ describe('provider presets API', () => {
     expect(xiaomi?.defaultModelContextWindows?.opus).toBe(1_000_000)
     expect(openai?.baseUrl).toBe('https://api.openai.com')
     expect(openai?.apiFormat).toBe('openai_responses')
-    expect(openai?.defaultModels.main).toBe('gpt-5.5')
-    expect(openai?.defaultModels.haiku).toBe('gpt-5.4-mini')
-    expect(openai?.defaultModels.sonnet).toBe('gpt-5.5')
-    expect(openai?.defaultModels.opus).toBe('gpt-5.5')
+    expect(openai?.defaultModels.main).toBe('gpt-5.6-sol')
+    expect(openai?.defaultModels.haiku).toBe('gpt-5.6-luna')
+    expect(openai?.defaultModels.sonnet).toBe('gpt-5.6-terra')
+    expect(openai?.defaultModels.opus).toBe('gpt-5.6-sol')
     expect(openai?.defaultModelContextWindows?.main).toBe(1_050_000)
-    expect(openai?.defaultModelContextWindows?.haiku).toBe(400_000)
+    expect(openai?.defaultModelContextWindows?.haiku).toBe(1_050_000)
     expect(google?.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta/openai')
     expect(google?.apiFormat).toBe('openai_chat')
     expect(google?.defaultModels.main).toBe('gemini-3.5-flash')
@@ -342,10 +390,11 @@ describe('provider presets API', () => {
       'kimi-k2.6',
       'kimi-k2.5',
     ])
-    expect(openai?.modelOptions?.map((option) => option.id).slice(0, 3)).toEqual([
-      'gpt-5.5',
-      'gpt-5.5-pro',
-      'gpt-5.4',
+    expect(openai?.modelOptions?.map((option) => option.id).slice(0, 4)).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.6',
     ])
     expect(google?.modelOptions?.map((option) => option.id).slice(0, 3)).toEqual([
       'gemini-3.5-flash',
@@ -373,6 +422,10 @@ describe('provider presets API', () => {
       'minimax:MiniMax-M3',
       'xiaomimimo:mimo-v2.5-pro',
       'xiaomimimo:mimo-v2.5',
+      'openai:gpt-5.6-sol',
+      'openai:gpt-5.6-terra',
+      'openai:gpt-5.6-luna',
+      'openai:gpt-5.6',
       'openai:gpt-5.5',
       'openai:gpt-5.5-pro',
       'openai:gpt-5.4',

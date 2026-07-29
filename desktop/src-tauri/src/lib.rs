@@ -40,6 +40,9 @@ const SCREENSHOT_RESULT_MAX_BYTES: usize = 32 * 1024 * 1024;
 const SCREENSHOT_SELECTION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const SERVER_STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVER_CONNECTION_WAIT_TIMEOUT: Duration = Duration::from_secs(65);
+const SERVER_SHUTDOWN_REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
+const SERVER_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(3500);
+const SERVER_GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(25);
 #[cfg(target_os = "macos")]
 const COMPUTER_USE_HELPER_APP_NAME: &str = "CyberCode Computer Use.app";
 #[cfg(target_os = "macos")]
@@ -1613,6 +1616,7 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
     }
     sidecar = sidecar
         .env("SERVER_AUTH_TOKEN", &auth_token)
+        .env("CYBERCODE_DESKTOP_PARENT_WATCH", "1")
         .env("CYBER_CODEGRAPH_ASSET_DIR", &codegraph_asset_dir_arg)
         .env("CYBER_RTK_PATH", &rtk_binary_arg)
         .env("CYBER_AGENT_BROWSER_PATH", &agent_browser_binary_arg);
@@ -1817,6 +1821,67 @@ fn prepare_agent_browser_runtime(binary: &Path, has_system_browser: bool) {
     });
 }
 
+fn build_server_shutdown_request(authority: &str, auth_token: &str) -> String {
+    format!(
+        "POST /internal/shutdown HTTP/1.1\r\nHost: {authority}\r\nAuthorization: Bearer {auth_token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+}
+
+fn request_server_shutdown(runtime: &ServerRuntime) -> bool {
+    let Some(authority) = runtime.url.strip_prefix("http://") else {
+        return false;
+    };
+    let Ok(address) = authority.parse::<SocketAddr>() else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, SERVER_SHUTDOWN_REQUEST_TIMEOUT)
+    else {
+        return false;
+    };
+
+    let _ = stream.set_read_timeout(Some(SERVER_SHUTDOWN_REQUEST_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(SERVER_SHUTDOWN_REQUEST_TIMEOUT));
+    let request = build_server_shutdown_request(authority, &runtime.auth_token);
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = [0_u8; 128];
+    if let Ok(read) = stream.read(&mut response) {
+        let status = String::from_utf8_lossy(&response[..read]);
+        if !status.starts_with("HTTP/1.1 202") && !status.starts_with("HTTP/1.0 202") {
+            eprintln!("[desktop] server did not acknowledge graceful shutdown");
+        }
+    }
+    true
+}
+
+fn wait_for_server_shutdown(runtime: &ServerRuntime) {
+    let Some(authority) = runtime.url.strip_prefix("http://") else {
+        return;
+    };
+    let Ok(address) = authority.parse::<SocketAddr>() else {
+        return;
+    };
+    let deadline = Instant::now() + SERVER_GRACEFUL_SHUTDOWN_TIMEOUT;
+
+    while Instant::now() < deadline {
+        if TcpStream::connect_timeout(&address, Duration::from_millis(50)).is_err() {
+            return;
+        }
+        thread::sleep(SERVER_GRACEFUL_SHUTDOWN_POLL_INTERVAL);
+    }
+}
+
+fn stop_server_runtime(runtime: ServerRuntime) {
+    if request_server_shutdown(&runtime) {
+        wait_for_server_shutdown(&runtime);
+    }
+    // CommandChild::kill is SIGKILL on Unix. It remains only as a bounded
+    // fallback after the server has had time to close Agent-owned processes.
+    let _ = runtime.child.kill();
+}
+
 fn stop_server_sidecar(app: &AppHandle) {
     let Some(state) = app.try_state::<ServerState>() else {
         return;
@@ -1826,8 +1891,11 @@ fn stop_server_sidecar(app: &AppHandle) {
         return;
     };
 
-    if let Some(runtime) = guard.runtime.take() {
-        let _ = runtime.child.kill();
+    let runtime = guard.runtime.take();
+    drop(guard);
+
+    if let Some(runtime) = runtime {
+        stop_server_runtime(runtime);
     }
 }
 
@@ -1972,9 +2040,10 @@ fn kill_windows_sidecars() {
 #[cfg(test)]
 mod tests {
     use super::{
-        completed_screenshot_path, decode_screenshot_png_data_url, decode_terminal_output,
-        default_utf8_locale, ensure_utf8_locale, parse_env_block, screenshot_temp_path,
-        wait_for_server, SERVER_CONNECTION_WAIT_TIMEOUT, SERVER_STARTUP_WAIT_TIMEOUT,
+        build_server_shutdown_request, completed_screenshot_path,
+        decode_screenshot_png_data_url, decode_terminal_output, default_utf8_locale,
+        ensure_utf8_locale, parse_env_block, screenshot_temp_path, wait_for_server,
+        SERVER_CONNECTION_WAIT_TIMEOUT, SERVER_STARTUP_WAIT_TIMEOUT,
     };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -1997,6 +2066,16 @@ mod tests {
     fn frontend_wait_outlasts_the_sidecar_startup_window() {
         assert_eq!(SERVER_STARTUP_WAIT_TIMEOUT, Duration::from_secs(60));
         assert!(SERVER_CONNECTION_WAIT_TIMEOUT > SERVER_STARTUP_WAIT_TIMEOUT);
+    }
+
+    #[test]
+    fn graceful_shutdown_request_uses_the_ephemeral_server_token() {
+        let request = build_server_shutdown_request("127.0.0.1:4567", "secret-token");
+
+        assert!(request.starts_with("POST /internal/shutdown HTTP/1.1\r\n"));
+        assert!(request.contains("Host: 127.0.0.1:4567\r\n"));
+        assert!(request.contains("Authorization: Bearer secret-token\r\n"));
+        assert!(request.ends_with("Connection: close\r\n\r\n"));
     }
 
     #[test]
@@ -2212,16 +2291,16 @@ pub fn run() {
                 match start_server_sidecar(&app_handle) {
                     Ok(runtime) => {
                         if is_app_quitting(&app_handle) {
-                            let _ = runtime.child.kill();
+                            stop_server_runtime(runtime);
                             return;
                         }
 
                         let Some(state) = app_handle.try_state::<ServerState>() else {
-                            let _ = runtime.child.kill();
+                            stop_server_runtime(runtime);
                             return;
                         };
                         let Ok(mut guard) = state.0.lock() else {
-                            let _ = runtime.child.kill();
+                            stop_server_runtime(runtime);
                             eprintln!("[desktop] server state lock poisoned during startup");
                             return;
                         };

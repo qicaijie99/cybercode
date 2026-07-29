@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { BookOpenText, Gauge, Network } from 'lucide-react'
+import { BookOpenText, Gauge, GitBranch, Network } from 'lucide-react'
 import { Icon } from '../shared/Icon'
 import { useTranslation } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
@@ -18,6 +18,7 @@ export function ChatModeSidebar({ label, ariaLabel }: ChatModeSidebarProps) {
   const memoryActive = settingsOpen && settingsPanelView === 'memory'
   const tokenOptimizationActive = settingsOpen && settingsPanelView === 'tokenOptimization'
   const codeGraphActive = settingsOpen && settingsPanelView === 'codeGraph'
+  const gitActive = settingsOpen && settingsPanelView === 'git'
 
   const handleMemoryClick = () => {
     if (memoryActive) {
@@ -43,10 +44,18 @@ export function ChatModeSidebar({ label, ariaLabel }: ChatModeSidebarProps) {
     }
   }
 
+  const handleGitClick = () => {
+    if (gitActive) {
+      closeSettings()
+    } else {
+      openSettings('git')
+    }
+  }
+
   return (
     <aside
       aria-label={ariaLabel}
-      className="chat-mode-sidebar native-ui-text relative z-[95] flex h-full w-[var(--chat-mode-sidebar-width)] shrink-0 select-none flex-col items-center border-l border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] py-[20px] text-[var(--color-text-tertiary)]"
+      className="chat-mode-sidebar native-ui-text relative z-[105] flex h-full w-[var(--chat-mode-sidebar-width)] shrink-0 select-none flex-col items-center border-l border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] py-[20px] text-[var(--color-text-tertiary)]"
     >
       <div className="flex w-full flex-col items-center gap-[24px]">
         <SideRailButton label={label}>
@@ -72,6 +81,13 @@ export function ChatModeSidebar({ label, ariaLabel }: ChatModeSidebarProps) {
           onClick={handleCodeGraphClick}
         >
           <Network size={22} strokeWidth={1.5} />
+        </SideRailButton>
+        <SideRailButton
+          active={gitActive}
+          label={t('git.sideRail')}
+          onClick={handleGitClick}
+        >
+          <GitBranch size={22} strokeWidth={1.5} />
         </SideRailButton>
       </div>
     </aside>

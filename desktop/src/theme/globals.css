@@ -946,7 +946,6 @@ h6 { font-size: 12px; line-height: 1.4; }
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: saturate(1.2) blur(18px);
   -webkit-backdrop-filter: saturate(1.2) blur(18px);
-  box-shadow: inset -1px 0 0 var(--color-border-separator);
 }
 
 html[data-runtime="tauri"] .icon-rail-glass {
@@ -1021,12 +1020,56 @@ button, input, textarea, select, a, [role="button"] {
 }
 
 .settings-panel-overlay {
+  left: var(--sidebar-rail-width);
+  right: 0;
   animation: fade-in 120ms var(--motion-route-easing) both;
+}
+
+.settings-panel-overlay--reserve-sidebar {
+  left: calc(var(--sidebar-rail-width) + var(--sidebar-width));
+}
+
+.settings-panel-overlay--reserve-right-rail {
+  right: var(--chat-mode-sidebar-width);
 }
 
 .settings-panel-card {
   transform-origin: 50% 48%;
   animation: settings-panel-in var(--motion-panel-duration) var(--motion-route-easing) both;
+}
+
+.git-workspace-shell {
+  width: min(760px, calc(100% - var(--sidebar-rail-width) - var(--chat-mode-sidebar-width)));
+  min-width: 520px;
+}
+
+.git-workspace-drawer {
+  animation: settings-provider-drawer-in var(--motion-sidebar-duration) var(--motion-sidebar-easing) both;
+}
+
+@media (max-width: 900px) {
+  .git-workspace-shell {
+    left: var(--sidebar-rail-width);
+    width: auto;
+    min-width: 0;
+  }
+
+  .git-workspace-files {
+    width: 250px !important;
+  }
+}
+
+@media (max-width: 680px) {
+  .git-workspace-main {
+    flex-direction: column;
+  }
+
+  .git-workspace-files {
+    width: 100% !important;
+    max-height: 48%;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--color-border-separator);
+  }
 }
 
 .settings-provider-shell {
@@ -1051,7 +1094,47 @@ button, input, textarea, select, a, [role="button"] {
 }
 
 .settings-panel-content {
+  container-name: settings-content;
+  container-type: inline-size;
   animation: content-route-in 140ms var(--motion-route-easing) both;
+}
+
+.modal-dialog-surface {
+  container-name: modal-dialog;
+  container-type: inline-size;
+}
+
+.viewport-overlay {
+  --viewport-overlay-gutter: 12px;
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  width: 100dvw;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  place-items: center;
+  overflow: hidden;
+  padding: var(--viewport-overlay-gutter);
+  isolation: isolate;
+}
+
+.viewport-overlay-surface {
+  max-width: calc(100dvw - (var(--viewport-overlay-gutter) * 2)) !important;
+}
+
+@media (min-width: 721px) {
+  .viewport-overlay {
+    --viewport-overlay-gutter: 24px;
+  }
+}
+
+.chat-composer-toolbar {
+  container-name: composer-toolbar;
+  container-type: inline-size;
 }
 
 .chat-mode-sidebar {
@@ -1087,6 +1170,21 @@ button, input, textarea, select, a, [role="button"] {
 .sidebar-panel[data-state="closed"] {
   width: 0;
   min-width: 0;
+}
+
+/* Large provider catalogs stay in the document for search and accessibility,
+   while off-screen card layout and image decoding are deferred by the browser. */
+.settings-provider-drawer [data-provider-catalog] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 520px;
+}
+
+.settings-provider-drawer [data-provider-catalog="aggregators-gateways"] {
+  contain-intrinsic-size: auto 1320px;
+}
+
+.settings-provider-drawer [data-provider-catalog="web-session"] {
+  contain-intrinsic-size: auto 760px;
 }
 
 .sidebar-toggle-button {
@@ -1323,6 +1421,551 @@ button, input, textarea, select, a, [role="button"] {
   .agent-migration-list {
     min-height: 180px !important;
     max-height: 260px !important;
+  }
+}
+
+/* Child workspaces respond to their own usable width. This matters when the
+   app rails consume part of a narrow desktop window. */
+@container settings-content (max-width: 620px) {
+  .settings-page {
+    gap: 12px !important;
+  }
+
+  .settings-page-header {
+    min-height: 44px !important;
+    gap: 3px !important;
+    padding-bottom: 0 !important;
+  }
+
+  .settings-page-title {
+    font-size: 18px !important;
+  }
+
+  .settings-section-header,
+  .settings-row {
+    padding-inline: 12px !important;
+  }
+
+  .settings-section-header {
+    min-height: 54px !important;
+    flex-wrap: wrap;
+    gap: 10px !important;
+  }
+
+  .settings-row {
+    min-height: 58px !important;
+    flex-wrap: wrap;
+    align-items: flex-start !important;
+    gap: 9px !important;
+  }
+
+  .settings-row-control {
+    display: flex;
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .settings-segmented-control {
+    width: 100%;
+  }
+
+  .settings-segmented-option {
+    min-width: 48px !important;
+    flex: 1 0 auto;
+    padding-inline: 8px !important;
+  }
+
+  .provider-settings-layout {
+    gap: 12px !important;
+  }
+
+  .provider-settings-nav {
+    grid-template-columns: repeat(4, minmax(104px, 1fr)) !important;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    padding-bottom: 2px;
+  }
+
+  .provider-settings-nav > button {
+    min-height: 42px !important;
+  }
+
+  .knowledge-toolbar {
+    gap: 8px !important;
+    padding: 8px 10px !important;
+  }
+
+  .knowledge-mobile-source-controls {
+    gap: 4px !important;
+  }
+
+  .knowledge-document-row {
+    grid-template-columns: minmax(0, 1fr) 76px 76px !important;
+  }
+
+  .savings-overview-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .optimizer-row {
+    grid-template-columns: 38px minmax(0, 1fr) auto !important;
+    align-items: initial !important;
+    padding-inline: 14px !important;
+  }
+
+  .optimizer-row-metrics {
+    grid-column: 2 / span 2 !important;
+    grid-row: auto !important;
+  }
+
+  .optimizer-row-controls {
+    grid-column: 3 !important;
+    grid-row: 1 !important;
+  }
+}
+
+@container settings-content (max-width: 480px) {
+  .agent-migration-route {
+    grid-template-columns: minmax(0, 1fr) 34px minmax(0, 1fr) !important;
+    gap: 6px !important;
+    padding-inline: 10px !important;
+  }
+
+  .agent-migration-route > button {
+    width: 34px !important;
+    height: 38px !important;
+  }
+
+  .agent-route-picker button[aria-haspopup="listbox"] {
+    gap: 5px !important;
+    padding-inline: 5px !important;
+  }
+}
+
+@container modal-dialog (max-width: 620px) {
+  .provider-form-primary-grid,
+  .provider-model-mapping-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .provider-credential-row,
+  .provider-image-support-row {
+    flex-wrap: wrap;
+  }
+
+  .provider-credential-row > :first-child {
+    flex-basis: 100%;
+  }
+
+  .provider-image-support-row {
+    align-items: stretch !important;
+  }
+
+  .provider-image-support-row .settings-segmented-control {
+    width: 100%;
+  }
+
+  .provider-image-support-row .settings-segmented-option {
+    min-width: 52px !important;
+    flex: 1 0 auto;
+  }
+}
+
+@container composer-toolbar (max-width: 540px) {
+  .chat-composer-runtime-controls {
+    flex-basis: 100% !important;
+    width: 100%;
+    margin-left: 0 !important;
+  }
+}
+
+@media (max-width: 720px) {
+  :root {
+    --sidebar-width: min(232px, calc(100vw - 56px));
+    --sidebar-rail-width: 56px;
+    --chat-mode-sidebar-width: 48px;
+  }
+
+  .app-tab-bar {
+    height: 52px !important;
+    padding-inline: 12px !important;
+  }
+
+  .app-tab-bar [data-testid="window-controls"] button {
+    width: 44px !important;
+  }
+
+  .tabbar-title {
+    max-width: min(240px, calc(100vw - 240px)) !important;
+    font-size: 13px !important;
+  }
+
+  .chat-mode-sidebar {
+    padding-block: 10px !important;
+  }
+
+  .chat-mode-sidebar > div {
+    gap: 8px !important;
+  }
+
+  .settings-panel-overlay {
+    padding: 4px !important;
+  }
+
+  .settings-panel-card {
+    height: calc(100dvh - 8px) !important;
+    border-radius: 6px !important;
+  }
+
+  .settings-panel-body--padded {
+    padding: 12px !important;
+  }
+
+  .settings-home-header {
+    height: 52px !important;
+    padding-inline: 12px !important;
+  }
+
+  .settings-home-tabs {
+    min-height: 50px !important;
+    padding: 0 12px 14px !important;
+  }
+
+  .settings-home-body {
+    padding-inline: 12px !important;
+    padding-bottom: 20px !important;
+  }
+
+  .wechat-input-container {
+    padding: 10px !important;
+  }
+
+  .chat-composer-toolbar {
+    gap: 4px !important;
+  }
+
+  .chat-composer-tools {
+    gap: 4px !important;
+  }
+
+  .chat-composer-runtime-controls {
+    flex: 1 1 220px;
+  }
+
+  .scheduled-tasks-content {
+    padding: 14px !important;
+  }
+
+  .scheduled-tasks-header {
+    flex-wrap: wrap;
+    align-items: flex-start !important;
+  }
+}
+
+@media (max-height: 520px) {
+  .icon-rail-glass,
+  .chat-mode-sidebar {
+    padding-block: 10px !important;
+  }
+
+  .app-tab-bar {
+    height: 52px !important;
+  }
+
+  .settings-panel-header {
+    height: 42px !important;
+  }
+
+  .settings-home-header {
+    height: 46px !important;
+  }
+
+  .settings-home-tabs {
+    min-height: 44px !important;
+    padding-bottom: 10px !important;
+  }
+
+  .agent-migration-layout {
+    min-height: 280px !important;
+  }
+
+  .agent-migration-list {
+    min-height: 120px !important;
+    max-height: 200px !important;
+  }
+
+  .knowledge-workspace-empty {
+    min-height: 200px !important;
+  }
+
+  .token-optimization-graph {
+    min-height: max(280px, calc(100dvh - 104px)) !important;
+  }
+
+  .codegraph-canvas-shell {
+    min-height: 200px !important;
+  }
+
+  .codegraph-visualization {
+    gap: 8px !important;
+  }
+
+  .codegraph-toolbar {
+    gap: 6px !important;
+  }
+
+  .codegraph-summary {
+    font-size: 10px !important;
+  }
+}
+
+/* Compact density is a discrete tier, not a scaled canvas. Text stays crisp
+   and hit testing remains native while low-resolution windows gain space. */
+@media (max-width: 720px), (max-height: 600px) {
+  :root {
+    --text-xs: 10px;
+    --text-sm: 12px;
+    --text-base: 13px;
+    --text-lg: 15px;
+    --text-xl: 17px;
+    --text-2xl: 20px;
+    --text-3xl: 24px;
+    --text-4xl: 32px;
+  }
+
+  html,
+  body,
+  #root {
+    font-size: 13px;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) h1 {
+    font-size: 24px;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) h2 {
+    font-size: 20px;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) h3 {
+    font-size: 16px;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) h4 {
+    font-size: 14px;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) h5 {
+    font-size: 12px;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) h6 {
+    font-size: 11px;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[42px]"]) {
+    font-size: 36px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[32px]"]) {
+    font-size: 28px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[28px]"]) {
+    font-size: 24px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[25px]"], [class~="text-[24px]"]) {
+    font-size: 22px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[22px]"]) {
+    font-size: 20px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[20px]"]) {
+    font-size: 18px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[19px]"]) {
+    font-size: 17px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[18px]"]) {
+    font-size: 16px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[16px]"]) {
+    font-size: 15px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[15px]"]) {
+    font-size: 14px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[14px]"]) {
+    font-size: 13px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[13px]"]) {
+    font-size: 12px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[12px]"]) {
+    font-size: 11px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"]) :where([class~="text-[11px]"]) {
+    font-size: 10px !important;
+  }
+
+  .settings-page-title {
+    font-size: 16px !important;
+  }
+
+  .settings-section-header {
+    min-height: 50px !important;
+  }
+
+  .settings-row {
+    min-height: 54px !important;
+  }
+
+  .settings-segmented-control {
+    height: 32px !important;
+  }
+
+  .settings-segmented-option {
+    height: 26px !important;
+  }
+
+  .provider-settings-nav > button {
+    min-height: 38px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[52px]"] {
+    height: 46px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[46px]"] {
+    height: 42px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[44px]"] {
+    height: 40px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[42px]"] {
+    height: 38px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[40px]"] {
+    height: 36px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[38px]"] {
+    height: 34px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[36px]"] {
+    height: 32px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[34px]"] {
+    height: 32px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[32px]"] {
+    height: 30px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[30px]"] {
+    height: 28px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, input, select, [role="button"])[class~="h-[28px]"] {
+    height: 26px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="h-[46px]"][class~="w-[46px]"] {
+    width: 42px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="h-[44px]"][class~="w-[44px]"] {
+    width: 40px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="h-[40px]"][class~="w-[40px]"] {
+    width: 36px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="h-[38px]"][class~="w-[38px]"] {
+    width: 34px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="h-[36px]"][class~="w-[36px]"] {
+    width: 32px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="h-[34px]"][class~="w-[34px]"] {
+    width: 32px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="h-[32px]"][class~="w-[32px]"] {
+    width: 30px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="h-[30px]"][class~="w-[30px]"] {
+    width: 28px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="min-h-[76px]"] {
+    min-height: 68px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="min-h-[64px]"] {
+    min-height: 56px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="min-h-[56px]"] {
+    min-height: 50px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="min-h-[54px]"] {
+    min-height: 48px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="min-h-[48px]"] {
+    min-height: 44px !important;
+  }
+
+  :where(.compact-density-scope, [role="dialog"], [role="menu"], [role="listbox"])
+    :where(button, [role="button"])[class~="min-h-[44px]"] {
+    min-height: 40px !important;
   }
 }
 

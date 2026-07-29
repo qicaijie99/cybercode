@@ -1067,7 +1067,7 @@ describe('MessageList nested tool calls', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('streaming next token')).toBeTruthy()
+      expect(screen.getByTestId('smooth-streaming-text').textContent).toBe('streaming next token')
     }, { timeout: 3_000 })
   })
 
@@ -1464,13 +1464,20 @@ describe('MessageList nested tool calls', () => {
       },
     })
 
-    render(<MessageList __testInitialItemCount={100} />)
+    const { container } = render(<MessageList __testInitialItemCount={100} />)
 
-    const buttons = screen.getAllByRole('button', { name: 'Rewind to here' })
+    const buttons = container.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label="Rewind to here"]',
+    )
     // Messages render in chronological order, so user-2 is the second rewind action.
     fireEvent.click(buttons[1]!)
-    const dialog = await screen.findByRole('dialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: /Rewind here/ }))
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')
+    expect(dialog).not.toBeNull()
+    const confirmButton = [...dialog!.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.includes('Rewind here'))
+    expect(confirmButton).toBeDefined()
+    await waitFor(() => expect(confirmButton?.disabled).toBe(false))
+    fireEvent.click(confirmButton!)
 
     await waitFor(() => {
       expect(sessionsApi.rewind).toHaveBeenLastCalledWith(

@@ -25,6 +25,9 @@ import { handleTokenOptimizationApi } from './api/token-optimization.js'
 import { handleAgentMigrationApi } from './api/agent-migration.js'
 import { handleKnowledgeApi } from './api/knowledge.js'
 import { handleRoutingApi } from './api/routing.js'
+import { handleWebSessionProvidersApi } from './api/web-session-providers.js'
+import { handleMediaProvidersApi } from './api/media-providers.js'
+import { handleGatewayApi } from './api/gateway.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
@@ -81,6 +84,12 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     case 'provider-oauth':
       return handleProviderOAuthApi(req, url, segments)
 
+    case 'web-session-providers':
+      return handleWebSessionProvidersApi(req, url, segments)
+
+    case 'media-providers':
+      return handleMediaProvidersApi(req, url, segments)
+
     case 'adapters':
       return handleAdaptersApi(req, url, segments)
 
@@ -104,6 +113,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'routing':
       return handleRoutingApi(req, url, segments)
+
+    case 'gateway':
+      return handleGatewayApi(req, url, segments)
 
     case 'plugins':
       return handlePluginsApi(req, url, segments)

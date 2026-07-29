@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import DOMPurify from 'dompurify'
 import { createPortal } from 'react-dom'
 import {
@@ -16,6 +16,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useTranslation } from '../../i18n'
+import { subscribeToViewportChanges } from '../../lib/viewportEvents'
 import type { PermissionMode } from '../../types/settings'
 import { Icon } from '../shared/Icon'
 
@@ -26,6 +27,19 @@ const MODE_ICONS: Record<PermissionMode, LucideIcon> = {
   bypassPermissions: ShieldAlert,
   dontAsk: ShieldAlert,
 }
+
+type MenuPosition = {
+  top: number
+  left: number
+  width: number
+  maxHeight: number
+  direction: 'up' | 'down'
+}
+
+const MENU_WIDTH = 320
+const MENU_HEIGHT = 304
+const VIEWPORT_MARGIN = 12
+const MENU_GAP = 10
 
 type Props = {
   workDir?: string
@@ -45,7 +59,10 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const [open, setOpen] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState(false)
+  const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const isControlled = value !== undefined
   const currentMode = isControlled ? value : storeMode
@@ -99,10 +116,43 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
   const workDir = workDirProp || activeSession?.workDir || '~'
   const CurrentModeIcon = isIconVariant ? Shield : MODE_ICONS[currentMode] ?? ShieldCheck
 
+  const updateMenuPosition = useCallback(() => {
+    const trigger = triggerRef.current
+    if (!trigger) return
+
+    const rect = trigger.getBoundingClientRect()
+    const width = Math.min(
+      MENU_WIDTH,
+      Math.max(1, window.innerWidth - VIEWPORT_MARGIN * 2),
+    )
+    const maxLeft = Math.max(
+      VIEWPORT_MARGIN,
+      window.innerWidth - width - VIEWPORT_MARGIN,
+    )
+    const desiredLeft = isIconVariant ? rect.right - width : rect.left
+    const spaceAbove = rect.top - MENU_GAP - VIEWPORT_MARGIN
+    const spaceBelow = window.innerHeight - rect.bottom - MENU_GAP - VIEWPORT_MARGIN
+    const direction = (
+      spaceAbove >= MENU_HEIGHT ||
+      spaceAbove >= spaceBelow
+    ) ? 'up' : 'down'
+    const availableHeight = direction === 'up' ? spaceAbove : spaceBelow
+
+    setMenuPosition({
+      top: direction === 'up' ? rect.top - MENU_GAP : rect.bottom + MENU_GAP,
+      left: Math.min(Math.max(desiredLeft, VIEWPORT_MARGIN), maxLeft),
+      width,
+      maxHeight: Math.max(48, Math.min(MENU_HEIGHT, availableHeight)),
+      direction,
+    })
+  }, [isIconVariant])
+
   useEffect(() => {
     if (!open) return
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -115,9 +165,20 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
     }
   }, [open])
 
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPosition(null)
+      return
+    }
+
+    updateMenuPosition()
+    return subscribeToViewportChanges(updateMenuPosition)
+  }, [open, updateMenuPosition])
+
   return (
     <div ref={ref} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen(!open)}
         aria-label={isIconVariant ? permissionSettingsLabel : MODE_LABELS[currentMode]}
@@ -145,8 +206,19 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
         )}
       </button>
 
-      {open && (
-        <div className="absolute bottom-full left-0 z-[140] mb-[10px] w-[320px] overflow-hidden rounded-[24px] border-2 border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-[8px] shadow-[var(--shadow-dropdown)]">
+      {open && menuPosition && createPortal(
+        <div
+          ref={menuRef}
+          className="settings-ui native-ui-text fixed z-[9999] overflow-y-auto overscroll-contain rounded-[24px] border-2 border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-[8px] shadow-[var(--shadow-dropdown)]"
+          style={{
+            left: menuPosition.left,
+            width: menuPosition.width,
+            maxHeight: menuPosition.maxHeight,
+            ...(menuPosition.direction === 'down'
+              ? { top: menuPosition.top }
+              : { bottom: window.innerHeight - menuPosition.top }),
+          }}
+        >
           <div data-testid="permission-mode-options" className="space-y-[4px]">
             {PERMISSION_ITEMS.map((item) => {
               const ItemIcon = item.icon
@@ -193,29 +265,36 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
               )
             })}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Bypass confirmation dialog */}
       {confirmDialog && createPortal(
-        <div className="settings-ui native-ui-text fixed inset-0 z-[100] flex items-center justify-center bg-[var(--color-overlay-scrim)] pl-[var(--sidebar-width)]" onClick={() => setConfirmDialog(false)}>
+        <div
+          className="viewport-overlay settings-ui native-ui-text z-[10000] bg-[var(--color-overlay-scrim)]"
+          onClick={() => setConfirmDialog(false)}
+        >
           <div
-            className="w-[420px] overflow-hidden rounded-[14px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-window)]"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('permMode.enableBypassTitle')}
+            className="viewport-overlay-surface flex max-h-[calc(100dvh-24px)] w-full max-w-[420px] flex-col overflow-hidden rounded-[12px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-window)] min-[721px]:rounded-[14px]"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex items-center gap-3 px-5 py-4 bg-[var(--color-error)]/8 border-b border-[var(--color-error)]/15">
+            <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-error)]/15 bg-[var(--color-error)]/8 px-4 py-3 min-[721px]:px-5 min-[721px]:py-4">
               <div className="flex items-center justify-center w-10 h-10 rounded-[10px] bg-[var(--color-error)]/12">
                 <Icon name="warning" size={22} className="text-[var(--color-error)]" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-[14px] font-bold text-[var(--color-text-primary)]">{t('permMode.enableBypassTitle')}</div>
                 <div className="text-[12px] text-[var(--color-text-tertiary)] mt-0.5">{t('permMode.enableBypassSubtitle')}</div>
               </div>
             </div>
 
             {/* Body */}
-            <div className="px-5 py-4">
+            <div className="min-h-0 overflow-y-auto overscroll-contain px-4 py-3 min-[721px]:px-5 min-[721px]:py-4">
               <p className="text-[12px] text-[var(--color-text-secondary)] leading-relaxed mb-3" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t('permMode.enableBypassBody')) }} />
               <div className="flex items-center gap-2 px-3 py-2 rounded-[10px] bg-[var(--color-surface-container-low)] border border-[var(--color-border-separator)]" title={workDir}>
                 <Icon name="folder" size={16} className="text-[var(--color-text-tertiary)] shrink-0" />
@@ -238,7 +317,7 @@ export function PermissionModeSelector({ workDir: workDirProp, value, onChange, 
             </div>
 
             {/* Actions */}
-            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)]">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] px-4 py-3 min-[721px]:px-5">
               <button
                 onClick={() => setConfirmDialog(false)}
                 className="px-4 py-2 text-[12px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] rounded-full transition-colors"

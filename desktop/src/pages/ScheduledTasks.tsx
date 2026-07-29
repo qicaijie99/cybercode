@@ -20,8 +20,8 @@ export function ScheduledTasks() {
 
   return (
     <div className="flex-1 overflow-y-auto bg-[var(--color-background)]">
-      <div className="mx-auto w-full max-w-[896px] px-[24px] py-[24px] md:px-[32px]">
-        <div className="flex items-center justify-between mb-4">
+      <div className="scheduled-tasks-content mx-auto w-full max-w-[896px] px-[24px] py-[24px] md:px-[32px]">
+        <div className="scheduled-tasks-header mb-4 flex items-center justify-between gap-3">
           <div>
             <h1 className="text-[22px] font-bold text-[var(--color-text-primary)]">{t('scheduledPage.title')}</h1>
             <p className="mt-1 text-[13px] leading-5 text-[var(--color-text-secondary)]">

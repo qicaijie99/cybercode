@@ -49,6 +49,16 @@ export const ProviderModelInfoSchema = z.object({
   supportsImages: z.boolean().optional(),
 })
 
+export const ProviderModelSyncStateSchema = z.object({
+  enabled: z.boolean().default(false),
+  syncedModelIds: z.array(z.string()).default([]),
+  lastSyncedAt: z.string().optional(),
+  lastSyncError: z.string().optional(),
+  endpoint: z.string().optional(),
+  // Derived for API responses. It is not written by the sync service.
+  supported: z.boolean().optional(),
+})
+
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
@@ -59,6 +69,7 @@ export const SavedProviderSchema = z.object({
   apiFormat: ApiFormatSchema.default('anthropic'),
   models: ModelMappingSchema,
   modelCatalog: z.array(ProviderModelInfoSchema).optional(),
+  modelSync: ProviderModelSyncStateSchema.optional(),
   modelContextWindows: ModelContextWindowsSchema.optional(),
   imageSupportMode: ImageSupportModeSchema.optional(),
   // Legacy boolean from older desktop builds. New writes should use imageSupportMode.
@@ -113,6 +124,7 @@ export const TestProviderSchema = z.object({
 export type ModelMapping = z.infer<typeof ModelMappingSchema>
 export type ModelContextWindows = z.infer<typeof ModelContextWindowsSchema>
 export type ProviderModelInfo = z.infer<typeof ProviderModelInfoSchema>
+export type ProviderModelSyncState = z.infer<typeof ProviderModelSyncStateSchema>
 export type SavedProvider = z.infer<typeof SavedProviderSchema>
 export type ProvidersIndex = z.infer<typeof ProvidersIndexSchema>
 export type CreateProviderInput = z.infer<typeof CreateProviderSchema>

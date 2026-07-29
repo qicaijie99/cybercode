@@ -97,7 +97,7 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/18 px-4"
+      className="viewport-overlay z-[10000] bg-black/18"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) resetAndClose()
       }}
@@ -106,9 +106,9 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
         role="dialog"
         aria-modal="true"
         aria-label={t('newSession.createProject')}
-        className="w-full max-w-[420px] overflow-hidden rounded-[12px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[0_18px_54px_rgba(0,0,0,0.22)]"
+        className="viewport-overlay-surface flex max-h-[calc(100dvh-24px)] w-full max-w-[420px] flex-col overflow-hidden rounded-[12px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[0_18px_54px_rgba(0,0,0,0.22)]"
       >
-        <div className="flex items-center gap-3 border-b border-[var(--color-border-separator)] px-4 py-3">
+        <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border-separator)] px-4 py-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
             <Icon name="create_new_folder" size={17} />
           </span>
@@ -129,7 +129,7 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
         </div>
 
         <form
-          className="flex flex-col gap-3 px-4 py-4"
+          className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain px-4 py-4"
           onSubmit={(event) => {
             event.preventDefault()
             void handleCreate()

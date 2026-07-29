@@ -589,6 +589,68 @@ describe('OpenAI Codex browser OAuth', () => {
     ), 'utf-8')) as { refreshToken: string }
     expect(stored.refreshToken).toBe('rotated-refresh')
   })
+
+  test('turns a region rejection into a useful callback error', async () => {
+    service = new ProviderOAuthService({ codexCallbackPort: 0 })
+    service.setFetchFn((async () => jsonResponse({
+      error: {
+        code: 'unsupported_country_region_territory',
+        message: 'Country, region, or territory not supported',
+      },
+    }, 403)) as typeof fetch)
+
+    const started = await service.start('codex')
+    if (started.flowType !== 'authorization_code_pkce') {
+      throw new Error('Expected a browser OAuth flow')
+    }
+    const authorizationUrl = new URL(started.authorizeUrl)
+    const callback = new URL(started.redirectUri)
+    callback.searchParams.set('code', 'region-code')
+    callback.searchParams.set('state', authorizationUrl.searchParams.get('state')!)
+
+    const callbackResponse = await fetch(callback)
+    const callbackBody = await callbackResponse.text()
+
+    expect(callbackResponse.status).toBe(500)
+    expect(callbackBody).toContain('current country or region is not supported')
+    expect(callbackBody).toContain('CyberCode cannot bypass provider region policies')
+    expect(callbackBody).not.toContain('unsupported_country_region_territory')
+  })
+})
+
+describe('Google Code Assist browser OAuth', () => {
+  test('keeps Antigravity-only restricted scopes out of Gemini CLI login', async () => {
+    const gemini = await service.start('gemini-cli')
+    if (gemini.flowType === 'device_code') {
+      throw new Error('Expected a browser OAuth flow')
+    }
+    const geminiScopes = new URL(gemini.authorizeUrl)
+      .searchParams
+      .get('scope')
+      ?.split(' ') ?? []
+
+    expect(geminiScopes).toEqual([
+      'https://www.googleapis.com/auth/cloud-platform',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ])
+    expect(geminiScopes).not.toContain('https://www.googleapis.com/auth/cclog')
+    expect(new URL(gemini.authorizeUrl).searchParams.get('code_challenge')).toBeTruthy()
+
+    const antigravity = await service.start('antigravity')
+    if (antigravity.flowType === 'device_code') {
+      throw new Error('Expected a browser OAuth flow')
+    }
+    const antigravityScopes = new URL(antigravity.authorizeUrl)
+      .searchParams
+      .get('scope')
+      ?.split(' ') ?? []
+
+    expect(antigravityScopes).toContain('https://www.googleapis.com/auth/cclog')
+    expect(antigravityScopes).toContain(
+      'https://www.googleapis.com/auth/experimentsandconfigs',
+    )
+  })
 })
 
 describe('OAuth provider lifecycle', () => {

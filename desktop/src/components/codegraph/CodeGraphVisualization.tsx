@@ -237,8 +237,8 @@ export function CodeGraphVisualization({ data }: { data: CodeGraphData }) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-[12px]">
-      <div className="flex flex-wrap items-center gap-[10px]">
+    <div className="codegraph-visualization flex min-h-0 flex-1 flex-col gap-[12px]">
+      <div className="codegraph-toolbar flex flex-wrap items-center gap-[10px]">
         <label className="relative min-w-[220px] flex-1">
           <Search
             aria-hidden="true"
@@ -311,7 +311,7 @@ export function CodeGraphVisualization({ data }: { data: CodeGraphData }) {
 
       <div
         ref={containerRef}
-        className="relative min-h-[440px] w-full flex-1 overflow-hidden rounded-[8px] border border-[#26333a] bg-[#090d10] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.015)]"
+        className="codegraph-canvas-shell relative min-h-[440px] w-full flex-1 overflow-hidden rounded-[8px] border border-[#26333a] bg-[#090d10] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.015)]"
       >
         <canvas
           ref={canvasRef}
@@ -356,7 +356,7 @@ export function CodeGraphVisualization({ data }: { data: CodeGraphData }) {
         )}
       </div>
 
-      <div className="flex min-h-[28px] items-center justify-between gap-[16px] text-[11px] text-[var(--color-text-tertiary)]">
+      <div className="codegraph-summary flex min-h-[28px] flex-wrap items-center justify-between gap-x-[16px] gap-y-[4px] text-[11px] text-[var(--color-text-tertiary)]">
         <span>{t('tokenOptimization.graph.summary', { nodes: data.nodes.length, edges: data.edges.length })}</span>
         <span>
           {viewMode === 'architecture'

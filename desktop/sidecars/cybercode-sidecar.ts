@@ -44,8 +44,22 @@ if (mode === 'adapters') {
   await import('../../preload.ts')
 
   if (mode === 'server') {
-    const { startServer } = await import('../../src/server/index.ts')
+    const { requestServerShutdown, startServer } = await import(
+      '../../src/server/index.ts'
+    )
     startServer()
+    if (process.env.CYBERCODE_DESKTOP_PARENT_WATCH === '1') {
+      let parentPipeClosed = false
+      const handleParentPipeClosed = () => {
+        if (parentPipeClosed) return
+        parentPipeClosed = true
+        void requestServerShutdown('desktop parent pipe closed')
+      }
+      process.stdin.once('end', handleParentPipeClosed)
+      process.stdin.once('close', handleParentPipeClosed)
+      process.stdin.once('error', handleParentPipeClosed)
+      process.stdin.resume()
+    }
   } else if (mode === 'cli') {
     await import('../../src/entrypoints/cli.tsx')
   } else {

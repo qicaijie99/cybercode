@@ -87,6 +87,22 @@ export const init = memoize(async (): Promise<void> => {
     })
     profileCheckpoint('init_provider_runtime_configured')
 
+    // Desktop owns this scheduler in its host process. Standalone TUI sessions
+    // start it locally so exactly one process updates the shared provider file.
+    if (!isEnvTruthy(process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)) {
+      try {
+        const { startProviderModelSyncScheduler } = await import(
+          '../server/services/providerModelSyncScheduler.js'
+        )
+        startProviderModelSyncScheduler()
+      } catch (error) {
+        logForDebugging(
+          `[init] provider model sync scheduler failed: ${errorMessage(error)}`,
+          { level: 'warn' },
+        )
+      }
+    }
+
     // Apply only safe environment variables before trust dialog
     // Full environment variables are applied after trust is established
     const envVarsStart = Date.now()

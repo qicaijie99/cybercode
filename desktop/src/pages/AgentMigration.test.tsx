@@ -95,13 +95,22 @@ describe('AgentMigration', () => {
       ['Kimi Code', 'kimi-code'],
       ['Pi', 'pi'],
     ] as const
+    const options = within(listbox).getAllByRole('option')
+    const optionsByAgentId = new Map(options.map(option => {
+      const logo = option.querySelector('[data-agent-logo]')
+      return [logo?.getAttribute('data-agent-logo'), option]
+    }))
+
+    expect(options).toHaveLength(expectedAgents.length)
     for (const [name, id] of expectedAgents) {
-      const option = within(listbox).getByRole('option', { name: new RegExp(name.replace('/', '\\/')) })
-      expect(option.querySelector(`[data-agent-logo="${id}"]`)).toBeInTheDocument()
+      const option = optionsByAgentId.get(id)
+      expect(option).toBeDefined()
+      expect(option).toHaveTextContent(name)
+      expect(option?.querySelector(`[data-agent-logo="${id}"]`)).toBeInTheDocument()
     }
-    expect(within(listbox).getByRole('option', { name: /CyberCode/ })).toHaveAttribute('aria-selected', 'true')
-    expect(within(listbox).getByRole('option', { name: /OpenClaw/ })).toBeDisabled()
-    expect(within(listbox).getByRole('option', { name: /Cursor/ })).toBeDisabled()
+    expect(optionsByAgentId.get('cybercode')).toHaveAttribute('aria-selected', 'true')
+    expect(optionsByAgentId.get('openclaw')).toBeDisabled()
+    expect(optionsByAgentId.get('cursor')).toBeDisabled()
     expect(within(listbox).getByText('默认')).toBeInTheDocument()
   })
 

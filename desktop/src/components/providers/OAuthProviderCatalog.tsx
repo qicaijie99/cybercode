@@ -27,6 +27,7 @@ export const OAUTH_PROVIDER_CATALOG: OAuthProviderCatalogItem[] = [
 
 type Props = {
   claudeConnected: boolean
+  providers?: readonly OAuthProviderCatalogItem[]
   connectedProviderIds?: ReadonlySet<string>
   capabilities?: ReadonlyMap<string, ProviderOAuthCapability>
   onSelectProvider?: (provider: OAuthProviderCatalogItem) => void
@@ -43,6 +44,7 @@ type Props = {
 
 export function OAuthProviderCatalog({
   claudeConnected,
+  providers = OAUTH_PROVIDER_CATALOG,
   connectedProviderIds = new Set(),
   capabilities = new Map(),
   onSelectProvider,
@@ -74,7 +76,7 @@ export function OAuthProviderCatalog({
         data-provider-catalog-layout="comfortable"
         className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
       >
-        {OAUTH_PROVIDER_CATALOG.map((provider) => {
+        {providers.map((provider) => {
           const isClaude = provider.id === 'claude'
           const isConnected = isClaude
             ? claudeConnected

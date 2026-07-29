@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import { Check, ExternalLink, Link2Off } from 'lucide-react'
 import { useCybercodeOAuthStore } from '../../stores/cybercodeOAuthStore'
 import { useTranslation } from '../../i18n'
+import { openExternalUrl } from '../../lib/openExternalUrl'
 import { Button } from '../shared/Button'
 import { Modal } from '../shared/Modal'
+import { OAuthRiskNotice } from '../providers/OAuthRiskNotice'
 import { ProviderLogo } from '../providers/ProviderLogo'
 
 type Props = {
@@ -53,7 +54,7 @@ export function ClaudeOAuthDialog({
   const openAuthorizationPage = async (url = authorizeUrl) => {
     if (!url) return
     try {
-      await shellOpen(url)
+      await openExternalUrl(url)
       startPolling()
     } catch (openError) {
       console.error('[ClaudeOAuthDialog] shellOpen failed:', openError)
@@ -139,6 +140,10 @@ export function ClaudeOAuthDialog({
             </div>
           </div>
         </div>
+
+        {!status?.loggedIn && (
+          <OAuthRiskNotice providerName="Claude Code" />
+        )}
 
         {status?.loggedIn ? (
           <div className="rounded-[8px] border border-[var(--color-success)]/25 bg-[var(--color-success)]/[0.06] px-[14px] py-[12px]">

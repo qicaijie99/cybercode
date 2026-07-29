@@ -68,6 +68,7 @@ export type SettingsPanelView =
   | 'scheduled'
   | 'tokenOptimization'
   | 'codeGraph'
+  | 'git'
   | 'agentMigration'
 
 type ActiveView = 'code' | 'scheduled' | 'terminal' | 'history' | 'settings'
@@ -151,10 +152,12 @@ export const useUIStore = create<UIStore>((set) => ({
       && view !== 'scheduled'
       && view !== 'tokenOptimization'
       && view !== 'codeGraph'
+      && view !== 'git'
       && view !== 'agentMigration'
         ? view
         : null,
     railSettingsView: null,
+    ...(isCompactAppLayout() ? { sidebarOpen: false } : {}),
   }),
   closeSettings: () => set({ settingsOpen: false }),
   setRailSettingsView: (view) => set(view
@@ -163,6 +166,7 @@ export const useUIStore = create<UIStore>((set) => ({
         settingsPanelView: view,
         pendingSettingsTab: view,
         railSettingsView: null,
+        ...(isCompactAppLayout() ? { sidebarOpen: false } : {}),
       }
     : { settingsOpen: false, railSettingsView: null }),
   openModal: (id) => set({ activeModal: id }),
