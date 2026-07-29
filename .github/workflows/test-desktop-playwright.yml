@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'desktop/**'
+      - 'adapters/**'
       - 'src/server/**'
       - 'src/utils/envUtils.ts'
       - 'package.json'
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - 'desktop/**'
+      - 'adapters/**'
       - 'src/server/**'
       - 'src/utils/envUtils.ts'
       - 'package.json'
@@ -47,6 +49,10 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Install adapter dependencies
+        working-directory: adapters
         run: bun install --frozen-lockfile
 
       - name: Install Playwright Chromium
