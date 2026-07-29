@@ -59,10 +59,17 @@ export const ProviderModelSyncStateSchema = z.object({
   supported: z.boolean().optional(),
 })
 
+export const PublicProviderAliasSchema = z.string()
+  .trim()
+  .toLowerCase()
+  .min(2)
+  .max(64)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/)
+
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
-  publicAlias: z.string().optional(),
+  publicAlias: PublicProviderAliasSchema.optional(),
   name: z.string().min(1),
   apiKey: z.string(),
   oauthProviderId: z.string().optional(),
@@ -85,6 +92,7 @@ export const ProvidersIndexSchema = z.object({
 
 export const CreateProviderSchema = z.object({
   presetId: z.string().min(1),
+  publicAlias: PublicProviderAliasSchema.optional(),
   name: z.string().min(1),
   apiKey: z.string(),
   baseUrl: z.string(),
@@ -99,6 +107,7 @@ export const CreateProviderSchema = z.object({
 
 export const UpdateProviderSchema = z.object({
   presetId: z.string().min(1).optional(),
+  publicAlias: PublicProviderAliasSchema.optional(),
   name: z.string().min(1).optional(),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),

@@ -1657,6 +1657,48 @@ describe('Settings > Providers tab', () => {
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByPlaceholderText('sk-...')).toHaveValue('')
   })
+
+  it('saves a readable node alias from the provider form', async () => {
+    providerStoreState.updateProvider = vi.fn().mockResolvedValue({
+      ...providerStoreState.providers[0],
+      publicAlias: 'minimax-main',
+    })
+
+    render(<ProviderSettings />)
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Edit MiniMax-M2.7-highspeed(openai)',
+    }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Node alias' }), {
+      target: { value: 'MiniMax-Main' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(providerStoreState.updateProvider).toHaveBeenCalledWith(
+      'provider-1',
+      expect.objectContaining({ publicAlias: 'minimax-main' }),
+    ))
+  })
+
+  it('rejects a one-character node alias before submitting the provider form', () => {
+    providerStoreState.updateProvider = vi.fn()
+    render(<ProviderSettings />)
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Edit MiniMax-M2.7-highspeed(openai)',
+    }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Node alias' }), {
+      target: { value: 'x' },
+    })
+
+    expect(within(dialog).getByText(
+      'Use 2–64 lowercase letters, numbers, or hyphens.',
+    )).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(providerStoreState.updateProvider).not.toHaveBeenCalled()
+  })
 })
 
 describe('Settings > About tab', () => {

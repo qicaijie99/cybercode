@@ -87,10 +87,12 @@ function normalizeGatewayTarget(value: unknown): GatewayTarget | null {
   if (!target) return null
   const id = firstString(target.id)
   if (!id) return null
-  const publicId = firstString(target.publicId, id) ?? id
   const kind = target.kind === 'route' || id.startsWith('route/')
     ? 'route'
     : 'model'
+  const suppliedPublicId = firstString(target.publicId)
+  const publicId = kind === 'route' ? suppliedPublicId ?? id : suppliedPublicId
+  if (!publicId || (kind === 'model' && publicId.startsWith('model/'))) return null
   const providerId = firstString(target.providerId)
   const modelId = firstString(target.modelId)
   const routeId = firstString(target.routeId)
@@ -151,11 +153,11 @@ export function normalizeGatewayStatus(value: unknown): GatewayStatus | null {
   const baseUrl = firstString(status.baseUrl)
   if (!baseUrl) return null
 
-  const targets = Array.isArray(status.targets)
-    ? status.targets
-        .map(normalizeGatewayTarget)
-        .filter((target): target is GatewayTarget => target !== null)
-    : []
+  const rawTargets = Array.isArray(status.targets) ? status.targets : []
+  const targets = rawTargets
+    .map(normalizeGatewayTarget)
+    .filter((target): target is GatewayTarget => target !== null)
+  if (targets.length !== rawTargets.length) return null
 
   let keys: GatewayKeyStatus[]
   if (Array.isArray(status.keys)) {

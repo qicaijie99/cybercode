@@ -32,6 +32,7 @@ import {
   inferContextWindowFromModelName,
   parseContextWindowTokenValue,
 } from '../../utils/modelContextWindows.js'
+import { PublicProviderAliasSchema } from '../types/provider.js'
 import type {
   SavedProvider,
   ProvidersIndex,
@@ -105,6 +106,21 @@ const PUBLIC_PROVIDER_ALIASES: Record<string, string> = {
   zhipuglm: 'zhipu',
   xiaomimimo: 'mimo',
 }
+const PUBLIC_PROVIDER_HOST_ALIASES: Array<[suffix: string, alias: string]> = [
+  ['volces.com', 'volcengine'],
+  ['baidubce.com', 'qianfan'],
+  ['bigmodel.cn', 'zhipu'],
+  ['moonshot.cn', 'kimi'],
+  ['kimi.com', 'kimi'],
+  ['siliconflow.cn', 'siliconflow'],
+  ['siliconflow.com', 'siliconflow'],
+  ['openrouter.ai', 'openrouter'],
+  ['deepseek.com', 'deepseek'],
+  ['minimax.io', 'minimax'],
+  ['dashscope.aliyuncs.com', 'dashscope'],
+  ['openai.com', 'openai'],
+  ['anthropic.com', 'claude'],
+]
 const LEGACY_PRESET_MODEL_IDS: Record<string, Record<string, string>> = {
   deepseek: {
     'deepseek-v4-pro[1m]': 'deepseek-v4-pro',
@@ -386,17 +402,62 @@ function isValidPublicAlias(value: string | undefined): value is string {
   )
 }
 
-function providerPublicAliasBase(provider: SavedProvider): string {
+function providerHostPublicAlias(provider: SavedProvider): string {
+  try {
+    const hostname = new URL(provider.baseUrl).hostname.toLowerCase()
+    const known = PUBLIC_PROVIDER_HOST_ALIASES.find(([suffix]) => (
+      hostname === suffix || hostname.endsWith(`.${suffix}`)
+    ))
+    if (known) return known[1]
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return 'local'
+
+    const genericLabels = new Set(['api', 'gateway', 'open', 'www'])
+    const label = hostname
+      .split('.')
+      .find((part) => part.length > 1 && !genericLabels.has(part))
+    return publicAliasSlug(label ?? '')
+  } catch {
+    return ''
+  }
+}
+
+function providerPublicAliasCandidates(provider: SavedProvider): string[] {
   const presetAlias = PUBLIC_PROVIDER_ALIASES[provider.presetId] ?? provider.presetId
-  const source = provider.presetId === 'custom' ? provider.name : presetAlias
-  return publicAliasSlug(source) || 'custom'
+  const nameAlias = publicAliasSlug(provider.name)
+  const hostAlias = providerHostPublicAlias(provider)
+  const candidates = provider.presetId === 'custom'
+    ? [nameAlias, hostAlias, 'custom']
+    : [publicAliasSlug(presetAlias), nameAlias, hostAlias]
+  return [...new Set(candidates.filter(Boolean))]
+}
+
+function isLegacyGeneratedPublicAlias(
+  provider: SavedProvider,
+  alias: string | undefined,
+): boolean {
+  if (!alias) return true
+  if (provider.presetId === 'custom' && /^custom(?:-[a-f0-9]{6})?$/.test(alias)) {
+    return true
+  }
+  const base = providerPublicAliasCandidates(provider)[0] ?? 'custom'
+  const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${escapedBase}-[a-f0-9]{6}$`).test(alias)
 }
 
 function migrateProviderPublicAliases(
   providers: SavedProvider[],
 ): { providers: SavedProvider[]; changed: boolean } {
+  const replaceableIds = new Set(
+    providers
+      .filter((provider) => (
+        !isValidPublicAlias(provider.publicAlias) ||
+        isLegacyGeneratedPublicAlias(provider, provider.publicAlias)
+      ))
+      .map((provider) => provider.id),
+  )
   const reserved = new Set(
     providers
+      .filter((provider) => !replaceableIds.has(provider.id))
       .map((provider) => provider.publicAlias)
       .filter(isValidPublicAlias),
   )
@@ -404,15 +465,22 @@ function migrateProviderPublicAliases(
   let changed = false
 
   const migrated = providers.map((provider) => {
-    if (isValidPublicAlias(provider.publicAlias) && !claimed.has(provider.publicAlias)) {
+    if (
+      !replaceableIds.has(provider.id) &&
+      isValidPublicAlias(provider.publicAlias) &&
+      !claimed.has(provider.publicAlias)
+    ) {
       claimed.add(provider.publicAlias)
       return provider
     }
 
-    const base = providerPublicAliasBase(provider)
-    let alias = base
+    const candidates = providerPublicAliasCandidates(provider)
+    let alias = candidates.find((candidate) => (
+      !reserved.has(candidate) && !claimed.has(candidate)
+    ))
+    const base = candidates[0] ?? 'custom'
     let attempt = 0
-    while (reserved.has(alias)) {
+    while (!alias || reserved.has(alias) || claimed.has(alias)) {
       const seed = attempt === 0 ? provider.id : `${provider.id}:${attempt}`
       const suffix = createHash('sha256').update(seed).digest('hex').slice(0, 6)
       alias = `${base}-${suffix}`
@@ -421,7 +489,7 @@ function migrateProviderPublicAliases(
 
     reserved.add(alias)
     claimed.add(alias)
-    changed = true
+    if (provider.publicAlias !== alias) changed = true
     return { ...provider, publicAlias: alias }
   })
 
@@ -797,10 +865,19 @@ export class ProviderService {
 
   async addProvider(input: CreateProviderInput): Promise<SavedProvider> {
     const index = await this.readIndex()
+    const requestedAlias = input.publicAlias
+      ? PublicProviderAliasSchema.parse(input.publicAlias)
+      : undefined
+    if (requestedAlias && index.providers.some((provider) => (
+      provider.publicAlias === requestedAlias
+    ))) {
+      throw ApiError.conflict(`Provider alias "${requestedAlias}" is already in use`)
+    }
 
-    const provider: SavedProvider = {
+    let provider: SavedProvider = {
       id: crypto.randomUUID(),
       presetId: input.presetId,
+      ...(requestedAlias && { publicAlias: requestedAlias }),
       name: input.name,
       apiKey: input.apiKey,
       baseUrl: input.baseUrl,
@@ -823,6 +900,9 @@ export class ProviderService {
     }
 
     index.providers.push(provider)
+    const migrated = migrateProviderPublicAliases(index.providers)
+    index.providers = migrated.providers
+    provider = index.providers.find((entry) => entry.id === provider.id) ?? provider
     await this.writeIndex(index)
     return provider
   }
@@ -834,9 +914,18 @@ export class ProviderService {
 
     const existing = index.providers[idx]
     const isOAuthManaged = Boolean(existing.oauthProviderId)
+    const requestedAlias = input.publicAlias !== undefined
+      ? PublicProviderAliasSchema.parse(input.publicAlias)
+      : undefined
+    if (requestedAlias && index.providers.some((provider) => (
+      provider.id !== id && provider.publicAlias === requestedAlias
+    ))) {
+      throw ApiError.conflict(`Provider alias "${requestedAlias}" is already in use`)
+    }
     const updated: SavedProvider = {
       ...existing,
       ...(input.presetId !== undefined && !isOAuthManaged && { presetId: input.presetId }),
+      ...(requestedAlias !== undefined && { publicAlias: requestedAlias }),
       ...(input.name !== undefined && { name: input.name }),
       ...(input.apiKey !== undefined &&
         !isMaskedApiKey(input.apiKey) && { apiKey: input.apiKey }),

@@ -57,6 +57,35 @@ describe('normalizeGatewayStatus', () => {
     })
   })
 
+  it('rejects an old model target cache that would expose an internal provider UUID', () => {
+    const legacyTarget = {
+      id: 'model/9f607f3e-60ad-4c82-b55c-c82f3d9c1d15/kimi-k2.6',
+      kind: 'model',
+      label: 'kimi-k2.6',
+      description: 'Kimi',
+      available: true,
+      providerId: '9f607f3e-60ad-4c82-b55c-c82f3d9c1d15',
+      modelId: 'kimi-k2.6',
+    }
+    const base = {
+      baseUrl: 'http://127.0.0.1:3456/v1',
+      enabled: true,
+      keys: [],
+    }
+
+    expect(normalizeGatewayStatus({
+      ...base,
+      targets: [legacyTarget],
+    })).toBeNull()
+    expect(normalizeGatewayStatus({
+      ...base,
+      targets: [{
+        ...legacyTarget,
+        publicId: legacyTarget.id,
+      }],
+    })).toBeNull()
+  })
+
   it('rejects data that cannot be interpreted as a node status', () => {
     expect(normalizeGatewayStatus({ enabled: true })).toBeNull()
     expect(normalizeGatewayStatus(null)).toBeNull()

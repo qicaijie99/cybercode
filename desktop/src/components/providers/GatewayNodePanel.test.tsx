@@ -141,6 +141,32 @@ describe('GatewayNodePanel', () => {
     expect(screen.queryByText(/older version|restart CyberCode/i)).not.toBeInTheDocument()
   })
 
+  it('refreshes an old target cache instead of generating settings with an internal ID', async () => {
+    const currentStatus = makeStatus()
+    peekStatusMock.mockReturnValue({
+      ...currentStatus,
+      targets: currentStatus.targets.map((target) => (
+        target.kind === 'model'
+          ? { ...target, publicId: target.id }
+          : target
+      )),
+    })
+    statusMock.mockResolvedValue(currentStatus)
+
+    render(<GatewayNodePanel />)
+
+    expect(await screen.findByText('Connection configuration builder')).toBeInTheDocument()
+    expect(statusMock).toHaveBeenCalledWith({ force: true })
+    fireEvent.click(screen.getByRole('tab', { name: /Direct models 1/ }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Generate connection settings for kimi/kimi-k2.6',
+    }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Connection settings' })
+    expect(within(dialog).getByText('kimi/kimi-k2.6')).toBeInTheDocument()
+    expect(within(dialog).queryByText(/model\/provider-1\//)).not.toBeInTheDocument()
+  })
+
   it('migrates a legacy single-key cache and keeps its controls usable', async () => {
     peekStatusMock.mockReturnValue({
       baseUrl: 'http://127.0.0.1:3456/v1',

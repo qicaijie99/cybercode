@@ -2096,6 +2096,7 @@ function openExternalUrl(url: string) {
 }
 
 const MASKED_API_KEYS = new Set(['***', '••••••••'])
+const PUBLIC_PROVIDER_ALIAS_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 
 function createContextWindowInputs(
   models: ModelMapping,
@@ -2406,6 +2407,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const initialBaseUrl = provider?.baseUrl ?? initialPreset.baseUrl
   const isCloudflareWorkersAi = selectedPreset.id === 'cloudflare-ai'
   const [name, setName] = useState(provider?.name ?? selectedPresetName)
+  const [publicAlias, setPublicAlias] = useState(provider?.publicAlias ?? '')
   const [baseUrl, setBaseUrl] = useState(initialBaseUrl)
   const [cloudflareAccountId, setCloudflareAccountId] = useState(() =>
     isCloudflareWorkersAi ? extractCloudflareAccountId(initialBaseUrl) : '',
@@ -2512,7 +2514,13 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const hasContextWindowError = MODEL_ROLES.some((role) =>
     contextWindowInputs[role].trim() && !parseContextWindowInput(contextWindowInputs[role]),
   )
-  const canSubmit = name.trim() && connectionLocationIsValid && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && !hasContextWindowError
+  const normalizedPublicAlias = publicAlias.trim().toLowerCase()
+  const publicAliasIsValid = normalizedPublicAlias
+    ? normalizedPublicAlias.length >= 2 &&
+      normalizedPublicAlias.length <= 64 &&
+      PUBLIC_PROVIDER_ALIAS_PATTERN.test(normalizedPublicAlias)
+    : true
+  const canSubmit = name.trim() && connectionLocationIsValid && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && !hasContextWindowError && publicAliasIsValid
   const apiKeyUrl = selectedPreset.apiKeyUrl?.trim()
   const promoText = selectedPreset.promoText?.trim()
   const apiFormatItems = [
@@ -2567,6 +2575,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       if (mode === 'create') {
         savedProvider = await createProvider({
           presetId: selectedPreset.id,
+          ...(normalizedPublicAlias && { publicAlias: normalizedPublicAlias }),
           name: name.trim(),
           apiKey: apiKey.trim(),
           baseUrl: baseUrl.trim(),
@@ -2582,6 +2591,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           ...(selectedPreset.id !== provider.presetId && {
             presetId: selectedPreset.id,
           }),
+          ...(normalizedPublicAlias && { publicAlias: normalizedPublicAlias }),
           name: name.trim(),
           baseUrl: baseUrl.trim(),
           apiFormat,
@@ -2976,6 +2986,24 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           {showAdvanced && (
             <div className="mt-3 flex flex-col gap-4">
               <Input label={t('settings.providers.name')} required value={name} onChange={(e) => setName(e.target.value)} placeholder={t('settings.providers.namePlaceholder')} />
+
+              <div>
+                <Input
+                  label={t('settings.providers.publicAlias')}
+                  value={publicAlias}
+                  maxLength={64}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(event) => setPublicAlias(event.target.value)}
+                  placeholder={t('settings.providers.publicAliasPlaceholder')}
+                  error={!publicAliasIsValid
+                    ? t('settings.providers.publicAliasError')
+                    : undefined}
+                />
+                <p className="mt-1 text-[11px] leading-[16px] text-[var(--color-text-tertiary)]">
+                  {t('settings.providers.publicAliasHint')}
+                </p>
+              </div>
 
               <Input label={t('settings.providers.notes')} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t('settings.providers.notesPlaceholder')} />
 

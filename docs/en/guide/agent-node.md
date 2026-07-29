@@ -155,6 +155,7 @@ Anthropic clients usually append `/v1/messages` to the base URL, so this URL doe
 ## Advanced: pin a model or route
 
 Only when you intentionally need to bypass the default target, replace `auto` with an exact target ID:
+For direct models, the value before `/` is the readable provider node alias. Edit it under **Provider → Advanced settings → Node alias**. The connection builder never exposes the internal provider UUID.
 
 | Goal | Model value | Result |
 | --- | --- | --- |

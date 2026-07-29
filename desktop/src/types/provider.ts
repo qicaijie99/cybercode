@@ -49,6 +49,7 @@ export type SavedProvider = {
 
 export type CreateProviderInput = {
   presetId: string
+  publicAlias?: string
   name: string
   apiKey: string
   baseUrl: string
@@ -63,6 +64,7 @@ export type CreateProviderInput = {
 
 export type UpdateProviderInput = {
   presetId?: string
+  publicAlias?: string
   name?: string
   apiKey?: string
   baseUrl?: string

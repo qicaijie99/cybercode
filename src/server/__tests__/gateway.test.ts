@@ -112,7 +112,7 @@ describe('external agent gateway', () => {
     const initialSecondId = initial.targets.find(
       (target) => target.providerId === second.id && target.modelId === 'model-b',
     )?.publicId
-    expect(initialSecondId).toMatch(/^shared-provider-[a-f0-9]{6}\/model-b$/)
+    expect(initialSecondId).toBe('second/model-b')
 
     await providers.deleteProvider(first.id)
     const afterDelete = await gatewayService.getStatus()
@@ -141,6 +141,83 @@ describe('external agent gateway', () => {
     expect((await providers.getProvider(second.id)).publicAlias).toBe(
       initialSecondId?.split('/')[0],
     )
+  })
+
+  test('uses readable provider aliases for custom Chinese names and lets users override them', async () => {
+    const providers = new ProviderService()
+    const volcengine = await providers.addProvider({
+      presetId: 'custom',
+      name: '火山',
+      apiKey: 'volcengine-key',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan',
+      apiFormat: 'openai_chat',
+      models: { main: 'glm-5.1', haiku: 'glm-5.1', sonnet: 'glm-5.1', opus: 'glm-5.1' },
+    })
+    const qianfan = await providers.addProvider({
+      presetId: 'custom',
+      name: '百度千帆',
+      apiKey: 'qianfan-key',
+      baseUrl: 'https://qianfan.baidubce.com/anthropic/coding',
+      apiFormat: 'anthropic',
+      models: { main: 'glm-5.1', haiku: 'glm-5.1', sonnet: 'glm-5.1', opus: 'glm-5.1' },
+    })
+
+    expect(volcengine.publicAlias).toBe('volcengine')
+    expect(qianfan.publicAlias).toBe('qianfan')
+
+    const renamed = await providers.updateProvider(qianfan.id, {
+      publicAlias: 'baidu-main',
+    })
+    expect(renamed.publicAlias).toBe('baidu-main')
+    await expect(providers.updateProvider(volcengine.id, {
+      publicAlias: 'baidu-main',
+    })).rejects.toMatchObject({ statusCode: 409 })
+
+    const status = await gatewayService.getStatus()
+    expect(status.targets.find(
+      (target) => target.providerId === volcengine.id && target.modelId === 'glm-5.1',
+    )?.publicId).toBe('volcengine/glm-5.1')
+    expect(status.targets.find(
+      (target) => target.providerId === qianfan.id && target.modelId === 'glm-5.1',
+    )?.publicId).toBe('baidu-main/glm-5.1')
+  })
+
+  test('migrates legacy custom hash aliases to readable provider aliases', async () => {
+    const cybercodeDir = path.join(tempDir, 'cybercode')
+    await fs.mkdir(cybercodeDir, { recursive: true })
+    await fs.writeFile(path.join(cybercodeDir, 'providers.json'), JSON.stringify({
+      activeId: null,
+      providers: [
+        {
+          id: 'legacy-volcengine',
+          presetId: 'custom',
+          publicAlias: 'custom',
+          name: '火山',
+          apiKey: 'volcengine-key',
+          baseUrl: 'https://ark.cn-beijing.volces.com/api/plan',
+          apiFormat: 'openai_chat',
+          models: { main: 'glm-5.1', haiku: 'glm-5.1', sonnet: 'glm-5.1', opus: 'glm-5.1' },
+        },
+        {
+          id: 'legacy-qianfan',
+          presetId: 'custom',
+          publicAlias: 'custom-138aa4',
+          name: '百度千帆',
+          apiKey: 'qianfan-key',
+          baseUrl: 'https://qianfan.baidubce.com/anthropic/coding',
+          apiFormat: 'anthropic',
+          models: { main: 'glm-5.1', haiku: 'glm-5.1', sonnet: 'glm-5.1', opus: 'glm-5.1' },
+        },
+      ],
+    }))
+
+    const providers = new ProviderService()
+    const migrated = await providers.listProviders()
+
+    expect(migrated.providers.map((provider) => provider.publicAlias)).toEqual([
+      'volcengine',
+      'qianfan',
+    ])
   })
 
   test('exposes complete multi-key lifecycle routes through the local API', async () => {
