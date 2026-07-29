@@ -12,7 +12,7 @@ export function TabBar() {
   return (
     <div
       data-testid="tab-bar"
-      className="native-ui-text flex h-[76px] w-full shrink-0 select-none items-center border-b border-[var(--color-border-separator)] bg-[var(--color-background)] px-[24px] md:px-[32px]"
+      className="app-tab-bar native-ui-text flex h-[76px] w-full shrink-0 select-none items-center border-b border-[var(--color-border-separator)] bg-[var(--color-background)] px-[24px] md:px-[32px]"
     >
       {/* Left title / drag area */}
       <div

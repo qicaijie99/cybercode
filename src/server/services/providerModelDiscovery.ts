@@ -31,6 +31,11 @@ type CachedDiscovery = {
 
 const CACHE_TTL_MS = 5 * 60 * 1000
 const cache = new Map<string, CachedDiscovery>()
+const VERIFIED_OPENCODE_FREE_MODEL_IDS = new Set([
+  'north-mini-code-free',
+  'mimo-v2.5-free',
+  'ling-3.0-flash-free',
+])
 
 function originOf(baseUrl: string): string {
   try {
@@ -41,7 +46,7 @@ function originOf(baseUrl: string): string {
 }
 
 function isOllama(input: DiscoveryInput): boolean {
-  if (input.presetId === 'ollama') return true
+  if (input.presetId === 'ollama' || input.presetId === 'ollama-cloud') return true
   try {
     return new URL(input.baseUrl).port === '11434'
   } catch {
@@ -58,6 +63,28 @@ function isLmStudio(input: DiscoveryInput): boolean {
   }
 }
 
+function cloudflareModelSearchEndpoint(input: DiscoveryInput): string | undefined {
+  if (input.presetId !== 'cloudflare-ai') return undefined
+
+  try {
+    const endpoint = new URL(input.baseUrl)
+    const path = endpoint.pathname.replace(/\/+$/, '')
+    const match = path.match(
+      /^(\/client\/v4\/accounts\/([^/]+))\/ai\/v1$/i,
+    )
+    if (!match || match[2]?.toUpperCase() === 'ACCOUNT_ID') return undefined
+
+    endpoint.pathname = `${match[1]}/ai/models/search`
+    endpoint.search = ''
+    endpoint.searchParams.set('task', 'Text Generation')
+    endpoint.searchParams.set('per_page', '100')
+    endpoint.hash = ''
+    return endpoint.toString()
+  } catch {
+    return undefined
+  }
+}
+
 function modelRecords(body: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(body)) {
     return body.filter((item): item is Record<string, unknown> =>
@@ -66,7 +93,7 @@ function modelRecords(body: unknown): Array<Record<string, unknown>> {
   }
   if (!body || typeof body !== 'object') return []
   const record = body as Record<string, unknown>
-  for (const key of ['data', 'models', 'items']) {
+  for (const key of ['data', 'models', 'items', 'result']) {
     if (Array.isArray(record[key])) {
       return (record[key] as unknown[]).filter(
         (item): item is Record<string, unknown> =>
@@ -106,6 +133,8 @@ function findContextWindow(value: unknown, depth = 0): number | undefined {
     'contextLength',
     'max_context_length',
     'maxContextLength',
+    'max_input_tokens',
+    'maxInputTokens',
     'loaded_context_length',
   ]
   for (const key of directKeys) {
@@ -149,6 +178,7 @@ function supportsImages(record: Record<string, unknown>): boolean | undefined {
     record.capabilities,
     record.input_modalities,
     record.inputModalities,
+    record.supported_input_modalities,
     modalityRecord?.input,
     modalityRecord?.inputs,
     Array.isArray(modalities) ? modalities : undefined,
@@ -172,7 +202,11 @@ function toModelInfo(record: Record<string, unknown>): ProviderModelInfo | undef
   const imageSupport = supportsImages(record)
   return {
     id,
-    ...(typeof record.display_name === 'string' && { label: record.display_name }),
+    ...(typeof record.display_name === 'string'
+      ? { label: record.display_name }
+      : typeof record.name === 'string' && record.name !== id
+        ? { label: record.name }
+        : {}),
     ...(contextWindow && { contextWindow }),
     ...(imageSupport !== undefined && { supportsImages: imageSupport }),
   }
@@ -198,12 +232,17 @@ function dedupeModels(models: ProviderModelInfo[]): ProviderModelInfo[] {
 function authHeaders(input: DiscoveryInput): Record<string, string> {
   const key = input.apiKey?.trim()
   if (!key) return { Accept: 'application/json' }
-  return {
+  const headers: Record<string, string> = {
     Accept: 'application/json',
-    Authorization: `Bearer ${key}`,
-    'x-api-key': key,
-    'anthropic-version': '2023-06-01',
   }
+  if (input.apiFormat === 'anthropic') {
+    headers['x-api-key'] = key
+    headers['anthropic-version'] = '2023-06-01'
+    return headers
+  }
+
+  headers.Authorization = `Bearer ${key}`
+  return headers
 }
 
 async function enrichOllamaModels(
@@ -211,13 +250,17 @@ async function enrichOllamaModels(
   models: ProviderModelInfo[],
   fetchImpl: typeof fetch,
   timeoutMs: number,
+  headers: Record<string, string>,
 ): Promise<ProviderModelInfo[]> {
   const origin = endpoint.replace(/\/api\/tags\/?$/i, '')
   return Promise.all(models.map(async (model) => {
     try {
       const response = await fetchImpl(`${origin}/api/show`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ model: model.id }),
         signal: AbortSignal.timeout(timeoutMs),
       })
@@ -240,6 +283,11 @@ function discoveryEndpoints(input: DiscoveryInput): string[] {
   const endpoints: string[] = []
   if (isOllama(input)) endpoints.push(`${originOf(input.baseUrl)}/api/tags`)
   if (isLmStudio(input)) endpoints.push(`${originOf(input.baseUrl)}/api/v1/models`)
+  if (input.presetId === 'github-models') {
+    endpoints.push(`${originOf(input.baseUrl)}/catalog/models`)
+  }
+  const cloudflareEndpoint = cloudflareModelSearchEndpoint(input)
+  if (cloudflareEndpoint) endpoints.push(cloudflareEndpoint)
   endpoints.push(buildOpenAICompatibleUrl(input.baseUrl, 'models'))
   return [...new Set(endpoints)]
 }
@@ -280,9 +328,22 @@ export async function discoverProviderModels(
         continue
       }
       if (/\/api\/tags\/?$/i.test(endpoint)) {
-        models = await enrichOllamaModels(endpoint, models, fetchImpl, timeoutMs)
+        models = await enrichOllamaModels(
+          endpoint,
+          models,
+          fetchImpl,
+          timeoutMs,
+          authHeaders(input),
+        )
       }
       models = dedupeModels(models)
+      if (input.presetId === 'opencode-free') {
+        models = models.filter((model) => VERIFIED_OPENCODE_FREE_MODEL_IDS.has(model.id))
+        if (models.length === 0) {
+          lastError = 'The endpoint returned no verified anonymous models'
+          continue
+        }
+      }
       cache.set(cacheKey, {
         expiresAt: Date.now() + CACHE_TTL_MS,
         endpoint,

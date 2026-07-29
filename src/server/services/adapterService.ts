@@ -46,6 +46,32 @@ export type AdapterFileConfig = {
     defaultWorkDir?: string
     streamingCard?: boolean
   }
+  weixin?: {
+    enabled?: boolean
+    accountId?: string
+    botToken?: string
+    baseUrl?: string
+    userId?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+  }
+  qq?: {
+    enabled?: boolean
+    appId?: string
+    appSecret?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+    groupEnabled?: boolean
+  }
+  dingtalk?: {
+    clientId?: string
+    clientSecret?: string
+    allowedUsers?: string[]
+    pairedUsers?: PairedUser[]
+    defaultWorkDir?: string
+  }
 }
 
 function getConfigPath(): string {
@@ -98,6 +124,15 @@ class AdapterService {
       if (config.feishu.encryptKey) config.feishu.encryptKey = maskSecret(config.feishu.encryptKey)
       if (config.feishu.verificationToken) config.feishu.verificationToken = maskSecret(config.feishu.verificationToken)
     }
+    if (config.weixin?.botToken) {
+      config.weixin.botToken = maskSecret(config.weixin.botToken)
+    }
+    if (config.qq?.appSecret) {
+      config.qq.appSecret = maskSecret(config.qq.appSecret)
+    }
+    if (config.dingtalk?.clientSecret) {
+      config.dingtalk.clientSecret = maskSecret(config.dingtalk.clientSecret)
+    }
     if (config.pairing?.code) {
       config.pairing.code = '******'
     }
@@ -117,6 +152,15 @@ class AdapterService {
       if (isMasked(patch.feishu.encryptKey)) patch.feishu.encryptKey = current.feishu?.encryptKey
       if (isMasked(patch.feishu.verificationToken)) patch.feishu.verificationToken = current.feishu?.verificationToken
     }
+    if (patch.weixin && isMasked(patch.weixin.botToken)) {
+      patch.weixin.botToken = current.weixin?.botToken
+    }
+    if (patch.qq && isMasked(patch.qq.appSecret)) {
+      patch.qq.appSecret = current.qq?.appSecret
+    }
+    if (patch.dingtalk && isMasked(patch.dingtalk.clientSecret)) {
+      patch.dingtalk.clientSecret = current.dingtalk?.clientSecret
+    }
     if (patch.pairing && isMasked(patch.pairing.code ?? undefined)) {
       patch.pairing.code = current.pairing?.code
     }
@@ -126,6 +170,9 @@ class AdapterService {
       ...patch,
       telegram: patch.telegram ? { ...current.telegram, ...patch.telegram } : current.telegram,
       feishu: patch.feishu ? { ...current.feishu, ...patch.feishu } : current.feishu,
+      weixin: patch.weixin ? { ...current.weixin, ...patch.weixin } : current.weixin,
+      qq: patch.qq ? { ...current.qq, ...patch.qq } : current.qq,
+      dingtalk: patch.dingtalk ? { ...current.dingtalk, ...patch.dingtalk } : current.dingtalk,
       pairing: patch.pairing !== undefined ? { ...current.pairing, ...patch.pairing } : current.pairing,
     }
 
@@ -135,11 +182,14 @@ class AdapterService {
   private async writeConfig(data: AdapterFileConfig): Promise<void> {
     const filePath = getConfigPath()
     const dir = path.dirname(filePath)
-    await fs.mkdir(dir, { recursive: true })
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 })
 
     const tmpFile = `${filePath}.tmp.${Date.now()}`
     try {
-      await fs.writeFile(tmpFile, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+      await fs.writeFile(tmpFile, JSON.stringify(data, null, 2) + '\n', {
+        encoding: 'utf-8',
+        mode: 0o600,
+      })
       await fs.rename(tmpFile, filePath)
     } catch (err) {
       await fs.unlink(tmpFile).catch(() => {})

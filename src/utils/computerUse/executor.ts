@@ -114,7 +114,7 @@ export function createCliExecutor(_opts: {
 }): ComputerExecutor {
   if (!isComputerUseSupportedPlatform()) {
     throw new Error(
-      `createCliExecutor called on ${process.platform}. Computer control is only supported on macOS and Windows.`,
+      `createCliExecutor called on ${process.platform}. Computer control is only supported on macOS, Windows, and Linux.`,
     )
   }
 

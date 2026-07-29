@@ -1,7 +1,7 @@
 # Computer Use 功能指南
 
 
-> **实现说明**：本功能高度借鉴 Claude Code 的 Computer Use 设计思路并完全独立实现。底层操作层使用 Python bridge 完成所有系统交互——macOS 使用 `pyautogui` + `mss` + `pyobjc`，Windows 使用 `pyautogui` + `mss` + `win32gui` + `psutil`，使得任何人都可以在 macOS 和 Windows 上运行 Computer Use 功能。
+> **实现说明**：本功能高度借鉴 Claude Code 的 Computer Use 设计思路并完全独立实现。macOS 截图由随应用签名的 `CyberCode Computer Use` 原生 helper 负责；Linux 截图由内置 Rust helper 通过 X11 截图后端或 XDG Desktop Portal 完成；鼠标、键盘和应用管理由托管 Python bridge 完成。Windows 使用同一 bridge + Win32 API。用户不需要单独安装或配置这些组件。
 
 ---
 
@@ -43,17 +43,18 @@ Computer Use 让 AI 模型能够**直接控制你的电脑**——截屏、移�
 
 | 平台 | 芯片 | 状态 | 说明 |
 |------|------|------|------|
-| macOS | Apple Silicon (M1/M2/M3/M4) | ✅ 完整支持 | 推荐平台 |
-| macOS | Intel x86_64 | ✅ 完整支持 | |
+| macOS | Apple Silicon (M1/M2/M3/M4) | ✅ 完整支持 | 内置签名截图 helper |
+| macOS | Intel x86_64 | ✅ 完整支持 | 内置签名截图 helper |
 | Windows | x64 | ✅ 完整支持 | 使用 `win32gui` + `psutil` + `pyperclip` + `screeninfo` 替代 macOS 专有 API |
-| Linux | 任意 | ⚠️ 理论可行 | 需替换平台专有部分为 `wmctrl` + `xdotool`，当前未适配 |
+| Linux | x86_64 | ✅ 支持 | X11/XWayland 支持截图与输入；原生 Wayland 通过系统 Portal 截图，静默全局输入受系统限制 |
 
 ### 运行环境要求
 
-- [Bun](https://bun.sh) >= 1.1.0
-- Python >= 3.8（首次运行自动创建 venv 并安装依赖）
+- **桌面端用户**：无需额外安装 Bun 或 Python；CyberCode 会按平台在后台准备私有运行组件
+- **源码开发者**：[Bun](https://bun.sh) >= 1.1.0
 - **macOS**：系统权限 Accessibility（辅助功能）+ Screen Recording（屏幕录制）
 - **Windows**：无需额外权限配置
+- **Linux**：无需安装 Python；Wayland 首次截图可能显示系统确认框，X11/XWayland 输入需要有效的 `DISPLAY`
 
 ---
 
@@ -83,15 +84,18 @@ Computer Use 的核心是一个**截图-分析-操作**的闭环：
 │  - 坐标模式转换（pixels / normalized）           │
 │  - 工具分发 → executor                          │
 └──────────────┬───────────────────────────────┘
-               │ callPythonHelper()
+               │ Hybrid Bridge
                ▼
 ┌──────────────────────────────────────────────┐
-│  Python Bridge                                │
-│  macOS: runtime/mac_helper.py                 │
-│  Windows: runtime/win_helper.py               │
+│  macOS: CyberCode Computer Use.app            │
+│         CoreGraphics 截图 + 固定 TCC 身份       │
+│  Linux: cybercode-computer-use                │
+│         X11 后端 / XDG Desktop Portal 截图      │
 │                                               │
-│  pyautogui.click(756, 342)  ← 鼠标控制         │
-│  mss.grab(monitor)          ← 截图             │
+│  Python Bridge: mac / win / linux_helper.py   │
+│  pyautogui.click(756, 342)  ← 鼠标/键盘控制    │
+│  Windows: mss.grab()        ← 截图             │
+│  Linux: X11/XWayland        ← 鼠标/键盘控制    │
 │  macOS: NSWorkspace.open()  ← 应用管理          │
 │  Windows: win32gui / psutil ← 应用管理          │
 └──────────────────────────────────────────────┘
@@ -103,21 +107,15 @@ Computer Use 的核心是一个**截图-分析-操作**的闭环：
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 自动准备运行组件
 
-```bash
-bun install
-```
+桌面端打开「设置 → Computer Use」，点击「自动准备」。CyberCode 会在后台下载与当前系统和 CPU 架构匹配的专用运行组件，并自动完成校验与配置；不需要安装 Python、修改 PATH 或使用管理员权限。
 
-### 2. 确保 Python 3 可用
+下载支持断点续传，并会在 GitHub 主线路不可用时自动尝试镜像线路。命令行端首次调用 Computer Use 时也会使用同一套自动准备流程。
 
-```bash
-python3 --version  # 需要 >= 3.8
-```
+> 从源码运行 CyberCode 的开发者仍需先执行 `bun install`。已有 `.runtime/venv/` 的用户会继续沿用原环境，不会被强制重新下载。
 
-> Python 依赖会在首次使用 Computer Use 时**自动安装**到 `.runtime/venv/`，无需手动操作。
-
-### 3. 授予 macOS 权限
+### 2. 授予 macOS 权限
 
 #### Accessibility（辅助功能）
 
@@ -125,7 +123,7 @@ python3 --version  # 需要 >= 3.8
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 ```
 
-将你的**终端应用**（如 iTerm、Terminal、Ghostty 等）添加到允许列表。
+桌面端用户授权 **CyberCode**；从源码或命令行运行时，授权对应的终端应用（如 iTerm、Terminal、Ghostty）。
 
 #### Screen Recording（屏幕录制）
 
@@ -133,7 +131,9 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 ```
 
-同样添加你的终端应用。授权后可能需要**重启终端**。
+桌面端请允许 **CyberCode Computer Use**。第一次点击截图或“打开屏幕录制设置”时，CyberCode 会自动注册这个 helper；授权后直接重试即可。该固定 Bundle ID 会随正式签名版本复用权限，不需要每次升级重新授权。
+
+从源码运行且没有构建原生 helper 时，才需要给对应终端应用授权。
 
 ### 4. 启动
 
@@ -203,17 +203,25 @@ src/
 │   └── ...
 ├── utils/computerUse/
 │   ├── executor.ts              ← 执行器（调用 Python bridge）
-│   ├── pythonBridge.ts          ← Python 子进程管理
+│   ├── pythonBridge.ts          ← 原生截图 / Python 输入路由
+│   ├── nativeCapture.ts         ← macOS / Linux 原生 helper 通信
 │   ├── hostAdapter.ts           ← 权限检查适配器
 │   ├── gates.ts                 ← 功能开关（已绕过灰度）
 │   ├── wrapper.tsx              ← MCP 工具覆写层
 │   ├── setup.ts                 ← MCP 配置初始化
 │   └── ...
-└── runtime/
-    ├── mac_helper.py            ← macOS Python 实现
-    ├── win_helper.py            ← Windows Python 实现
-    ├── requirements.txt         ← macOS Python 依赖
-    └── requirements-win.txt     ← Windows Python 依赖
+├── runtime/
+│   ├── mac_helper.py            ← macOS Python 实现
+│   ├── win_helper.py            ← Windows Python 实现
+│   ├── linux_helper.py          ← Linux 输入与截图兜底
+│   ├── requirements.txt         ← macOS Python 依赖
+│   ├── requirements-win.txt     ← Windows Python 依赖
+│   └── requirements-linux.txt   ← Linux Python 依赖
+├── desktop/computer-use-macos/
+│   ├── main.swift               ← 原生截图与权限请求
+│   └── Info.plist               ← com.cybercode.computer-use
+└── desktop/computer-use-linux/
+    └── src/main.rs              ← X11 / XDG Desktop Portal 截图
 ```
 
 ### 灰度控制绕过
@@ -227,14 +235,20 @@ src/
 | 远程配置 | GrowthBook `tengu_malort_pedway` | 同上，不再依赖远程配置 |
 | 默认禁用 | `isDefaultDisabledBuiltin('computer-use')` | `isDefaultDisabledBuiltin()` 返回 `false` |
 
-### Python Bridge 工作机制
+### 混合 Bridge 工作机制
 
 ```typescript
 // pythonBridge.ts
 async function callPythonHelper<T>(command: string, payload: object): Promise<T> {
-  await ensureBootstrapped()  // 首次调用自动创建 venv + pip install
+  if (
+    (process.platform === 'darwin' || process.platform === 'linux') &&
+    isNativeCaptureCommand(command)
+  ) {
+    return callNativeCaptureHelper(command, payload)
+  }
+  await ensureBootstrapped()  // 复用已有环境，或后台准备专用运行组件
   
-  // 调用: python3 runtime/mac_helper.py <command> --payload '{...}'
+  // 调用用户目录下的私有 Python，不依赖系统 PATH
   const result = execFile(pythonBin, ['mac_helper.py', command, '--payload', JSON.stringify(payload)])
   
   return JSON.parse(result.stdout)  // { ok: true, result: T }
@@ -242,12 +256,15 @@ async function callPythonHelper<T>(command: string, payload: object): Promise<T>
 ```
 
 首次运行自动完成：
-1. 创建 Python 虚拟环境 (`.runtime/venv/`)
-2. 安装 pip
-3. 按平台安装依赖：
+1. 识别 Windows x64、Linux x64、macOS Apple Silicon 或 macOS Intel
+2. 从 GitHub 主线路或镜像线路后台下载带依赖的私有 Python 运行组件
+3. 按平台携带依赖：
    - **macOS**: `mss`, `Pillow`, `pyautogui`, `pyobjc-*`（`requirements.txt`）
    - **Windows**: `mss`, `Pillow`, `pyautogui`, `win32gui`, `psutil`, `pyperclip`, `screeninfo`（`requirements-win.txt`）
-4. SHA256 哈希验证（仅 requirements 变更时重新安装）
+   - **Linux**: `mss`, `Pillow`, `pyautogui`, `psutil`, `pyperclip`, `screeninfo`（`requirements-linux.txt`）
+4. 执行 SHA-256 校验、启动验证与原子切换；中断后可继传
+
+已存在的 `.runtime/venv/` 会继续复用，不强制老用户重新下载。
 
 ---
 
@@ -273,15 +290,19 @@ async function callPythonHelper<T>(command: string, payload: object): Promise<T>
 
 **失败原因**：代码能编译但 MCP 服务器注册后无法执行任何实际操作——截图、点击等全部报错。
 
-### 方案三：Python Bridge 替代原生模块 ✅（当前方案）
+### 方案三：Python Bridge 替代原生模块 ✅
 
 **思路**：参考 [wimi321/macos-computer-use-skill](https://github.com/wimi321/macos-computer-use-skill)，用 Python 子进程替代所有原生模块调用。
 
 **优势**：
-- 零二进制依赖，不依赖特定 Bun/Node 版本
-- 纯 Python 实现，首次运行自动安装
-- 截图、鼠标、键盘、应用管理全部可用
-- macOS ARM64 + x86_64 均支持
+- 不依赖特定 Bun/Node 版本的 NAPI 原生模块
+- 纯 Python 操作层，专用运行组件在后台自动准备
+- 鼠标、键盘、应用管理全部可用，并为 Windows 与 Linux 提供截图
+- macOS ARM64 / x86_64、Windows x64 与 Linux x64 均支持
+
+### 方案四：签名原生截图 helper + Python 输入控制 ✅（当前方案）
+
+macOS 的屏幕像素读取迁移到独立的 `CyberCode Computer Use.app`。它拥有固定 Bundle ID，并与正式桌面端使用同一 Apple Team 签名；系统录屏权限因此归属于稳定 helper，而不是某次启动的 Bun/Python 子进程。Linux 桌面端内置对应的 Rust helper：X11 优先使用桌面已有截图后端，Wayland 优先使用 XDG Desktop Portal。浏览器页面截图仍优先走 `agent-browser`，不需要桌面录屏权限。
 
 ---
 
@@ -289,10 +310,10 @@ async function callPythonHelper<T>(command: string, payload: object): Promise<T>
 
 | 限制 | 说明 |
 |------|------|
-| 不支持 Linux | 需要适配平台专有 API 部分 |
+| 原生 Wayland 输入受限 | Wayland 不允许应用静默注入全局鼠标键盘事件；截图可通过系统 Portal 完成，输入在 X11/XWayland 会话下可用 |
 | 无全局 Escape 中止 | 原生方案用 CGEventTap 实现，Python 版暂不支持，用 `Ctrl+C` 代替 |
 | 操作前不自动隐藏窗口 | 原生方案的 `prepareDisplay` 依赖 Swift，Python 版未实现 |
-| 性能略低 | Python 进程启动 ~100ms 开销，但模型思考时间通常是秒级，用户感知不到 |
+| 输入操作有进程开销 | 鼠标和键盘仍由 Python 子进程执行；截图已改为轻量原生 helper |
 | 像素验证关闭 | `pixelValidation` 默认关闭 |
 
 ---
@@ -320,3 +341,5 @@ async function callPythonHelper<T>(command: string, payload: object): Promise<T>
 | [psutil](https://github.com/giampaolo/psutil) | Windows | 进程管理（应用列表、进程操作） |
 | [pyperclip](https://github.com/asweigart/pyperclip) | Windows | 剪贴板操作 |
 | [screeninfo](https://github.com/rr-/screeninfo) | Windows | 显示器信息（多屏支持） |
+| [ashpd](https://github.com/bilelmoussaoui/ashpd) | Linux | 调用 XDG Desktop Portal 截图接口 |
+| [XDG Desktop Portal Screenshot](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Screenshot.html) | Linux | Wayland 标准屏幕截图通道 |

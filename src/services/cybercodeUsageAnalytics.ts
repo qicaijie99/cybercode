@@ -350,14 +350,19 @@ async function readState(filePath: string): Promise<UsageState> {
 }
 
 async function writeState(filePath: string, state: UsageState): Promise<void> {
+  const temporaryPath =
+    `${filePath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   try {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, {
+    await fs.writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
     })
+    await fs.rename(temporaryPath, filePath)
   } catch {
     // A read-only config directory may cause another heartbeat later. The
     // server de-duplicates by installation and day, so this remains harmless.
+  } finally {
+    await fs.rm(temporaryPath, { force: true }).catch(() => {})
   }
 }

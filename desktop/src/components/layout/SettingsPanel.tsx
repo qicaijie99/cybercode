@@ -1,4 +1,4 @@
-import { useEffect, memo, type ReactNode } from 'react'
+import { useEffect, useState, memo, type ReactNode } from 'react'
 import {
   AboutSettings,
   AgentsSettings,
@@ -23,6 +23,16 @@ import { useTranslation } from '../../i18n'
 import { Icon } from '../shared/Icon'
 
 const MemoSettings = memo(Settings)
+const SIDEBAR_MOTION_FALLBACK_MS = 240
+
+function getSidebarMotionDurationMs() {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue('--motion-sidebar-duration')
+    .trim()
+  const value = Number.parseFloat(raw)
+  if (!Number.isFinite(value)) return SIDEBAR_MOTION_FALLBACK_MS
+  return raw.endsWith('s') && !raw.endsWith('ms') ? value * 1000 : value
+}
 
 type Props = {
   visible: boolean
@@ -33,6 +43,33 @@ export function SettingsPanel({ visible, reserveRightRail = false }: Props) {
   const closeSettings = useUIStore((s) => s.closeSettings)
   const panelView = useUIStore((s) => s.settingsPanelView)
   const t = useTranslation()
+  const [rendered, setRendered] = useState(visible)
+  const [renderedPanelView, setRenderedPanelView] = useState(panelView)
+  const [providerClosing, setProviderClosing] = useState(false)
+
+  useEffect(() => {
+    if (visible) {
+      setRendered(true)
+      setRenderedPanelView(panelView)
+      setProviderClosing(false)
+      return
+    }
+
+    if (!rendered) return
+    if (renderedPanelView !== 'providers') {
+      setRendered(false)
+      setProviderClosing(false)
+      return
+    }
+
+    setProviderClosing(true)
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    const timer = window.setTimeout(() => {
+      setRendered(false)
+      setProviderClosing(false)
+    }, reduceMotion ? 0 : getSidebarMotionDurationMs())
+    return () => window.clearTimeout(timer)
+  }, [panelView, rendered, renderedPanelView, visible])
 
   useEffect(() => {
     if (!visible) return
@@ -46,18 +83,30 @@ export function SettingsPanel({ visible, reserveRightRail = false }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [visible, closeSettings])
 
-  if (!visible) return null
-  const isSettingsHome = panelView === 'settings'
-  const isKnowledgeSpace = panelView === 'codeGraph'
+  if (!visible && !rendered) return null
+  const displayedPanelView = visible ? panelView : renderedPanelView
+  const isSettingsHome = displayedPanelView === 'settings'
+  const isKnowledgeSpace = displayedPanelView === 'codeGraph'
+  const isProviderWorkspace = displayedPanelView === 'providers'
 
   return (
     <section
       role="region"
-      aria-label={getPanelLabel(panelView, t)}
+      aria-label={getPanelLabel(displayedPanelView, t)}
       data-testid="settings-panel"
-      className={`settings-ui settings-panel-overlay native-ui-text absolute bottom-0 left-0 top-0 z-[90] flex flex-col items-center justify-center bg-black/10 p-[16px] dark:bg-black/45 ${reserveRightRail ? 'right-[var(--sidebar-rail-width)]' : 'right-0'}`}
+      data-layout={isProviderWorkspace ? 'drawer' : 'floating'}
+      data-state={providerClosing ? 'closing' : 'open'}
+      data-reserve-right-rail={reserveRightRail ? 'true' : 'false'}
+      className={isProviderWorkspace
+        ? 'settings-provider-shell settings-ui native-ui-text absolute bottom-0 right-0 top-0 z-[100] flex overflow-hidden'
+        : `settings-ui settings-panel-overlay native-ui-text absolute bottom-0 left-0 top-0 z-[90] flex flex-col items-center justify-center bg-black/10 p-[16px] dark:bg-black/45 ${reserveRightRail ? 'settings-panel-overlay--reserve-right-rail right-[var(--chat-mode-sidebar-width)]' : 'right-0'}`}
     >
-      <div className={`settings-panel-card flex w-full flex-col overflow-hidden rounded-[14px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-window)] ${isKnowledgeSpace ? 'h-[92vh] max-w-[1480px]' : 'h-[88vh] max-w-[1100px]'}`}>
+      <div
+        data-testid="settings-panel-card"
+        className={isProviderWorkspace
+          ? `settings-provider-drawer flex h-full w-full max-w-none flex-col overflow-hidden bg-[var(--color-background)] ${providerClosing ? 'settings-provider-drawer--closing' : ''}`
+          : `settings-panel-card flex w-full flex-col overflow-hidden rounded-[14px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-window)] ${isKnowledgeSpace ? 'h-[92vh] max-w-[1480px]' : 'h-[88vh] max-w-[1100px]'}`}
+      >
         <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
           {isSettingsHome ? (
             <div key="settings-home" className="settings-panel-content min-h-0 flex flex-1 flex-col overflow-hidden">
@@ -65,9 +114,13 @@ export function SettingsPanel({ visible, reserveRightRail = false }: Props) {
             </div>
           ) : (
             <>
-              <PanelHeader compact={isKnowledgeSpace} onClose={closeSettings} />
-              <PanelBody key={panelView} view={panelView}>
-                {renderPanelContent(panelView)}
+              <PanelHeader
+                compact={isKnowledgeSpace}
+                drawer={isProviderWorkspace}
+                onClose={closeSettings}
+              />
+              <PanelBody key={displayedPanelView} view={displayedPanelView}>
+                {renderPanelContent(displayedPanelView)}
               </PanelBody>
             </>
           )}
@@ -77,18 +130,32 @@ export function SettingsPanel({ visible, reserveRightRail = false }: Props) {
   )
 }
 
-function PanelHeader({ compact = false, onClose }: { compact?: boolean; onClose: () => void }) {
+function PanelHeader({
+  compact = false,
+  drawer = false,
+  onClose,
+}: {
+  compact?: boolean
+  drawer?: boolean
+  onClose: () => void
+}) {
   const t = useTranslation()
+  const actionLabel = drawer ? t('common.back') : t('common.close')
 
   return (
-    <header className={`flex shrink-0 items-center justify-end bg-[var(--color-background)] px-[16px] ${compact ? 'h-[48px]' : 'h-[76px] md:px-[32px]'}`}>
+    <header
+      data-testid={drawer ? 'provider-drawer-drag-region' : undefined}
+      {...(drawer ? { 'data-tauri-drag-region': true } : {})}
+      className={`settings-panel-header flex shrink-0 items-center justify-end bg-[var(--color-background)] px-[16px] ${compact ? 'h-[48px]' : 'h-[52px] md:px-[32px]'}`}
+    >
       <button
+        onMouseDown={(event) => event.stopPropagation()}
         onClick={onClose}
         className="flex h-[36px] w-[36px] items-center justify-center rounded-full text-[var(--color-text-secondary)] transition-colors duration-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-        aria-label={t('common.close')}
-        title="Esc"
+        aria-label={actionLabel}
+        title={drawer ? actionLabel : 'Esc'}
       >
-        <Icon name="close" size={18} />
+        <Icon name={drawer ? 'arrow_back' : 'close'} size={drawer ? 20 : 18} />
       </button>
     </header>
   )
@@ -97,7 +164,7 @@ function PanelHeader({ compact = false, onClose }: { compact?: boolean; onClose:
 function PanelBody({ view, children }: { view: SettingsPanelView; children: ReactNode }) {
   if (view === 'codeGraph') {
     return (
-      <div className="settings-panel-content min-h-0 flex flex-1 overflow-hidden bg-[var(--color-background)]">
+      <div className="settings-panel-body settings-panel-content min-h-0 flex flex-1 overflow-hidden bg-[var(--color-background)]">
         {children}
       </div>
     )
@@ -105,14 +172,14 @@ function PanelBody({ view, children }: { view: SettingsPanelView; children: Reac
 
   if (view === 'terminal' || view === 'scheduled') {
     return (
-      <div className="settings-panel-content min-h-0 flex-1 flex flex-col overflow-hidden bg-[var(--color-background)] pt-[10px]">
+      <div className="settings-panel-body settings-panel-content min-h-0 flex-1 flex flex-col overflow-hidden bg-[var(--color-background)] pt-[10px]">
         {children}
       </div>
     )
   }
 
   return (
-    <div className="settings-panel-content min-h-0 flex-1 overflow-y-auto bg-[var(--color-background)] px-[24px] pb-[24px] pt-[34px] md:px-[32px]">
+    <div className={`settings-panel-body settings-panel-body--padded settings-panel-content min-h-0 flex-1 overflow-y-auto bg-[var(--color-background)] px-[24px] pb-[24px] pt-[18px] md:px-[32px] ${view === 'providers' ? 'lg:px-[40px] lg:pb-[32px]' : ''}`}>
       {children}
     </div>
   )

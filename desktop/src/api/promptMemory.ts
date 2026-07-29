@@ -27,6 +27,19 @@ export type PromptMemoryStatus = {
   config: PromptMemoryConfig
 }
 
+export type PromptMemoryMutationResult = {
+  target: Exclude<PromptMemoryTarget, 'soul'>
+  path: string
+  action: 'add' | 'replace' | 'remove'
+  changed: boolean
+  message: string
+  entries: string[]
+  entryCount: number
+  charCount: number
+  limit: number
+  overLimit: boolean
+}
+
 type PromptMemoryStatusResponse = Omit<PromptMemoryStatus, 'config'> & {
   config?: PromptMemoryConfig
 }
@@ -40,7 +53,7 @@ export type PromptMemoryAutoReviewLogEntry = {
   id: string
   timestamp: string
   sessionId: string
-  trigger: 'explicit' | 'interval'
+  trigger: 'explicit' | 'interval' | 'meta'
   target: Exclude<PromptMemoryTarget, 'soul'>
   action: 'add' | 'replace' | 'remove'
   changed: boolean
@@ -109,8 +122,25 @@ export const promptMemoryApi = {
   write: (target: PromptMemoryTarget, content: string) =>
     api.put<PromptMemoryFile>(`/api/prompt-memory/${target}`, { content }),
 
+  addEntry: (target: Exclude<PromptMemoryTarget, 'soul'>, content: string) =>
+    api.post<PromptMemoryMutationResult>(`/api/prompt-memory/${target}/entries`, {
+      action: 'add',
+      content,
+    }),
+
+  replaceEntry: (
+    target: Exclude<PromptMemoryTarget, 'soul'>,
+    oldText: string,
+    content: string,
+  ) =>
+    api.post<PromptMemoryMutationResult>(`/api/prompt-memory/${target}/entries`, {
+      action: 'replace',
+      oldText,
+      content,
+    }),
+
   removeEntry: (target: Exclude<PromptMemoryTarget, 'soul'>, oldText: string) =>
-    api.post(`/api/prompt-memory/${target}/entries`, {
+    api.post<PromptMemoryMutationResult>(`/api/prompt-memory/${target}/entries`, {
       action: 'remove',
       oldText,
     }),

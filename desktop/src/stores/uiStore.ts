@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import type { ThemeMode } from '../types/settings'
 
 const THEME_STORAGE_KEY = 'cybercode-theme'
+const SIDEBAR_STORAGE_KEY = 'cybercode-sidebar-open'
+export const COMPACT_APP_LAYOUT_QUERY = '(max-width: 1119px)'
 
 function getStoredTheme(): ThemeMode {
   try {
@@ -9,6 +11,24 @@ function getStoredTheme(): ThemeMode {
     if (stored === 'light' || stored === 'dark') return stored
   } catch { /* localStorage unavailable */ }
   return 'light'
+}
+
+function getStoredSidebarPreference(): boolean {
+  try {
+    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY)
+    if (stored === 'true') return true
+    if (stored === 'false') return false
+  } catch { /* localStorage unavailable */ }
+  return true
+}
+
+function persistSidebarPreference(open: boolean) {
+  try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(open)) } catch { /* noop */ }
+}
+
+function isCompactAppLayout(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  return window.matchMedia(COMPACT_APP_LAYOUT_QUERY).matches
 }
 
 export function applyTheme(theme: ThemeMode) {
@@ -69,6 +89,7 @@ type UIStore = {
   toggleTheme: () => void
   toggleSidebar: () => void
   setSidebarOpen: (open: boolean) => void
+  syncSidebarForViewport: (compact: boolean) => void
   setActiveView: (view: ActiveView) => void
   setPendingSettingsTab: (tab: SettingsTab | null) => void
   openSettings: (view?: SettingsPanelView) => void
@@ -84,7 +105,7 @@ let toastCounter = 0
 
 export const useUIStore = create<UIStore>((set) => ({
   theme: getStoredTheme(),
-  sidebarOpen: true,
+  sidebarOpen: !isCompactAppLayout() && getStoredSidebarPreference(),
   activeView: 'code',
   pendingSettingsTab: null,
   settingsOpen: false,
@@ -108,8 +129,18 @@ export const useUIStore = create<UIStore>((set) => ({
     })
   },
 
-  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
-  setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  toggleSidebar: () => set((s) => {
+    const open = !s.sidebarOpen
+    persistSidebarPreference(open)
+    return { sidebarOpen: open }
+  }),
+  setSidebarOpen: (open) => {
+    persistSidebarPreference(open)
+    set({ sidebarOpen: open })
+  },
+  syncSidebarForViewport: (compact) => set({
+    sidebarOpen: compact ? false : getStoredSidebarPreference(),
+  }),
   setActiveView: (view) => set({ activeView: view }),
   setPendingSettingsTab: (tab) => set({ pendingSettingsTab: tab }),
   openSettings: (view = 'settings') => set({

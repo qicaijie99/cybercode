@@ -330,6 +330,55 @@ describe('chatStore history mapping', () => {
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.usageRevision).toBe(2)
   })
 
+  it('keeps a turn active until the backend confirms stop and refreshes usage after a forced stop', () => {
+    const elapsedTimer = setInterval(() => {}, 1_000)
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSessionState({
+          chatState: 'tool_executing',
+          streamingText: '已完成一部分',
+          streamingToolInput: '{"url":"https://example.com"}',
+          activeToolUseId: 'browser-tool-1',
+          activeToolName: 'mcp__agent-browser__agent_browser_open',
+          elapsedTimer,
+          usageRevision: 3,
+        }),
+      },
+    })
+
+    useChatStore.getState().stopGeneration(TEST_SESSION_ID)
+
+    expect(sendMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, {
+      type: 'stop_generation',
+    })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({
+      chatState: 'tool_executing',
+      activeToolUseId: 'browser-tool-1',
+      usageRevision: 3,
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'generation_stopped',
+      forced: true,
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]).toMatchObject({
+      chatState: 'idle',
+      streamingText: '',
+      streamingToolInput: '',
+      activeToolUseId: null,
+      activeToolName: null,
+      elapsedTimer: null,
+      usageRevision: 4,
+      messages: [
+        {
+          type: 'assistant_text',
+          content: '已完成一部分',
+        },
+      ],
+    })
+  })
+
   it('keeps local image previews on the user message shown in the transcript', () => {
     useChatStore.getState().sendMessage(TEST_SESSION_ID, '看下这张图', [
       {
@@ -538,6 +587,25 @@ describe('chatStore history mapping', () => {
     ])
   })
 
+  it('replays a saved smart route without inventing a provider id', () => {
+    useSessionRuntimeStore.getState().setSelection(TEST_SESSION_ID, {
+      kind: 'route',
+      providerId: null,
+      routeId: 'coding-first',
+      modelId: 'cybercode-route-coding-first',
+    })
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID)
+
+    expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, {
+      type: 'set_runtime_config',
+      kind: 'route',
+      providerId: null,
+      routeId: 'coding-first',
+      modelId: 'cybercode-route-coding-first',
+    })
+  })
+
   it('does not start a CLI process merely to browse a session', () => {
     useChatStore.getState().connectToSession(TEST_SESSION_ID)
 
@@ -694,7 +762,45 @@ describe('chatStore history mapping', () => {
     })
   })
 
-  it('auto-sends draft steering input as the next user turn after message completion', () => {
+  it('reorders actionable steering inputs without moving an input already in progress', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSessionState({
+          chatState: 'streaming',
+          pendingSteers: [
+            {
+              id: 'steer-1',
+              content: '第一条补充',
+              createdAt: 1,
+              status: 'draft',
+            },
+            {
+              id: 'steer-running',
+              content: '正在处理的补充',
+              createdAt: 2,
+              status: 'processing',
+            },
+            {
+              id: 'steer-2',
+              content: '第二条补充',
+              createdAt: 3,
+              status: 'draft',
+            },
+          ],
+        }),
+      },
+    })
+
+    useChatStore.getState().reorderPendingSteer(TEST_SESSION_ID, 'steer-2', 'steer-1')
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.pendingSteers?.map((steer) => steer.id)).toEqual([
+      'steer-2',
+      'steer-running',
+      'steer-1',
+    ])
+  })
+
+  it('auto-sends draft steering input in the user-defined order after message completion', () => {
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSessionState({
@@ -728,6 +834,7 @@ describe('chatStore history mapping', () => {
       },
     })
 
+    useChatStore.getState().reorderPendingSteer(TEST_SESSION_ID, 'steer-2', 'steer-1')
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'message_complete',
       usage: { input_tokens: 10, output_tokens: 20 },
@@ -735,7 +842,7 @@ describe('chatStore history mapping', () => {
 
     expect(sendMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, {
       type: 'user_message',
-      content: '第一条补充\n\n第二条补充',
+      content: '第二条补充\n\n第一条补充',
       attachments: [
         { type: 'file', name: 'notes.txt', path: '/tmp/notes.txt', data: undefined, mimeType: undefined },
       ],
@@ -744,7 +851,7 @@ describe('chatStore history mapping', () => {
       { type: 'assistant_text', content: '当前回复完成。' },
       {
         type: 'user_text',
-        content: '第一条补充\n\n第二条补充',
+        content: '第二条补充\n\n第一条补充',
         attachments: [
           { type: 'file', name: 'notes.txt', path: '/tmp/notes.txt' },
         ],

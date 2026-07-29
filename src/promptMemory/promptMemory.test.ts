@@ -35,9 +35,13 @@ import {
   getConfiguredPromptMemoryLanguage,
   hasExplicitPromptMemorySignal,
   normalizePromptMemoryLanguage,
+  planPromptMemoryReview,
+  promptMemoryAutoReviewPathsForTesting,
   readPromptMemoryAutoReviewLogs,
+  readPromptMemoryAutoReviewState,
   resetPromptMemoryAutoReviewForTesting,
   shouldRunPromptMemoryAutoReview,
+  writePromptMemoryAutoReviewState,
   type PromptMemoryAutoReviewLogEntry,
 } from './autoReview.js'
 import {
@@ -55,6 +59,7 @@ import {
   PROMPT_MEMORY_ENTRY_DELIMITER,
   PromptMemoryError,
   addPromptMemoryEntry,
+  formatPromptMemoryEntries,
   readPromptMemoryFile,
   removePromptMemoryEntry,
   replacePromptMemoryEntry,
@@ -127,6 +132,11 @@ describe('prompt memory', () => {
     )
     expect(getUserPromptMemoryPath()).toBe(
       join(tmpHome, '.cyber', 'prompt-memory', 'USER.md'),
+    )
+    expect(
+      promptMemoryAutoReviewPathsForTesting.getAutoReviewStatePath(),
+    ).toBe(
+      join(tmpHome, '.cyber', 'prompt-memory', 'AUTO_REVIEW_STATE.json'),
     )
     expect(getPromptMemoryConfigPath()).toBe(
       join(tmpHome, '.cyber', 'prompt-memory', 'config.json'),
@@ -231,12 +241,25 @@ describe('prompt memory', () => {
 
   test('seeds default SOUL.md when prompt memory files are missing', async () => {
     const prompt = await loadPromptMemory()
+    const soul = await readFile(getSoulPath(), 'utf-8')
 
     expect(prompt).toContain('# CyberCode Soul')
-    expect(prompt).toContain('You are CyberCode')
-    await expect(readFile(getSoulPath(), 'utf-8')).resolves.toContain(
-      'You are CyberCode',
-    )
+    expect(prompt).toContain("You are the user's AI programming partner")
+    expect(soul).toContain("You are the user's AI programming partner")
+    expect(soul).not.toContain('You are CyberCode')
+    expect(soul).toContain('Speak with a natural, warm voice')
+    expect(soul).not.toMatch(/\b(?:coding|programming) assistant\b/i)
+  })
+
+  test('preserves an existing custom SOUL.md', async () => {
+    const customSoul = 'You are CyberCode with a user-defined identity.'
+    await mkdir(getPromptMemoryDir(), { recursive: true })
+    await writeFile(getSoulPath(), customSoul)
+
+    const prompt = await loadPromptMemory()
+
+    expect(prompt).toContain(customSoul)
+    await expect(readFile(getSoulPath(), 'utf-8')).resolves.toBe(customSoul)
   })
 
   test('loads soul, brief, and user as one prompt section', async () => {
@@ -357,6 +380,56 @@ describe('prompt memory', () => {
 
     const removed = await removePromptMemoryEntry('user', 'prefers Chinese')
     expect(removed.entries).toEqual(['User likes concise Chinese replies.'])
+  })
+
+  test('prefers an exact entry match over another entry that contains it', async () => {
+    const exact = '[workflow] Run focused tests.'
+    const containing = '[lesson] Before release: [workflow] Run focused tests.'
+    await addPromptMemoryEntry('brief', exact)
+    await addPromptMemoryEntry('brief', containing)
+
+    const replaced = await replacePromptMemoryEntry(
+      'brief',
+      exact,
+      '[workflow] Run focused tests and a production build.',
+    )
+
+    expect(replaced.entries).toEqual([
+      '[workflow] Run focused tests and a production build.',
+      containing,
+    ])
+    const removed = await removePromptMemoryEntry('brief', containing)
+    expect(removed.entries).toEqual([
+      '[workflow] Run focused tests and a production build.',
+    ])
+  })
+
+  test('merges an edited entry instead of creating a duplicate', async () => {
+    await addPromptMemoryEntry('user', '[workflow] Run tests before delivery.')
+    await addPromptMemoryEntry('user', '[quality] Verify before delivery.')
+
+    const result = await replacePromptMemoryEntry(
+      'user',
+      '[workflow] Run tests before delivery.',
+      '[quality] Verify before delivery.',
+    )
+
+    expect(result.changed).toBe(true)
+    expect(result.entries).toEqual(['[quality] Verify before delivery.'])
+    expect(result.message).toContain('merged')
+  })
+
+  test('cleans exact duplicate entries during a targeted removal', async () => {
+    const duplicate = '[communication] Reply concisely.'
+    await mkdir(getPromptMemoryDir(), { recursive: true })
+    await writeFile(
+      getUserPromptMemoryPath(),
+      formatPromptMemoryEntries([duplicate, duplicate]),
+    )
+
+    const result = await removePromptMemoryEntry('user', duplicate)
+
+    expect(result.entries).toEqual([])
   })
 
   test('treats plain BRIEF.md text as one entry before normalizing mutations', async () => {
@@ -521,6 +594,60 @@ describe('prompt memory', () => {
     })
   })
 
+  test('upgrades every fifth periodic review to a conservative meta review', () => {
+    let state = {
+      version: 1 as const,
+      periodicReviewsSinceMeta: 0,
+    }
+
+    for (let review = 1; review <= 4; review++) {
+      const plan = planPromptMemoryReview({
+        trigger: 'interval',
+        state,
+        memoryEntryCount: 3,
+        now: `2026-07-${String(review).padStart(2, '0')}T00:00:00.000Z`,
+      })
+      expect(plan.trigger).toBe('interval')
+      expect(plan.nextState.periodicReviewsSinceMeta).toBe(review)
+      state = plan.nextState
+    }
+
+    const metaPlan = planPromptMemoryReview({
+      trigger: 'interval',
+      state,
+      memoryEntryCount: 3,
+      now: '2026-07-05T00:00:00.000Z',
+    })
+    expect(metaPlan.trigger).toBe('meta')
+    expect(metaPlan.nextState.periodicReviewsSinceMeta).toBe(0)
+    expect(metaPlan.nextState.lastMetaReviewAt).toBe(
+      '2026-07-05T00:00:00.000Z',
+    )
+
+    const insufficientEvidence = planPromptMemoryReview({
+      trigger: 'interval',
+      state,
+      memoryEntryCount: 2,
+      now: '2026-07-06T00:00:00.000Z',
+    })
+    expect(insufficientEvidence.trigger).toBe('interval')
+    expect(insufficientEvidence.nextState.periodicReviewsSinceMeta).toBe(5)
+  })
+
+  test('persists the meta-review cadence across restarts', async () => {
+    await writePromptMemoryAutoReviewState({
+      version: 1,
+      periodicReviewsSinceMeta: 4,
+      lastReviewAt: '2026-07-04T00:00:00.000Z',
+    })
+
+    expect(await readPromptMemoryAutoReviewState()).toEqual({
+      version: 1,
+      periodicReviewsSinceMeta: 4,
+      lastReviewAt: '2026-07-04T00:00:00.000Z',
+    })
+  })
+
   test('builds an automatic review prompt that forbids SOUL writes', () => {
     const prompt = buildPromptMemoryAutoReviewPrompt({
       newMessageCount: 2,
@@ -542,6 +669,27 @@ describe('prompt memory', () => {
     expect(prompt).toContain('human-readable body')
     expect(prompt).toContain('Simplified Chinese')
     expect(prompt).toContain('semantic category tag in English')
+  })
+
+  test('builds a meta-review prompt that consolidates supported patterns', () => {
+    const prompt = buildPromptMemoryAutoReviewPrompt({
+      newMessageCount: 12,
+      trigger: 'meta',
+      briefEntries: [
+        '[lesson] Run focused tests after editing shared state.',
+        '[lesson] Verify the production build after UI changes.',
+      ],
+      userEntries: [
+        '[quality] User expects verification before delivery.',
+      ],
+      preferredLanguage: 'Chinese',
+    })
+
+    expect(prompt).toContain('low-frequency meta-consolidation review')
+    expect(prompt).toContain('review the current prompt-memory entries as one system')
+    expect(prompt).toContain('Meta-consolidation rules:')
+    expect(prompt).toContain('at least two existing entries')
+    expect(prompt).toContain('more general, more actionable, and shorter')
   })
 
   test('normalizes supported UI languages for automatic memory writing', () => {

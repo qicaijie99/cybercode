@@ -14,6 +14,7 @@ import type { TranslationKey } from '../../i18n/locales/en'
 import { UserMessage } from './UserMessage'
 import { AssistantMessage } from './AssistantMessage'
 import { StreamingIndicator } from './StreamingIndicator'
+import { ChatSelectionContextMenu } from './ChatSelectionContextMenu'
 
 import { ToolCallGroup } from './ToolCallGroup'
 import { ToolCallBlock } from './ToolCallBlock'
@@ -1109,6 +1110,8 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
 
   return (
     <div className="wechat-chat-bg scrollbar-no-track relative flex flex-1 flex-col overflow-hidden">
+      <ChatSelectionContextMenu />
+
       {showEmptyOverlay && historyLoadState === 'error' && (
         <div className="mx-auto my-6 flex max-w-[420px] flex-col items-center gap-3 rounded-[10px] border-2 border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-5 py-5 text-center">
           <div className="text-[13px] font-semibold text-[var(--color-text-primary)]">{t('chat.historyLoadFailedTitle')}</div>

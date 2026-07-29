@@ -5,8 +5,10 @@
 用户文档已经迁移到 `docs/`，并且以 Desktop Webapp 配置流程为准：
 
 - `docs/im/index.md`
+- `docs/im/weixin.md`
+- `docs/im/qq.md`
+- `docs/im/dingtalk.md`
 - `docs/im/telegram.md`
-- `docs/im/feishu.md`
 
 ## 当前方案摘要
 
@@ -24,16 +26,15 @@ Desktop Webapp Settings
 注意两点：
 
 - IM 配置和配对都在 Desktop Webapp 的 `Settings -> IM 接入`
-- Webapp 不会自动启动 Adapter 进程，仍需手动运行 `bun run telegram` 或 `bun run feishu`
+- 桌面发布版会自动启动 Adapter Sidecar；手动命令只用于开发和独立运行
 
 ## 快速启动
 
 ```bash
 cd adapters
 bun install
-bun run telegram
-# 或
-bun run feishu
+bun run dingtalk
+# 或 bun run weixin / qq / telegram
 ```
 
 ## 开发
@@ -45,7 +46,7 @@ cd adapters
 bun test
 bun test common/
 bun test telegram/
-bun test feishu/
+bun test dingtalk/
 ```
 
 ### 目录结构
@@ -56,6 +57,10 @@ adapters/
 │   └── attachment/        # 跨平台附件工具(types / limits / store / image-watcher)
 ├── telegram/
 │   └── media.ts           # TelegramMediaService(grammy Bot API 封装)
+├── dingtalk/
+│   ├── index.ts           # 官方 Stream SDK 长连接
+│   ├── message.ts         # 回调解析与会话隔离
+│   └── reply.ts           # sessionWebhook 回复
 ├── feishu/
 │   ├── media.ts           # FeishuMediaService(@larksuiteoapi/node-sdk 封装)
 │   └── extract-payload.ts # 入站 im.message.receive_v1 事件解析
@@ -66,7 +71,7 @@ adapters/
 
 ## 附件收发
 
-两个 Adapter 都支持双向图片/文件,和 Desktop 端走同一套 `AttachmentRef` 协议透传给主进程。
+支持附件的平台和 Desktop 端走同一套 `AttachmentRef` 协议透传给主进程。钉钉 Adapter 当前只接收文字消息，其他消息类型会返回明确提示。
 
 **入站(用户 → Claude):**
 

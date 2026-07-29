@@ -6,6 +6,50 @@ import * as path from 'path'
 import { handleProvidersApi } from '../api/providers.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
 
+const AGGREGATOR_GATEWAY_PROVIDER_IDS = [
+  'openrouter',
+  'cloudflare-ai',
+  'ollama-cloud',
+  'llm7',
+  'alibaba',
+  'volcengine',
+  'qianfan',
+  'siliconflow',
+  'groq',
+  'github-models',
+  'huggingface',
+  'nvidia',
+  'fireworks',
+  'deepinfra',
+  'cerebras',
+  'sambanova',
+  'modelscope',
+  'hyperbolic',
+  'nebius',
+  'friendliai',
+  'featherless-ai',
+  'pioneer',
+  'bytez',
+  'openvecta',
+  'synthetic',
+  'kilo-gateway',
+  'aimlapi',
+  'novita',
+  'piapi',
+  'getgoapi',
+  'laozhang',
+  'vercel-ai-gateway',
+  'agentrouter',
+  'thebai',
+  'fenayai',
+  'empower',
+  'poe',
+  'chutes',
+  'hackclub',
+  'freetheai',
+  'nanogpt',
+] as const
+
 let tmpDir: string
 let originalConfigDir: string | undefined
 
@@ -46,7 +90,26 @@ describe('provider presets API', () => {
     const response = await handleProvidersApi(req, url, segments)
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ presets: PROVIDER_PRESETS })
+    const body = await response.json() as {
+      presets: Array<Record<string, unknown> & { id: string; cost: string }>
+    }
+    expect(body.presets).toHaveLength(PROVIDER_PRESETS.length)
+    for (const preset of PROVIDER_PRESETS) {
+      expect(body.presets.find((candidate) => candidate.id === preset.id))
+        .toMatchObject(preset)
+    }
+    expect(body.presets.find((preset) => preset.id === 'cloudflare-ai')).toMatchObject({
+      cost: 'recurring-free',
+    })
+    expect(body.presets.find((preset) => preset.id === 'ollama-cloud')).toMatchObject({
+      cost: 'recurring-free',
+    })
+    expect(body.presets.find((preset) => preset.id === 'llm7')).toMatchObject({
+      cost: 'mixed',
+    })
+    expect(body.presets.find((preset) => preset.id === 'opencode-free')).toMatchObject({
+      cost: 'recurring-free',
+    })
   })
 
   test('configured presets include built-in official and custom entries', () => {
@@ -54,12 +117,108 @@ describe('provider presets API', () => {
     expect(PROVIDER_PRESETS.some((preset) => preset.id === 'custom')).toBe(true)
   })
 
-  test('configured presets expose separate Kimi Code and Kimi API entries', () => {
+  test('ships only verified OpenCode models in the no-auth preset', () => {
+    const preset = PROVIDER_PRESETS.find((item) => item.id === 'opencode-free')
+
+    expect(preset).toMatchObject({
+      baseUrl: 'https://opencode.ai/zen/v1',
+      apiFormat: 'openai_chat',
+      needsApiKey: false,
+      defaultModels: {
+        main: 'north-mini-code-free',
+        haiku: 'ling-3.0-flash-free',
+        sonnet: 'north-mini-code-free',
+        opus: 'mimo-v2.5-free',
+      },
+    })
+    expect(preset?.modelOptions?.map((model) => model.id)).toEqual([
+      'north-mini-code-free',
+      'mimo-v2.5-free',
+      'ling-3.0-flash-free',
+    ])
+  })
+
+  test('configured presets expose separate Kimi Code and Kimi API-key entries', () => {
     const ids = PROVIDER_PRESETS.map((preset) => preset.id)
+    const kimiCode = PROVIDER_PRESETS.find((preset) => preset.id === 'kimi-code')
+    const kimi = PROVIDER_PRESETS.find((preset) => preset.id === 'kimi')
 
     expect(ids).toContain('kimi-code')
     expect(ids).toContain('kimi')
     expect(ids.indexOf('kimi-code')).toBeLessThan(ids.indexOf('kimi'))
+    expect(kimiCode?.name).toBe('Kimi Code')
+    expect(kimi?.name).toBe('Kimi')
+  })
+
+  test('ships a broad native OpenAI-compatible source catalog', () => {
+    const expectedSourceIds = [
+      'openrouter',
+      'cloudflare-ai',
+      'ollama-cloud',
+      'llm7',
+      'groq',
+      'mistral',
+      'reka',
+      'cerebras',
+      'nvidia',
+      'sambanova',
+      'siliconflow',
+      'github-models',
+      'huggingface',
+      'fireworks',
+      'deepinfra',
+      'openvecta',
+      'hyperbolic',
+      'nebius',
+      'modelscope',
+      'nous-research',
+      'friendliai',
+      'featherless-ai',
+      'pioneer',
+      'bytez',
+    ]
+    const byId = new Map(PROVIDER_PRESETS.map((preset) => [preset.id, preset]))
+
+    expect(PROVIDER_PRESETS.length).toBeGreaterThanOrEqual(30)
+    for (const id of expectedSourceIds) {
+      expect(byId.get(id)?.apiFormat).toBe('openai_chat')
+      expect(byId.get(id)?.baseUrl).toMatch(/^https:\/\//)
+    }
+  })
+
+  test('ships all multi-model platforms and gateways as configurable sources', () => {
+    const byId = new Map(PROVIDER_PRESETS.map((preset) => [preset.id, preset]))
+
+    expect(AGGREGATOR_GATEWAY_PROVIDER_IDS).toHaveLength(41)
+    for (const id of AGGREGATOR_GATEWAY_PROVIDER_IDS) {
+      const preset = byId.get(id)
+      expect(preset, `${id} preset`).toBeDefined()
+      expect(preset?.needsApiKey, `${id} API key requirement`).toBe(true)
+      expect(preset?.baseUrl, `${id} base URL`).toMatch(/^https:\/\//)
+      expect(preset?.websiteUrl, `${id} website`).toMatch(/^https:\/\//)
+    }
+  })
+
+  test('ships selected API-key presets with their expected connection formats', () => {
+    const expectedProviders = [
+      ['anthropic-api', 'anthropic', 'https://api.anthropic.com'],
+      ['xai', 'openai_chat', 'https://api.x.ai/v1'],
+      ['alibaba', 'openai_chat', 'https://dashscope.aliyuncs.com/compatible-mode/v1'],
+      ['perplexity', 'openai_chat', 'https://api.perplexity.ai'],
+      ['cohere', 'openai_chat', 'https://api.cohere.com/compatibility/v1'],
+      ['meta-llama', 'openai_chat', 'https://api.llama.com/compat/v1'],
+      ['volcengine', 'openai_chat', 'https://ark.cn-beijing.volces.com/api/v3'],
+      ['qianfan', 'openai_chat', 'https://qianfan.baidubce.com/v2'],
+      ['ai21', 'openai_chat', 'https://api.ai21.com/studio/v1'],
+    ] as const
+    const byId = new Map(PROVIDER_PRESETS.map((preset) => [preset.id, preset]))
+
+    for (const [id, apiFormat, baseUrl] of expectedProviders) {
+      expect(byId.get(id)?.apiFormat).toBe(apiFormat)
+      expect(byId.get(id)?.baseUrl).toBe(baseUrl)
+      expect(byId.get(id)?.needsApiKey).toBe(true)
+      expect(byId.get(id)?.defaultModels.main).not.toBe('')
+    }
   })
 
   test('local Anthropic-compatible presets appear immediately before custom', () => {
@@ -204,6 +363,8 @@ describe('provider presets API', () => {
     )
 
     expect(millionTokenModels).toEqual([
+      'anthropic-api:claude-opus-4-8',
+      'anthropic-api:claude-sonnet-5',
       'deepseek:deepseek-v4-pro',
       'deepseek:deepseek-v4-flash',
       'zhipuglm:glm-5.2',
@@ -222,6 +383,8 @@ describe('provider presets API', () => {
       'google:gemini-2.5-pro',
       'google:gemini-2.5-flash',
       'google:gemini-2.5-flash-lite',
+      'ollama-cloud:glm-5.2',
+      'ollama-cloud:deepseek-v4-flash',
     ])
   })
 
@@ -235,6 +398,9 @@ describe('provider presets API', () => {
     const minimax = PROVIDER_PRESETS.find((preset) => preset.id === 'minimax')
     const openai = PROVIDER_PRESETS.find((preset) => preset.id === 'openai')
     const google = PROVIDER_PRESETS.find((preset) => preset.id === 'google')
+    const cloudflare = PROVIDER_PRESETS.find((preset) => preset.id === 'cloudflare-ai')
+    const ollamaCloud = PROVIDER_PRESETS.find((preset) => preset.id === 'ollama-cloud')
+    const llm7 = PROVIDER_PRESETS.find((preset) => preset.id === 'llm7')
     const custom = PROVIDER_PRESETS.find((preset) => preset.id === 'custom')
 
     expect(lmstudio?.needsApiKey).toBe(false)
@@ -258,6 +424,12 @@ describe('provider presets API', () => {
     expect(openai?.apiKeyUrl).toBe('https://platform.openai.com/api-keys')
     expect(google?.apiKeyUrl).toBe('https://aistudio.google.com/apikey')
     expect(google?.promoText).toContain('/v1beta/openai')
+    expect(cloudflare?.baseUrl).toContain('/accounts/ACCOUNT_ID/ai/v1')
+    expect(cloudflare?.promoText).toContain('10,000 Neurons')
+    expect(ollamaCloud?.baseUrl).toBe('https://ollama.com')
+    expect(ollamaCloud?.promoText).toContain('5 小时')
+    expect(llm7?.defaultModels.main).toBe('default')
+    expect(llm7?.promoText).toContain('每日额度')
     expect(custom?.promoText).toBeUndefined()
   })
 

@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsPanel } from './SettingsPanel'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -60,6 +60,10 @@ describe('SettingsPanel content routing', () => {
     })
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('renders the normal settings home for the settings button', () => {
     render(<SettingsPanel visible />)
 
@@ -71,7 +75,9 @@ describe('SettingsPanel content routing', () => {
   it('keeps the chat-side rail clickable when opened from a project session', () => {
     render(<SettingsPanel visible reserveRightRail />)
 
-    expect(screen.getByTestId('settings-panel')).toHaveClass('right-[var(--sidebar-rail-width)]')
+    expect(screen.getByTestId('settings-panel')).toHaveClass('right-[var(--chat-mode-sidebar-width)]')
+    expect(screen.getByTestId('settings-panel')).toHaveClass('settings-panel-overlay--reserve-right-rail')
+    expect(screen.getByTestId('settings-panel')).toHaveAttribute('data-reserve-right-rail', 'true')
     expect(screen.getByTestId('settings-panel')).not.toHaveClass('right-0')
   })
 
@@ -98,9 +104,42 @@ describe('SettingsPanel content routing', () => {
     useUIStore.setState({ settingsPanelView: 'providers' })
 
     render(<SettingsPanel visible />)
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    fireEvent.click(screen.getByRole('button', { name: '返回' }))
 
     expect(useUIStore.getState().settingsOpen).toBe(false)
+  })
+
+  it('opens model settings as a full application drawer from the icon rail', () => {
+    useUIStore.setState({ settingsPanelView: 'providers' })
+
+    render(<SettingsPanel visible reserveRightRail />)
+
+    const panel = screen.getByTestId('settings-panel')
+    const card = screen.getByTestId('settings-panel-card')
+    expect(panel).toHaveAttribute('data-layout', 'drawer')
+    expect(panel).toHaveClass('settings-provider-shell', 'right-0', 'z-[100]', 'overflow-hidden')
+    expect(panel).not.toHaveClass('p-[16px]', 'bg-black/10', 'bg-[var(--color-background)]')
+    expect(card).toHaveClass('settings-provider-drawer', 'h-full', 'w-full', 'max-w-none')
+    expect(card).not.toHaveClass('h-[88vh]', 'max-w-[1100px]', 'rounded-[14px]')
+    expect(screen.getByTestId('providers-panel').parentElement).toHaveClass('lg:px-[40px]')
+    expect(screen.getByTestId('provider-drawer-drag-region')).toHaveAttribute('data-tauri-drag-region')
+    expect(screen.getByRole('button', { name: '返回' }).querySelector('.codicon-arrow-left')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '返回' })).not.toHaveAttribute('data-tauri-drag-region')
+    expect(screen.queryByRole('button', { name: '关闭' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the provider drawer mounted while it slides back closed', () => {
+    vi.useFakeTimers()
+    useUIStore.setState({ settingsPanelView: 'providers' })
+
+    const { rerender } = render(<SettingsPanel visible />)
+    rerender(<SettingsPanel visible={false} />)
+
+    expect(screen.getByTestId('settings-panel')).toHaveAttribute('data-state', 'closing')
+    expect(screen.getByTestId('settings-panel-card')).toHaveClass('settings-provider-drawer--closing')
+
+    act(() => vi.advanceTimersByTime(240))
+    expect(screen.queryByTestId('settings-panel')).not.toBeInTheDocument()
   })
 
   it('renders prompt memory inside the shared floating panel', () => {
@@ -119,6 +158,8 @@ describe('SettingsPanel content routing', () => {
 
     expect(screen.getByTestId('settings-panel')).toHaveAttribute('aria-label', 'Token 优化')
     expect(screen.getByTestId('token-optimization-panel')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '关闭' }).closest('header')).toHaveClass('h-[52px]')
+    expect(screen.getByTestId('token-optimization-panel').parentElement).toHaveClass('pt-[18px]')
   })
 
   it('routes the Code Graph rail entry directly into graph view', () => {
@@ -129,5 +170,7 @@ describe('SettingsPanel content routing', () => {
     expect(screen.getByTestId('settings-panel')).toHaveAttribute('aria-label', '知识空间')
     expect(screen.getByTestId('knowledge-space-panel')).toBeInTheDocument()
     expect(screen.queryByTestId('token-optimization-panel')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '关闭' }).closest('header')).toHaveClass('h-[48px]')
+    expect(screen.getByTestId('knowledge-space-panel').parentElement).not.toHaveClass('pt-[18px]')
   })
 })

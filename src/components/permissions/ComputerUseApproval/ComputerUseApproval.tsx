@@ -7,6 +7,7 @@ import * as React from 'react';
 import { useMemo, useState } from 'react';
 import { Box, Text } from '../../../ink.js';
 import { execFileNoThrow } from '../../../utils/execFileNoThrow.js';
+import { requestNativeMacScreenRecordingPermission } from '../../../utils/computerUse/nativeCapture.js';
 import { plural } from '../../../utils/stringUtils.js';
 import type { OptionWithDescription } from '../../CustomSelect/select.js';
 import { Select } from '../../CustomSelect/select.js';
@@ -114,8 +115,10 @@ function ComputerUseTccPanel(t0) {
           }
         case "open_screen_recording":
           {
-            execFileNoThrow("open", ["x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"], {
-              useCwd: false
+            void requestNativeMacScreenRecordingPermission().catch(() => null).then(() => {
+              void execFileNoThrow("open", ["x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"], {
+                useCwd: false
+              });
             });
             return;
           }
@@ -161,7 +164,7 @@ function ComputerUseTccPanel(t0) {
   }
   let t7;
   if ($[15] === Symbol.for("react.memo_cache_sentinel")) {
-    t7 = <Text dimColor={true}>Grant the missing permissions in System Settings, then select "Try again". macOS may require you to restart CyberCode after granting Screen Recording.</Text>;
+    t7 = <Text dimColor={true}>Grant the missing permissions in System Settings, then select "Try again". Screen capture runs through CyberCode Computer Use so the permission survives app updates.</Text>;
     $[15] = t7;
   } else {
     t7 = $[15];

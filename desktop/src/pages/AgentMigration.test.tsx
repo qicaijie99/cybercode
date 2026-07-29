@@ -40,12 +40,16 @@ describe('AgentMigration', () => {
 
     expect((await screen.findAllByText('OpenClaw')).length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('CyberCode').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('WorkBuddy').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Claude Code').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Codex').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText(/Cursor/).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Trae').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText(/Hermes Agent/).length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText(/DeepSeek TUI \/ CodeWhale/).length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('未检测到')).toHaveLength(3)
+    expect(screen.getAllByText('Kimi Code').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Pi').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('未检测到')).toHaveLength(7)
     expect(screen.getByText('0 个文件 · 1 个项目')).toBeInTheDocument()
     expect(await screen.findByText('原生格式')).toHaveAttribute(
       'title',
@@ -56,8 +60,17 @@ describe('AgentMigration', () => {
     expect(container.querySelector('[data-agent-logo="claude-code"]')).toHaveAttribute('src', '/agent-icons/claude-code.png')
     expect(container.querySelector('[data-agent-logo="codex"]')).toHaveAttribute('src', '/agent-icons/codex.png')
     expect(container.querySelector('[data-agent-logo="cursor"]')).toHaveAttribute('src', '/agent-icons/cursor.png')
+    expect(container.querySelector('[data-agent-logo="trae"]')).toHaveAttribute('src', '/agent-icons/trae.svg')
     expect(container.querySelector('[data-agent-logo="hermes-agent"]')).toHaveAttribute('src', '/agent-icons/hermes-agent.png')
     expect(container.querySelector('[data-agent-logo="deepseek-tui"]')).toHaveAttribute('src', '/agent-icons/codewhale.svg')
+    expect(container.querySelector('[data-agent-logo="workbuddy"]')).toHaveAttribute('src', '/agent-icons/workbuddy.svg')
+    expect(container.querySelector('[data-agent-logo="kimi-code"]')).toHaveAttribute('src', '/agent-icons/kimi-code.png')
+    expect(container.querySelector('[data-agent-logo="pi"]')).toHaveAttribute('src', '/agent-icons/pi.svg')
+    expect(container.querySelector('svg[data-agent-logo]')).not.toBeInTheDocument()
+    const layout = container.querySelector('.agent-migration-layout')
+    expect(layout).toHaveClass('grid-cols-1', 'lg:grid-cols-[224px_minmax(0,1fr)]')
+    expect(layout?.querySelector('aside')).toHaveClass('hidden', 'lg:block')
+    expect(container.querySelector('.agent-migration-list')).toHaveClass('min-h-[220px]', 'lg:min-h-[280px]')
   })
 
   it('opens a branded destination picker with every agent logo and state', async () => {
@@ -72,11 +85,15 @@ describe('AgentMigration', () => {
     const expectedAgents = [
       ['CyberCode', 'cybercode'],
       ['OpenClaw', 'openclaw'],
+      ['WorkBuddy', 'workbuddy'],
       ['Claude Code', 'claude-code'],
       ['Codex', 'codex'],
       ['Cursor', 'cursor'],
+      ['Trae', 'trae'],
       ['Hermes Agent', 'hermes-agent'],
       ['DeepSeek TUI / CodeWhale', 'deepseek-tui'],
+      ['Kimi Code', 'kimi-code'],
+      ['Pi', 'pi'],
     ] as const
     for (const [name, id] of expectedAgents) {
       const option = within(listbox).getByRole('option', { name: new RegExp(name.replace('/', '\\/')) })
@@ -88,10 +105,31 @@ describe('AgentMigration', () => {
     expect(within(listbox).getByText('默认')).toBeInTheDocument()
   })
 
+  it('switches the migration source from a branded source picker', async () => {
+    render(<AgentMigration />)
+
+    const trigger = await screen.findByTestId('source-agent-picker')
+    expect(trigger).toHaveAttribute('data-source-agent', 'openclaw')
+    expect(trigger.querySelector('[data-agent-logo="openclaw"]')).toBeInTheDocument()
+    fireEvent.click(trigger)
+
+    const listbox = await screen.findByRole('listbox', { name: '迁移方' })
+    expect(within(listbox).getByRole('option', { name: /OpenClaw/ })).toHaveAttribute('aria-selected', 'true')
+    expect(within(listbox).getByRole('option', { name: /CyberCode/ })).toBeDisabled()
+    expect(within(listbox).getByRole('option', { name: /WorkBuddy/ })).toBeDisabled()
+    expect(within(listbox).queryByText('默认')).not.toBeInTheDocument()
+
+    fireEvent.click(within(listbox).getByRole('option', { name: /Claude Code/ }))
+
+    await waitFor(() => expect(trigger).toHaveAttribute('data-source-agent', 'claude-code'))
+    expect(screen.getByRole('heading', { name: 'Claude Code' })).toBeInTheDocument()
+    expect(screen.getByTestId('target-agent-picker')).toHaveAttribute('data-target-agent', 'cybercode')
+  })
+
   it('aligns source and destination with the same route field geometry', async () => {
     render(<AgentMigration />)
 
-    const source = await screen.findByTestId('source-agent-field')
+    const source = await screen.findByTestId('source-agent-picker')
     const target = screen.getByTestId('target-agent-picker')
     expect(source).toHaveClass('h-[40px]', 'mt-[2px]', 'border')
     expect(target).toHaveClass('h-[40px]', 'mt-[2px]', 'border')
@@ -411,6 +449,7 @@ function scanFixture(targetAgentId: ExternalAgentId = 'cybercode'): AgentMigrati
           writeMode: 'markdown-file',
         }],
       }),
+      agent({ id: 'workbuddy', name: 'WorkBuddy', installed: false }),
       agent({ id: 'claude-code', name: 'Claude Code', installed: true }),
       agent({
         id: 'codex',
@@ -427,8 +466,11 @@ function scanFixture(targetAgentId: ExternalAgentId = 'cybercode'): AgentMigrati
         }],
       }),
       agent({ id: 'cursor', name: 'Cursor', installed: false }),
+      agent({ id: 'trae', name: 'Trae', installed: false }),
       agent({ id: 'hermes-agent', name: 'Hermes Agent', installed: false }),
       agent({ id: 'deepseek-tui', name: 'DeepSeek TUI / CodeWhale', installed: false }),
+      agent({ id: 'kimi-code', name: 'Kimi Code', installed: false }),
+      agent({ id: 'pi', name: 'Pi', installed: false }),
     ],
   }
 }

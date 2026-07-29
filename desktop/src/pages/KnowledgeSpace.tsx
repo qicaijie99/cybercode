@@ -447,7 +447,7 @@ function SourceRail({
 }) {
   const t = useTranslation()
   return (
-    <aside className="hidden w-[218px] shrink-0 flex-col border-r border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] md:flex">
+    <aside className="hidden w-[218px] shrink-0 flex-col border-r border-[var(--color-border-separator)] bg-[var(--color-surface-sidebar)] lg:flex">
       <div className="flex h-[52px] items-center justify-between px-[14px]">
         <span className="text-[11px] font-semibold uppercase text-[var(--color-text-tertiary)]">
           {t('knowledgeSpace.sources.title')}
@@ -578,7 +578,7 @@ function WorkspaceToolbar({
         </ModeButton>
       </div>
       {selectedSourceId && (
-        <div className="hidden items-center gap-[2px] xl:hidden md:flex">
+        <div className="hidden items-center gap-[2px] xl:hidden lg:flex">
           <IconButton label={t('knowledgeSpace.details.reindex')} onClick={onReindex} disabled={sourceBusy}>
             <RefreshCw className={sourceBusy ? 'animate-spin' : ''} size={15} />
           </IconButton>
@@ -587,7 +587,7 @@ function WorkspaceToolbar({
           </IconButton>
         </div>
       )}
-      <div className="flex w-full min-w-0 items-center gap-[6px] md:hidden">
+      <div className="flex w-full min-w-0 items-center gap-[6px] lg:hidden">
         <select
           value={selectedSourceId ?? ''}
           onChange={(event) => onSourceChange(event.target.value || null)}

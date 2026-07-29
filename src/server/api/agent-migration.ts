@@ -10,11 +10,15 @@ import { invalidateRecentProjectsCache } from './sessions.js'
 const AGENT_IDS = new Set<ExternalAgentId>([
   'cybercode',
   'openclaw',
+  'workbuddy',
   'claude-code',
   'codex',
   'cursor',
+  'trae',
   'hermes-agent',
   'deepseek-tui',
+  'kimi-code',
+  'pi',
 ])
 const MIGRATION_ID_PATTERN = /^[a-f0-9]{24}$/
 

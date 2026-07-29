@@ -1,0 +1,6 @@
+mss>=9.0.2,<10
+Pillow>=10.2,<12
+PyAutoGUI>=0.9.54
+psutil>=5.9,<7
+pyperclip>=1.8,<2
+screeninfo>=0.8.1,<1

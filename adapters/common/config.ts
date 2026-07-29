@@ -37,12 +37,44 @@ export type FeishuConfig = {
   streamingCard: boolean
 }
 
+export type WeixinConfig = {
+  enabled: boolean
+  accountId: string
+  botToken: string
+  baseUrl: string
+  userId: string
+  allowedUsers: string[]
+  pairedUsers: PairedUser[]
+  defaultWorkDir: string
+}
+
+export type QQConfig = {
+  enabled: boolean
+  appId: string
+  appSecret: string
+  allowedUsers: string[]
+  pairedUsers: PairedUser[]
+  defaultWorkDir: string
+  groupEnabled: boolean
+}
+
+export type DingTalkConfig = {
+  clientId: string
+  clientSecret: string
+  allowedUsers: string[]
+  pairedUsers: PairedUser[]
+  defaultWorkDir: string
+}
+
 export type AdapterConfig = {
   serverUrl: string
   defaultProjectDir: string
   pairing: PairingState
   telegram: TelegramConfig
   feishu: FeishuConfig
+  weixin: WeixinConfig
+  qq: QQConfig
+  dingtalk: DingTalkConfig
 }
 
 function getConfigPath(): string {
@@ -64,7 +96,14 @@ export function loadConfig(): AdapterConfig {
   const file = loadFile()
   const tg = file.telegram ?? {}
   const fs_ = file.feishu ?? {}
+  const weixin = file.weixin ?? {}
+  const qq = file.qq ?? {}
+  const dingtalk = file.dingtalk ?? {}
   const pairing = file.pairing ?? {}
+  const weixinAccountId = process.env.WEIXIN_ACCOUNT_ID || weixin.accountId || ''
+  const weixinBotToken = process.env.WEIXIN_BOT_TOKEN || weixin.botToken || ''
+  const qqAppId = process.env.QQBOT_APP_ID || qq.appId || ''
+  const qqAppSecret = process.env.QQBOT_APP_SECRET || qq.appSecret || ''
 
   return {
     serverUrl: process.env.ADAPTER_SERVER_URL || file.serverUrl || 'ws://127.0.0.1:3456',
@@ -89,6 +128,32 @@ export function loadConfig(): AdapterConfig {
       pairedUsers: fs_.pairedUsers ?? [],
       defaultWorkDir: fs_.defaultWorkDir || process.cwd(),
       streamingCard: fs_.streamingCard ?? false,
+    },
+    weixin: {
+      enabled: weixin.enabled ?? Boolean(weixinAccountId && weixinBotToken),
+      accountId: weixinAccountId,
+      botToken: weixinBotToken,
+      baseUrl: process.env.WEIXIN_BASE_URL || weixin.baseUrl || 'https://ilinkai.weixin.qq.com',
+      userId: weixin.userId || '',
+      allowedUsers: weixin.allowedUsers ?? [],
+      pairedUsers: weixin.pairedUsers ?? [],
+      defaultWorkDir: weixin.defaultWorkDir || process.cwd(),
+    },
+    qq: {
+      enabled: qq.enabled ?? Boolean(qqAppId && qqAppSecret),
+      appId: qqAppId,
+      appSecret: qqAppSecret,
+      allowedUsers: qq.allowedUsers ?? [],
+      pairedUsers: qq.pairedUsers ?? [],
+      defaultWorkDir: qq.defaultWorkDir || process.cwd(),
+      groupEnabled: qq.groupEnabled ?? true,
+    },
+    dingtalk: {
+      clientId: process.env.DINGTALK_CLIENT_ID || dingtalk.clientId || '',
+      clientSecret: process.env.DINGTALK_CLIENT_SECRET || dingtalk.clientSecret || '',
+      allowedUsers: dingtalk.allowedUsers ?? [],
+      pairedUsers: dingtalk.pairedUsers ?? [],
+      defaultWorkDir: dingtalk.defaultWorkDir || process.cwd(),
     },
   }
 }

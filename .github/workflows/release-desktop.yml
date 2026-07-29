@@ -108,6 +108,7 @@ jobs:
             wget \
             file \
             libxdo-dev \
+            libdbus-1-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
@@ -249,6 +250,13 @@ jobs:
           done
           exit "$missing"
 
+      - name: Import Apple code-signing certificate
+        if: startsWith(matrix.platform, 'macos') && vars.ENABLE_APPLE_NOTARIZATION == 'true'
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
       # ── Build Tauri app ──────────────────────────────────────
       - name: Build Tauri app
         if: vars.ENABLE_APPLE_NOTARIZATION != 'true' || !startsWith(matrix.platform, 'macos')
@@ -349,12 +357,13 @@ jobs:
 
           ls -la "$OUT"
 
-      - name: Validate packaged Code Graph resources
+      - name: Validate packaged runtime resources
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.value }}
           LABEL: ${{ matrix.label }}
           ASSET_SUFFIX: ${{ matrix.asset_suffix }}
+          TARGET_TRIPLE: ${{ matrix.rust_target }}
         run: |
           set -euo pipefail
 
@@ -397,9 +406,21 @@ jobs:
           esac
 
           RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/codegraph' -print -quit)"
+          AGENT_BROWSER_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/agent-browser' -print -quit)"
+          COMPUTER_USE_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/computer-use' -print -quit)"
+          RTK_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/rtk' -print -quit)"
           SIDECAR="$(find "$ROOT" -type f \( -name 'cybercode-sidecar' -o -name 'cybercode-sidecar.exe' \) -print -quit)"
-          if [ -z "$RESOURCE_DIR" ] || [ -z "$SIDECAR" ] || [ ! -s "$SIDECAR" ]; then
-            echo "::error::Packaged Code Graph resources or CyberCode sidecar are missing"
+          AGENT_BROWSER="$(find "$ROOT" -type f \( -name 'agent-browser' -o -name 'agent-browser.exe' \) -print -quit)"
+          RTK="$(find "$ROOT" -type f \( -name 'rtk' -o -name 'rtk.exe' \) -print -quit)"
+          if \
+            [ -z "$RESOURCE_DIR" ] || \
+            [ -z "$AGENT_BROWSER_RESOURCE_DIR" ] || \
+            [ -z "$COMPUTER_USE_RESOURCE_DIR" ] || \
+            [ -z "$RTK_RESOURCE_DIR" ] || \
+            [ -z "$SIDECAR" ] || [ ! -s "$SIDECAR" ] || \
+            [ -z "$AGENT_BROWSER" ] || [ ! -s "$AGENT_BROWSER" ] || \
+            [ -z "$RTK" ] || [ ! -s "$RTK" ]; then
+            echo "::error::One or more packaged runtime binaries or resource directories are missing"
             find "$ROOT" -maxdepth 8 -type f | sort
             exit 1
           fi
@@ -419,7 +440,52 @@ jobs:
             exit 1
           fi
 
-          RESOURCE_DIR="$RESOURCE_DIR" node <<'NODE'
+          for required in LICENSE manifest.json; do
+            if [ ! -s "$AGENT_BROWSER_RESOURCE_DIR/$required" ]; then
+              echo "::error::Packaged agent-browser resource is missing or empty: $required"
+              find "$AGENT_BROWSER_RESOURCE_DIR" -maxdepth 1 -type f | sort
+              exit 1
+            fi
+            if [ ! -s "$RTK_RESOURCE_DIR/$required" ]; then
+              echo "::error::Packaged RTK resource is missing or empty: $required"
+              find "$RTK_RESOURCE_DIR" -maxdepth 1 -type f | sort
+              exit 1
+            fi
+          done
+
+          if [ ! -s "$COMPUTER_USE_RESOURCE_DIR/manifest.json" ]; then
+            echo "::error::Packaged Computer Use manifest is missing or empty"
+            find "$COMPUTER_USE_RESOURCE_DIR" -maxdepth 6 -type f | sort
+            exit 1
+          fi
+
+          case "$LABEL" in
+            macOS-ARM64|macOS-x64)
+              COMPUTER_USE_HELPER="$(find "$COMPUTER_USE_RESOURCE_DIR" -type f -name 'CyberCodeComputerUse' -print -quit)"
+              COMPUTER_USE_PLIST="$(find "$COMPUTER_USE_RESOURCE_DIR" -type f -name 'Info.plist' -print -quit)"
+              if [ -z "$COMPUTER_USE_HELPER" ] || [ ! -s "$COMPUTER_USE_HELPER" ] || [ -z "$COMPUTER_USE_PLIST" ] || [ ! -s "$COMPUTER_USE_PLIST" ]; then
+                echo "::error::Packaged macOS Computer Use helper bundle is incomplete"
+                find "$COMPUTER_USE_RESOURCE_DIR" -maxdepth 8 -type f | sort
+                exit 1
+              fi
+              ;;
+            Linux-x64)
+              COMPUTER_USE_HELPER="$COMPUTER_USE_RESOURCE_DIR/cybercode-computer-use"
+              if [ ! -s "$COMPUTER_USE_HELPER" ]; then
+                echo "::error::Packaged Linux Computer Use helper is missing or empty"
+                find "$COMPUTER_USE_RESOURCE_DIR" -maxdepth 3 -type f | sort
+                exit 1
+              fi
+              ;;
+          esac
+
+          RESOURCE_DIR="$RESOURCE_DIR" \
+          AGENT_BROWSER_RESOURCE_DIR="$AGENT_BROWSER_RESOURCE_DIR" \
+          COMPUTER_USE_RESOURCE_DIR="$COMPUTER_USE_RESOURCE_DIR" \
+          RTK_RESOURCE_DIR="$RTK_RESOURCE_DIR" \
+          TARGET_TRIPLE="$TARGET_TRIPLE" \
+          LABEL="$LABEL" \
+          node <<'NODE'
           const crypto = require('node:crypto')
           const fs = require('node:fs')
           const path = require('node:path')
@@ -440,9 +506,50 @@ jobs:
           ) {
             throw new Error('Packaged Code Graph schema does not match manifest.json')
           }
+
+          const agentBrowserManifest = JSON.parse(
+            fs.readFileSync(
+              path.join(process.env.AGENT_BROWSER_RESOURCE_DIR, 'manifest.json'),
+              'utf8',
+            ),
+          )
+          if (
+            agentBrowserManifest.name !== 'agent-browser' ||
+            agentBrowserManifest.targetTriple !== process.env.TARGET_TRIPLE ||
+            !/^[0-9a-f]{64}$/.test(agentBrowserManifest.sha256 ?? '')
+          ) {
+            throw new Error('Packaged agent-browser manifest is invalid')
+          }
+
+          const rtkManifest = JSON.parse(
+            fs.readFileSync(
+              path.join(process.env.RTK_RESOURCE_DIR, 'manifest.json'),
+              'utf8',
+            ),
+          )
+          if (
+            rtkManifest.name !== 'RTK' ||
+            rtkManifest.targetTriple !== process.env.TARGET_TRIPLE
+          ) {
+            throw new Error('Packaged RTK manifest is invalid')
+          }
+
+          const computerUseManifest = JSON.parse(
+            fs.readFileSync(
+              path.join(process.env.COMPUTER_USE_RESOURCE_DIR, 'manifest.json'),
+              'utf8',
+            ),
+          )
+          const helperExpected = process.env.LABEL !== 'Windows-x64'
+          if (
+            computerUseManifest.targetTriple !== process.env.TARGET_TRIPLE ||
+            computerUseManifest.available !== helperExpected
+          ) {
+            throw new Error('Packaged Computer Use manifest is invalid')
+          }
           NODE
 
-          echo "Validated packaged Code Graph resources for $LABEL ($GRAMMAR_COUNT grammars)"
+          echo "Validated packaged runtime resources for $LABEL ($GRAMMAR_COUNT Code Graph grammars)"
 
       - name: Upload release assets artifact
         uses: actions/upload-artifact@v4

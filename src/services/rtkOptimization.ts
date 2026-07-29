@@ -36,7 +36,7 @@ const RTK_TIMEOUT_MS = 1_500
 
 export class RtkOptimizationService {
   private cachedConfig: StoredConfig | null = null
-  private cachedConfigMtimeMs: number | null = null
+  private cachedConfigSignature: string | null = null
   private cachedBinaryPath: string | null | undefined
 
   isEnabled() {
@@ -112,7 +112,7 @@ export class RtkOptimizationService {
 
   resetForTesting() {
     this.cachedConfig = null
-    this.cachedConfigMtimeMs = null
+    this.cachedConfigSignature = null
     this.cachedBinaryPath = undefined
   }
 
@@ -144,13 +144,13 @@ export class RtkOptimizationService {
 
   private readConfig(): StoredConfig {
     const configPath = this.getConfigPath()
-    let mtimeMs: number | null = null
+    let signature: string | null = null
     try {
-      mtimeMs = fs.statSync(configPath).mtimeMs
+      signature = this.getFileSignature(fs.statSync(configPath))
     } catch {
       // Missing settings use the enabled default below.
     }
-    if (this.cachedConfig && this.cachedConfigMtimeMs === mtimeMs) {
+    if (this.cachedConfig && this.cachedConfigSignature === signature) {
       return this.cachedConfig
     }
     try {
@@ -162,7 +162,7 @@ export class RtkOptimizationService {
     } catch {
       this.cachedConfig = { ...DEFAULT_CONFIG }
     }
-    this.cachedConfigMtimeMs = mtimeMs
+    this.cachedConfigSignature = signature
     return this.cachedConfig
   }
 
@@ -173,7 +173,11 @@ export class RtkOptimizationService {
     fs.writeFileSync(temporaryPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 })
     fs.renameSync(temporaryPath, configPath)
     this.cachedConfig = config
-    this.cachedConfigMtimeMs = fs.statSync(configPath).mtimeMs
+    this.cachedConfigSignature = this.getFileSignature(fs.statSync(configPath))
+  }
+
+  private getFileSignature(stat: fs.Stats) {
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`
   }
 
   private async runRtk(binaryPath: string, args: string[]): Promise<RtkResult> {

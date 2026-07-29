@@ -208,7 +208,7 @@ export function IconRail({ __testTopRailHeight }: IconRailProps = {}) {
 
   return (
     <div
-      className="icon-rail-glass relative z-[80] flex h-full shrink-0 select-none flex-col items-center overflow-visible border-r border-[var(--color-border-separator)] py-[20px] text-[var(--color-text-tertiary)]"
+      className="icon-rail-glass relative z-[120] flex h-full shrink-0 select-none flex-col items-center overflow-visible border-r border-[var(--color-border-separator)] py-[20px] text-[var(--color-text-tertiary)]"
       style={{ width: 'var(--sidebar-rail-width)' }}
       data-tauri-drag-region
     >

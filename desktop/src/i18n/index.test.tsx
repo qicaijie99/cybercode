@@ -44,7 +44,7 @@ describe('useTranslation', () => {
   })
 
   it('falls back to English when a partial locale is missing a key', () => {
-    expect(translate('ja', 'settings.providers.title')).toBe('Providers')
-    expect(translate('ko', 'settings.providers.title')).toBe('Providers')
+    expect(translate('ja', 'settings.providers.addProvider')).toBe('Add Provider')
+    expect(translate('ko', 'settings.providers.addProvider')).toBe('Add Provider')
   })
 })

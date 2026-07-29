@@ -24,6 +24,7 @@ import {
 } from '../../utils/model/imageCapabilityRegistry.js'
 import { codeGraphService } from './codeGraphService.js'
 import { shouldAutoApproveBypassPermission } from './permissionPolicy.js'
+import { routingService } from '../routing/routingService.js'
 
 type AttachmentRef = {
   type: 'file' | 'image'
@@ -47,6 +48,8 @@ type SessionProcess = {
   outputCallbacks: Array<(msg: any) => void>
   workDir: string
   permissionMode: string
+  isGenerating: boolean
+  generationEpoch: number
   sdkToken: string
   sdkSocket: { send(data: string): void } | null
   pendingOutbound: string[]
@@ -63,11 +66,18 @@ type SessionProcess = {
   >
 }
 
+export type StopGenerationResult =
+  | 'idle'
+  | 'interrupted'
+  | 'killed'
+  | 'superseded'
+
 export type SessionStartOptions = {
   permissionMode?: string
   model?: string
   effort?: string
   providerId?: string | null
+  routeId?: string
   contextWindow?: number
   imageSupportOverride?: boolean
 }
@@ -90,6 +100,10 @@ export class ConversationStartupError extends Error {
 
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
+  private generationStopPromises = new Map<
+    string,
+    Promise<StopGenerationResult>
+  >()
   private providerService = new ProviderService()
 
   private buildSessionCliArgs(
@@ -185,7 +199,7 @@ export class ConversationService {
     // 工作目录就变成 `/`。把 CALLER_DIR / PWD 显式覆盖成 workDir，preload.ts
     // chdir 后落到正确目录。
     //
-    const childEnv = await this.buildChildEnv(workDir, sdkUrl, options)
+    const childEnv = await this.buildChildEnv(workDir, sdkUrl, options, sessionId)
 
     let proc: ReturnType<typeof Bun.spawn>
     try {
@@ -210,6 +224,8 @@ export class ConversationService {
       outputCallbacks: [],
       workDir,
       permissionMode: options?.permissionMode || DEFAULT_PERMISSION_MODE,
+      isGenerating: false,
+      generationEpoch: 0,
       sdkToken: this.getSdkTokenFromUrl(sdkUrl),
       sdkSocket: null,
       pendingOutbound: [],
@@ -295,7 +311,7 @@ export class ConversationService {
     attachments?: AttachmentRef[],
     options?: SendMessageOptions,
   ): boolean {
-    return this.sendSdkMessage(sessionId, {
+    const sent = this.sendSdkMessage(sessionId, {
       type: 'user',
       message: {
         role: 'user',
@@ -309,6 +325,14 @@ export class ConversationService {
       ...(options?.priority ? { priority: options.priority } : {}),
       ...(options?.uuid ? { timestamp: new Date().toISOString() } : {}),
     })
+    if (sent) {
+      const session = this.sessions.get(sessionId)
+      if (session) {
+        session.isGenerating = true
+        session.generationEpoch++
+      }
+    }
+    return sent
   }
 
   cancelAsyncMessage(sessionId: string, messageUuid: string): Promise<boolean> {
@@ -374,6 +398,23 @@ export class ConversationService {
       request_id: crypto.randomUUID(),
       request: { subtype: 'interrupt' },
     })
+  }
+
+  stopGeneration(
+    sessionId: string,
+    timeoutMs = 2_500,
+  ): Promise<StopGenerationResult> {
+    const existing = this.generationStopPromises.get(sessionId)
+    if (existing) return existing
+
+    const stopPromise = this.performStopGeneration(sessionId, timeoutMs)
+      .finally(() => {
+        if (this.generationStopPromises.get(sessionId) === stopPromise) {
+          this.generationStopPromises.delete(sessionId)
+        }
+      })
+    this.generationStopPromises.set(sessionId, stopPromise)
+    return stopPromise
   }
 
   requestControl(
@@ -495,6 +536,18 @@ export class ConversationService {
         if (msg?.type === 'system' && msg.subtype === 'init') {
           session.initMessage = msg
         }
+        if (msg?.type === 'result') {
+          session.isGenerating = false
+        } else if (
+          msg?.type === 'system' &&
+          msg.subtype === 'session_state_changed'
+        ) {
+          if (msg.state === 'idle') {
+            session.isGenerating = false
+          } else if (msg.state === 'running' || msg.state === 'requires_action') {
+            session.isGenerating = true
+          }
+        }
         if (
           msg?.type === 'control_request' &&
           msg.request?.subtype === 'can_use_tool' &&
@@ -536,12 +589,75 @@ export class ConversationService {
     }
   }
 
+  private performStopGeneration(
+    sessionId: string,
+    timeoutMs: number,
+  ): Promise<StopGenerationResult> {
+    const session = this.sessions.get(sessionId)
+    if (!session || !session.isGenerating) {
+      return Promise.resolve('idle')
+    }
+
+    const generationEpoch = session.generationEpoch
+    return new Promise((resolve) => {
+      let settled = false
+      let timeout: ReturnType<typeof setTimeout> | undefined
+
+      const finish = (result: StopGenerationResult) => {
+        if (settled) return
+        settled = true
+        if (timeout) clearTimeout(timeout)
+        this.removeOutputCallback(sessionId, handleOutput)
+        resolve(result)
+      }
+
+      const handleOutput = (msg: any) => {
+        if (msg?.type === 'result') {
+          const current = this.sessions.get(sessionId)
+          if (
+            current !== session ||
+            current.generationEpoch !== generationEpoch
+          ) {
+            finish('superseded')
+            return
+          }
+          finish('interrupted')
+        }
+      }
+
+      this.onOutput(sessionId, handleOutput)
+      if (!this.sendInterrupt(sessionId)) {
+        if (this.stopSessionProcess(sessionId, session)) {
+          finish('killed')
+        } else {
+          finish('superseded')
+        }
+        return
+      }
+
+      timeout = setTimeout(() => {
+        const current = this.sessions.get(sessionId)
+        if (current !== session || current.generationEpoch !== generationEpoch) {
+          finish('superseded')
+          return
+        }
+        if (!current.isGenerating) {
+          finish('interrupted')
+          return
+        }
+
+        console.warn(
+          `[ConversationService] Interrupt timed out for ${sessionId}; restarting the CLI session`,
+        )
+        this.stopSessionProcess(sessionId, session)
+        finish('killed')
+      }, Math.max(0, timeoutMs))
+    })
+  }
+
   stopSession(sessionId: string): void {
     const session = this.sessions.get(sessionId)
-    if (session) {
-      session.proc.kill()
-      this.sessions.delete(sessionId)
-    }
+    if (session) this.stopSessionProcess(sessionId, session)
   }
 
   getActiveSessions(): string[] {
@@ -627,6 +743,30 @@ export class ConversationService {
     }
   }
 
+  private stopSessionProcess(
+    sessionId: string,
+    expectedSession: SessionProcess,
+  ): boolean {
+    const current = this.sessions.get(sessionId)
+    if (current !== expectedSession) return false
+
+    current.isGenerating = false
+    try {
+      current.proc.kill()
+    } catch (error) {
+      console.warn(
+        `[ConversationService] Failed to terminate CLI process for ${sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    } finally {
+      if (this.sessions.get(sessionId) === current) {
+        this.sessions.delete(sessionId)
+      }
+    }
+    return true
+  }
+
   private getPermissionArgs(
     mode: string | undefined,
     dangerousMode: boolean,
@@ -662,6 +802,7 @@ export class ConversationService {
     workDir: string,
     sdkUrl?: string,
     options?: SessionStartOptions,
+    sessionId = 'standalone',
   ): Promise<Record<string, string>> {
     // Provider isolation: when Desktop has its own provider config/index,
     // strip inherited provider env vars so the child CLI reads fresh values
@@ -690,7 +831,7 @@ export class ConversationService {
 
     const cleanEnv = { ...process.env }
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
-    if (this.shouldStripInheritedProviderEnv(options?.providerId)) {
+    if (this.shouldStripInheritedProviderEnv(options?.providerId, options?.routeId)) {
       for (const key of PROVIDER_ENV_KEYS) {
         delete cleanEnv[key]
       }
@@ -706,8 +847,9 @@ export class ConversationService {
       }
     }
 
-    const explicitProviderEnv =
-      typeof options?.providerId === 'string'
+    const explicitProviderEnv = options?.routeId
+      ? await routingService.getRuntimeEnv(options.routeId, sessionId)
+      : typeof options?.providerId === 'string'
         ? await this.providerService.getProviderRuntimeEnv(options.providerId, options.model)
         : null
 
@@ -736,6 +878,8 @@ export class ConversationService {
         ? {
             CYBERCODE_DESKTOP_AWAIT_MCP: '1',
             CYBERCODE_DESKTOP_AWAIT_MCP_TIMEOUT_MS: '5000',
+            CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+            CYBERCODE_AGENT_BROWSER_SESSION_ID: sessionId,
           }
         : {}),
       // Tell the CLI entrypoint to skip project .env loading. Provider env
@@ -758,7 +902,7 @@ export class ConversationService {
               : 'disabled',
           }
         : {}),
-      ...(this.shouldMarkManagedOAuth(options?.providerId)
+      ...(!options?.routeId && this.shouldMarkManagedOAuth(options?.providerId)
         ? await this.buildOfficialOAuthEnv()
         : {}),
     }
@@ -792,8 +936,11 @@ export class ConversationService {
     return env
   }
 
-  private shouldStripInheritedProviderEnv(providerId?: string | null): boolean {
-    if (providerId !== undefined) {
+  private shouldStripInheritedProviderEnv(
+    providerId?: string | null,
+    routeId?: string,
+  ): boolean {
+    if (providerId !== undefined || routeId) {
       return true
     }
 

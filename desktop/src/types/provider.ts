@@ -24,6 +24,7 @@ export type SavedProvider = {
   presetId: string
   name: string
   apiKey: string  // masked from server
+  oauthProviderId?: string
   baseUrl: string
   apiFormat: ApiFormat
   models: ModelMapping
@@ -50,6 +51,7 @@ export type CreateProviderInput = {
 }
 
 export type UpdateProviderInput = {
+  presetId?: string
   name?: string
   apiKey?: string
   baseUrl?: string

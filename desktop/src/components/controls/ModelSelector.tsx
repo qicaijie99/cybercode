@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronRight } from 'lucide-react'
+import { Check, ChevronRight, Route } from 'lucide-react'
 import { OFFICIAL_DEFAULT_MODEL_ID, OFFICIAL_MODELS } from '../../constants/modelCatalog'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useRoutingStore } from '../../stores/routingStore'
 import type { SavedProvider } from '../../types/provider'
 import type { RuntimeSelection } from '../../types/runtime'
 import type { EffortLevel, ModelInfo } from '../../types/settings'
@@ -65,6 +66,15 @@ function buildProviderModelHint(provider: SavedProvider): string {
     provider.models.sonnet,
     provider.models.opus,
   ].filter(Boolean).join(' ')
+}
+
+function translatedOrFallback(
+  t: ReturnType<typeof useTranslation>,
+  key: string,
+  fallback: string,
+): string {
+  const translated = t(key as never)
+  return translated === key ? fallback : translated
 }
 
 function buildProviderModels(
@@ -201,12 +211,17 @@ export function ModelSelector({
     isLoading: providersLoading,
     fetchProviders,
   } = useProviderStore()
+  const routingDashboard = useRoutingStore((state) => state.dashboard)
+  const routingLoading = useRoutingStore((state) => state.isLoading)
+  const fetchRoutingDashboard = useRoutingStore((state) => state.fetchDashboard)
   const storedRuntimeSelection = useSessionRuntimeStore((state) =>
     runtimeKey ? state.selections[runtimeKey] : undefined,
   )
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const requestedProvidersRef = useRef(false)
+  const requestedRoutingRef = useRef(false)
+  const refreshedRoutingForOpenRef = useRef(false)
 
   const EFFORT_OPTIONS: { value: EffortLevel; label: string }[] = [
     { value: 'low', label: t('settings.general.effort.low') },
@@ -224,6 +239,26 @@ export function ModelSelector({
     requestedProvidersRef.current = true
     void fetchProviders()
   }, [fetchProviders, isRuntimeScoped, providersLoading])
+
+  useEffect(() => {
+    if (!isRuntimeScoped || routingLoading || requestedRoutingRef.current) return
+    requestedRoutingRef.current = true
+    void fetchRoutingDashboard()
+  }, [fetchRoutingDashboard, isRuntimeScoped, routingLoading])
+
+  useEffect(() => {
+    if (!open) {
+      refreshedRoutingForOpenRef.current = false
+      return
+    }
+    if (
+      !isRuntimeScoped ||
+      routingLoading ||
+      refreshedRoutingForOpenRef.current
+    ) return
+    refreshedRoutingForOpenRef.current = true
+    void fetchRoutingDashboard({ quiet: Boolean(routingDashboard) })
+  }, [fetchRoutingDashboard, isRuntimeScoped, open, routingDashboard, routingLoading])
 
   useEffect(() => {
     if (!open) return
@@ -283,12 +318,34 @@ export function ModelSelector({
     )
     : null
 
-  const selectedProviderChoice = activeRuntimeSelection
+  const activeRouteId = activeRuntimeSelection?.routeId
+  const activeRouteProfile = activeRouteId
+    ? routingDashboard?.config.profiles.find((profile) => profile.id === activeRouteId) ?? null
+    : null
+  const availableRouteProfiles = routingDashboard?.config.enabled
+    ? routingDashboard.config.profiles.filter((profile) => (
+        profile.enabled && routingDashboard.routeAvailability[profile.id]?.available
+      ))
+    : []
+
+  const selectedProviderChoice = activeRuntimeSelection && !activeRouteId
     ? providerChoices.find((choice) => choice.providerId === activeRuntimeSelection.providerId) ?? null
     : null
   const defaultProviderChoice = providerChoices.find((choice) => choice.isDefault) ?? providerChoices[0] ?? null
 
-  const selectedRuntimeModel = activeRuntimeSelection
+  const selectedRuntimeModel = activeRuntimeSelection && activeRouteProfile
+    ? {
+        id: activeRuntimeSelection.modelId,
+        name: translatedOrFallback(
+          t,
+          `settings.routing.profile.${activeRouteProfile.id}.name`,
+          activeRouteProfile.name,
+        ),
+        description: '',
+        context: '',
+        contextWindow: activeRuntimeSelection.contextWindow,
+      }
+    : activeRuntimeSelection
     ? selectedProviderChoice?.models.find((model) => model.id === activeRuntimeSelection.modelId)
       ?? {
         id: activeRuntimeSelection.modelId,
@@ -303,10 +360,12 @@ export function ModelSelector({
     ? selectedRuntimeModel?.name ?? storeModel?.name ?? t('model.selectModel')
     : selectedModel?.name ?? t('model.selectModel')
   const buttonProviderLabel = isRuntimeScoped
-    ? selectedProviderChoice?.providerName ?? activeProviderName ?? t('settings.providers.officialName')
+    ? activeRouteId
+      ? t('settings.routing.tab.routing')
+      : selectedProviderChoice?.providerName ?? activeProviderName ?? t('settings.providers.officialName')
     : null
   const buttonProviderChoice = isRuntimeScoped
-    ? selectedProviderChoice ?? defaultProviderChoice
+    ? activeRouteId ? null : selectedProviderChoice ?? defaultProviderChoice
     : defaultProviderChoice
 
   const handleRuntimeSelect = (selection: RuntimeSelection) => {
@@ -393,6 +452,64 @@ export function ModelSelector({
 
             {isRuntimeScoped ? (
               <div className="space-y-[8px]">
+                {availableRouteProfiles.length > 0 && (
+                  <div className="rounded-[18px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] p-[6px]">
+                    <div className="flex items-center gap-[8px] px-[8px] py-[6px]">
+                      <div className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]">
+                        <Route size={15} strokeWidth={1.9} />
+                      </div>
+                      <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
+                        {t('settings.routing.tab.routing')}
+                      </span>
+                    </div>
+
+                    <div className="space-y-[3px]">
+                      {availableRouteProfiles.map((profile) => {
+                        const isSelected = activeRouteId === profile.id
+                        const availability = routingDashboard?.routeAvailability[profile.id]
+                        return (
+                          <button
+                            key={`route:${profile.id}`}
+                            onClick={() => handleRuntimeSelect({
+                              kind: 'route',
+                              providerId: null,
+                              routeId: profile.id,
+                              modelId: `cybercode-route-${profile.id}`,
+                              contextWindow: availability?.contextWindow,
+                            })}
+                            className={`group flex min-h-[48px] w-full items-center gap-[10px] rounded-[14px] px-[10px] py-[8px] text-left transition-colors ${
+                              isSelected
+                                ? 'bg-[var(--color-surface-selected)]'
+                                : 'hover:bg-[var(--color-surface-hover)]'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className={`truncate text-[13px] ${
+                                isSelected
+                                  ? 'font-semibold text-[var(--color-text-primary)]'
+                                  : 'font-medium text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]'
+                              }`}>
+                                {translatedOrFallback(
+                                  t,
+                                  `settings.routing.profile.${profile.id}.name`,
+                                  profile.name,
+                                )}
+                              </div>
+                              <div className="mt-[2px] truncate text-[11px] font-medium text-[var(--color-text-tertiary)]">
+                                {t(`settings.routing.strategy.${profile.strategy}.name` as never)} · {t('settings.routing.candidates', { count: availability?.candidateCount ?? 0 })}
+                              </div>
+                            </div>
+                            {isSelected && (
+                              <div className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[var(--color-text-primary)] text-[var(--color-background)]">
+                                <Check size={13} strokeWidth={2.4} />
+                              </div>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
                 {providerChoices.map((choice) => (
                   <div key={choice.providerId ?? 'official'} className="rounded-[18px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] p-[6px]">
                     <div className="flex items-center gap-[8px] px-[8px] py-[6px]">
@@ -418,6 +535,7 @@ export function ModelSelector({
                     <div className="space-y-[3px]">
                       {choice.models.map((model) => {
                         const isSelected =
+                          !activeRouteId &&
                           activeRuntimeSelection?.providerId === choice.providerId &&
                           activeRuntimeSelection.modelId === model.id
                         return (

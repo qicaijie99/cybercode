@@ -20,6 +20,8 @@ extracted-natives/
 .playwright-mcp/
 .playwright-cli/
 output/playwright/
+output/hyperframes/
+output/ui-checks/
 
 # OMX state/logs
 .omx/

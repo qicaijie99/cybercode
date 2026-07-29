@@ -580,6 +580,8 @@ html {
   .VPLocalSearchBox .search-bar,
   .VPLocalSearchBox .search-actions button,
   .VPLocalSearchBox .result,
+  .home-community-modal__backdrop,
+  .home-community-modal,
   .cyber-js .VPHome .VPHero .image-src {
     animation: none;
     transition-duration: 0.01ms;
@@ -592,6 +594,175 @@ html {
 
 .VPHomeFeatures .VPFeature .title {
   letter-spacing: 0;
+}
+
+.home-community-anchor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 0;
+  height: 0;
+}
+
+.home-community-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  overflow-y: auto;
+  background: rgba(12, 18, 28, 0.58);
+  backdrop-filter: blur(8px);
+}
+
+.home-community-modal {
+  position: relative;
+  width: min(100%, 410px);
+  max-height: calc(100vh - 40px);
+  padding: 26px 24px 22px;
+  overflow-y: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: var(--vp-c-bg);
+  box-shadow: 0 24px 70px rgba(12, 18, 28, 0.28);
+}
+
+.home-community-modal:focus {
+  outline: none;
+}
+
+.home-community-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  place-items: center;
+  color: var(--vp-c-text-2);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease;
+}
+
+.home-community-modal__close span {
+  font-size: 25px;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.home-community-modal__close:hover {
+  color: var(--vp-c-text-1);
+  background: var(--vp-c-default-soft);
+}
+
+.home-community-modal__close:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.home-community-modal__header {
+  padding-right: 34px;
+}
+
+.home-community-modal__eyebrow {
+  margin: 0 0 8px;
+  color: var(--vp-c-brand-1);
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+.home-community-modal__header h2 {
+  margin: 0;
+  border: 0;
+  color: var(--vp-c-text-1);
+  font-size: 24px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.home-community-modal__header > p:last-child {
+  margin: 10px 0 0;
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.home-community-modal__qr-link {
+  position: relative;
+  display: block;
+  width: min(100%, 250px);
+  aspect-ratio: 1284 / 1750;
+  margin: 20px auto 0;
+  overflow: hidden;
+  line-height: 0;
+  transition:
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    filter 160ms ease;
+}
+
+.home-community-modal__qr-link:hover,
+.home-community-modal__qr-link:focus-visible {
+  transform: translateY(-2px);
+  filter: drop-shadow(0 10px 18px rgba(8, 104, 247, 0.12));
+}
+
+.home-community-modal__qr-link:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 4px;
+}
+
+.home-community-modal__qr {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: auto;
+  transform: translateY(-9%);
+}
+
+.home-community-modal__number {
+  margin: 14px 0 0;
+  color: var(--vp-c-text-2);
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0;
+}
+
+.home-community-modal-enter-active,
+.home-community-modal-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.home-community-modal-enter-active .home-community-modal,
+.home-community-modal-leave-active .home-community-modal {
+  transition:
+    opacity 180ms ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.home-community-modal-enter-from,
+.home-community-modal-leave-to,
+.home-community-modal-enter-from .home-community-modal,
+.home-community-modal-leave-to .home-community-modal {
+  opacity: 0;
+}
+
+.home-community-modal-enter-from .home-community-modal,
+.home-community-modal-leave-to .home-community-modal {
+  transform: translateY(10px) scale(0.98);
 }
 
 @media (max-width: 1199px) {
@@ -667,6 +838,7 @@ html {
   .VPHome .VPHero .actions {
     justify-content: center;
   }
+
 }
 
 @media (max-width: 639px) {
@@ -754,6 +926,27 @@ html {
 
   .home-cli-install__intro h2 {
     font-size: 27px;
+  }
+
+  .home-community-modal__backdrop {
+    padding: 12px;
+  }
+
+  .home-community-modal {
+    max-height: calc(100vh - 24px);
+    padding: 24px 18px 18px;
+  }
+
+  .home-community-modal__header {
+    padding-right: 38px;
+  }
+
+  .home-community-modal__header h2 {
+    font-size: 22px;
+  }
+
+  .home-community-modal__qr-link {
+    width: min(100%, 230px);
   }
 
   .VPHomeFeatures {

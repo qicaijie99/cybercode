@@ -1,105 +1,64 @@
-# CyberCode VitePress Home Design QA
+# Design QA
 
-- Source visual truth: `/Users/wang/.codex/generated_images/019f234c-5a9f-7d03-8b93-c7f51cb8752b/exec-d5a9d04d-12c9-40a0-b6bf-312983d6144d.png`
-- Implementation screenshot: `/tmp/cybercode-hero-v2-light-desktop.png`
-- Viewport: 1440 x 1024 desktop; 390 x 844 mobile
-- State: Chinese home in light and dark themes; macOS/Linux installer selected
-- Full-view comparison: `/tmp/cybercode-design-comparison-hero-v2.png`
-- Focused hero comparison: `/tmp/cybercode-design-comparison-hero-v2-focused.png`
-- Dark-theme before/after: `/tmp/cybercode-audit-before-after-dark.png`
-- Mobile before/after: `/tmp/cybercode-audit-before-after-mobile.png`
-- Search before/after: `/tmp/cybercode-search-comparison-v2.png`
-- Mobile search state: `/tmp/cybercode-search-v2-mobile.png`
-- Focused terminal comparison: not recaptured because this pass did not change the terminal component or its boundary
+## Reference
 
-## Findings
+- Source: `/Users/wang/.codex/generated_images/019f56b5-8f4d-7042-884e-4e4b57b6e334/exec-253de4e9-66e3-4203-b9c7-78293c022b06.png`
+- Target: Desktop settings > Model providers > Smart routing only
+- State: Light theme, balanced profile selected, real local provider configuration
+- Primary viewport: 1502 x 1046
 
-No actionable P0, P1, or P2 differences remain.
+## Implementation
 
-- Typography: The implemented product name, companion-focused heading, Hermes promise, provider line, and button hierarchy closely match the selected visual. Text uses the existing VitePress font stack for multilingual reliability; wrapping remains stable in Chinese, English, Japanese, and Korean.
-- Spacing and layout: Hero alignment, content width, portrait scale, terminal boundary, and next-section reveal match the selected composition. The mobile character now ends 43px above the product name instead of overflowing into it. Desktop and mobile have no horizontal overflow.
-- Colors and tokens: The previous orange theme is replaced by cobalt, cyan, magenta, yellow, near-black, and white sampled from the supplied character art. Light and dark themes retain readable contrast.
-- Image quality: Navigation uses the supplied CyberCode wordmark. The hero now uses a 1254 x 1254 ImageGen-restored RGBA character asset instead of the previous 512 x 512 white-backed crop. It renders at no more than 780px wide, remains sharp, and has no visible white box or chroma fringe in light or dark mode.
-- Copy: The primary promise explicitly describes Hermes-style self-evolution and its persistent memory, skill, and reusable-workflow outcomes. Provider support remains a separate secondary line.
-- Icons and controls: The copy control uses VitePress's native clipboard icon token. Platform tabs, command copying, theme switching, navigation links, and locale routes are functional.
-- Motion and search: Search opens without changing the 1425px page content width or shifting the hero image and navigation. The modal, backdrop, buttons, tabs, copy action, and linked feature rows use short restrained transitions, with animations disabled for reduced-motion users.
-- Hero loading: The right-side character remains transparent until its bitmap has actually loaded, then fades in over 480ms. First visits and cache hits use the same reveal path, with an effectively instant reduced-motion fallback.
-- Localization: Local search button text, input placeholder, detailed-view action, reset action, empty state, and keyboard hints are localized for Chinese, English, Japanese, and Korean.
-- Accessibility and responsiveness: Focus styles remain visible, the installer exposes tab and tabpanel semantics, imagery has localized alt text, and the 390 x 844 layout separates the portrait from the heading while preserving a visible terminal entry point.
+- Desktop screenshot: `.codex-artifacts/smart-routing-implementation-v2.png`
+- Side-by-side comparison: `.codex-artifacts/smart-routing-comparison-final.png`
+- Responsive screenshot (900 x 720): `.codex-artifacts/smart-routing-900x720.png`
+- Responsive screenshot (640 x 720): `.codex-artifacts/smart-routing-640x720.png`
 
-## Comparison History
+The selected master-detail direction is implemented inside the existing CyberCode settings shell. It includes route-profile navigation, strategy and retry controls, a three-level cost boundary, explicit credential requirements, and separate ready/unavailable source lists.
 
-1. Initial implementation
-   - P2: The mobile portrait visually overlapped the `CyberCode` heading.
-   - P2: Desktop title, portrait, and content margins were underscaled relative to the selected visual.
-   - Fixes: Added positive mobile image-to-title spacing; increased desktop horizontal inset, hero top rhythm, title scale, portrait scale, and terminal alignment.
+## Iterations
 
-2. Desktop refinement
-   - P2: The portrait and core promise remained slightly less prominent than the selected visual.
-   - Fixes: Increased final title, subtitle, promise, action spacing, and portrait scale while preserving the fixed hero-to-terminal boundary.
-   - Post-fix evidence: `/tmp/cybercode-design-comparison-final.png`, `/tmp/cybercode-design-comparison-hero.png`, and `/tmp/cybercode-design-comparison-terminal.png`.
+1. Rebuilt the routing panel around the selected master-detail layout while preserving the existing routing data model and settings callbacks.
+2. Compared the reference and implementation together, then aligned switch accents, information density, labels, and source-status hierarchy.
+3. Clarified the difference between selected sources and currently usable candidates, and verified the compact responsive layouts for overlap and overflow.
 
-3. Public deployment validation
-   - P1: A browser that had visited the pre-deployment URL retained the earlier cached 404 for the hero image, although the deployed file and checksum were correct.
-   - Fix: Published the supplied character asset under the versioned path `cybercode-hero-character-v1.png` and updated every locale to use it, bypassing stale negative caches.
-   - Post-fix evidence: public browser validation at `https://wk42worldworld.github.io/cybercode/` with the versioned image loaded and no broken images.
+## Model Sources Follow-Up
 
-4. Companion positioning copy
-   - Revision: Replaced the functional local-client heading with the more personal "AI coding partner fighting by your side" positioning across Chinese, English, Japanese, and Korean.
-   - Validation: Rechecked desktop and mobile wrapping for every locale with no clipping or horizontal overflow.
+- Before: `.codex-artifacts/model-sources-audit-before.jpg`
+- Updated source catalog: `.codex-artifacts/model-sources-after.jpg`
+- Recurring-free sources: `.codex-artifacts/model-sources-free-after.jpg`
+- Responsive screenshots: `.codex-artifacts/model-sources-900x720.jpg` and `.codex-artifacts/model-sources-640x720.jpg`
+- Mixed-source responsive screenshot: `.codex-artifacts/model-sources-mixed-640x720.jpg`
 
-5. Desktop download routing
-   - Revision: Routed the desktop CTA directly to the latest GitHub Release. A temporary mainland China mirror CTA was later removed by product decision.
-   - Validation: Confirmed the remaining release route resolves correctly, and rechecked all four locales at desktop and mobile widths with no clipped actions or horizontal overflow.
+The source catalog now separates configured, recurring-free, mixed free/paid, signup-credit, paid, local, and unclassified sources. Cloud credentials are disclosed independently from pricing, and recognizable providers use their real local brand assets rather than generated marks. Provider identity matching prioritizes the configured endpoint over a model name, so custom Volcano Engine and Baidu Qianfan connections no longer inherit the GLM icon.
 
-6. High-resolution transparent hero asset
-   - P1: The previous image contained a large white backing area that became a dominant rectangle in dark mode.
-   - P2: The 512 x 512 raster was enlarged to roughly 820px, softening character details and drifting from the selected mock.
-   - P2: At 390px wide, the 350px image exceeded its 274px container and visually overlapped the `CyberCode` product name.
-   - Fixes: Generated a higher-resolution character restoration with ImageGen, removed its flat chroma background into alpha, capped desktop display at 780px, and resized/re-spaced tablet and mobile layouts.
-   - Post-fix evidence: `/tmp/cybercode-design-comparison-hero-v2-focused.png`, `/tmp/cybercode-audit-before-after-dark.png`, and `/tmp/cybercode-audit-before-after-mobile.png`.
+## Routing Strategy Picker Follow-Up
 
-7. Search stability, localization, and motion polish
-   - P2: Opening local search locked body scrolling and expanded the content viewport from 1425px to 1440px, visibly shifting viewport-relative artwork and right-aligned UI.
-   - P2: The Chinese search surface still exposed English button, placeholder, empty-state, reset, detail, and keyboard-hint strings.
-   - P2: Search, hero controls, terminal controls, and feature links changed state abruptly with little visual continuity.
-   - Fixes: Reserved a stable scrollbar gutter, added four-locale local-search translations, introduced restrained 140-190ms interaction transitions and search entrance motion, and provided a reduced-motion fallback.
-   - Post-fix evidence: `/tmp/cybercode-search-comparison-v2.png` and `/tmp/cybercode-search-v2-mobile.png`; before/after measurements keep the viewport at 1425px and hero artwork at x=663px.
+- Overflowing list: `.codex-artifacts/routing-strategy-before.png`
+- Grouped picker: `.codex-artifacts/routing-strategy-after.png`
+- Responsive screenshots: `.codex-artifacts/routing-strategy-900.png` and `.codex-artifacts/routing-strategy-640.png`
 
-8. Load-aware hero reveal
-   - P2: The previous CSS animation started when the hero entered the DOM, so it could finish before a slow image response and still let the portrait appear abruptly.
-   - Fix: Bind the reveal to the image `load` state and add the visible class after two animation frames, giving both first loads and cached loads a consistent 480ms opacity transition.
-   - Post-fix evidence: Cached reload measured opacity 0 at load, 0.80 at 140ms, and 1 after completion; the 390 x 844 viewport measured an in-progress opacity of 0.83 with no horizontal overflow.
+The 16 advanced strategies are now divided into recommended, load-balancing, reliability, and context groups. Only the active group is rendered, keeping the picker within a fixed 280 px height. Its alignment follows the responsive control layout: left-aligned below desktop width and right-aligned when the profile header switches to a horizontal layout.
 
-## Primary Interactions Tested
+## Routing Simplicity Follow-Up
 
-- macOS/Linux and Windows installer tabs switch commands correctly.
-- Copy action writes the selected command and exposes the localized copied state.
-- Desktop download opens the latest GitHub Release directly.
-- Light and dark theme switching works with no broken imagery or background rectangle.
-- The hero portrait stays hidden until its bitmap is ready, then fades in on desktop and mobile, including cached reloads.
-- Local search opens and closes without layout shift; Chinese search controls and no-result feedback are localized.
-- Search remains full-width with no horizontal overflow at 390 x 844.
-- Chinese, English, Japanese, and Korean home routes render localized Hermes copy without overflow.
-- Browser console errors and warnings checked: none.
+- Previous mixed hierarchy: `.codex-artifacts/routing-simplification-before.jpg`
+- Simplified default view: `.codex-artifacts/routing-simplification-after.jpg`
+- Responsive screenshots: `.codex-artifacts/routing-simplification-900.jpg` and `.codex-artifacts/routing-simplification-640.jpg`
+- Narrow advanced picker: `.codex-artifacts/routing-simplification-picker-640.jpg`
 
-## Follow-up Polish
+The default route editor now answers only three user decisions: whether to use automatic routing, which conversation preset to expose, and whether paid models are allowed. Connected-source selection is disclosed behind a single management action, unconfigured providers live in the separate model-source setup flow, and implementation-level strategy and retry controls are collapsed under Advanced settings. The strategy picker opens upward so it remains usable inside the settings modal at narrow window sizes.
 
-- P3: The mock's decorative multicolor calibration rule is intentionally omitted; the real character art already supplies the brand spectrum without adding CSS decoration.
-- P3: The real CLI command remains on one line at wide desktop widths instead of reproducing the mock's artificial wrap, improving copy scanning.
+## Verification
 
-## Implementation Checklist
+- Core interactions checked in the in-app browser: tab navigation, profile selection, status rendering, source configuration navigation, and responsive layout.
+- Browser console errors: none.
+- Focused source and routing UI tests: 40 passed.
+- Routing service tests: 20 passed.
+- Full desktop test suite: 74 files, 551 tests passed.
+- TypeScript lint: passed.
+- Production desktop web build: passed; existing Vite chunk-size warnings remain informational.
 
-- [x] Use real CyberCode wordmark and female character assets.
-- [x] Replace orange tokens with the character-derived palette.
-- [x] Add localized Hermes self-evolution copy.
-- [x] Match the selected hero and terminal composition.
-- [x] Replace the 512px white-backed portrait with a higher-resolution transparent character asset.
-- [x] Keep a visible mobile gap between the portrait and product name.
-- [x] Prevent scrollbar locking from shifting the page when search opens.
-- [x] Localize local-search UI across all four site languages.
-- [x] Add restrained interaction motion with a reduced-motion fallback.
-- [x] Trigger the hero portrait fade only after the image has loaded.
-- [x] Verify desktop, mobile, dark theme, locales, and copy interaction.
+## Final Result
 
-final result: passed
+passed

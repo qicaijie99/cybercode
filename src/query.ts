@@ -109,6 +109,13 @@ import {
   getTurnOutputTokens,
   incrementBudgetContinuationCount,
 } from './bootstrap/state.js'
+import {
+  buildGoalContinuationPrompt,
+  deactivateGoalMode,
+  getGoalResolution,
+  isGoalModeActive,
+  type GoalResolution,
+} from './skills/goalMode.js'
 import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
 
@@ -262,6 +269,8 @@ async function* queryLoop(
     skipCacheWrite,
   } = params
   const deps = params.deps ?? productionDeps()
+  const goalModeActive = isGoalModeActive(params.toolUseContext.agentId)
+  let goalResolution: GoalResolution | undefined
 
   // Mutable cross-iteration state. The loop body destructures this at the top
   // of each iteration so reads stay bare-name (`messages`, `toolUseContext`).
@@ -1078,6 +1087,10 @@ async function* queryLoop(
       }
     }
 
+    if (goalModeActive && !goalResolution) {
+      goalResolution = getGoalResolution(toolUseBlocks)
+    }
+
     if (!needsFollowUp) {
       const lastMessage = assistantMessages.at(-1)
 
@@ -1321,6 +1334,47 @@ async function* queryLoop(
           transition: { reason: 'stop_hook_blocking' },
         }
         state = next
+        continue
+      }
+
+      if (goalModeActive) {
+        if (goalResolution) {
+          deactivateGoalMode(toolUseContext.agentId)
+          return { reason: 'completed' }
+        }
+
+        const nextTurnCount = turnCount + 1
+        if (maxTurns && nextTurnCount > maxTurns) {
+          yield createAttachmentMessage({
+            type: 'max_turns_reached',
+            maxTurns,
+            turnCount: nextTurnCount,
+          })
+          return { reason: 'max_turns', turnCount: nextTurnCount }
+        }
+
+        state = {
+          messages: [
+            ...messagesForQuery,
+            ...assistantMessages,
+            createUserMessage({
+              content: buildGoalContinuationPrompt(),
+              isMeta: true,
+            }),
+          ],
+          toolUseContext,
+          autoCompactTracking: tracking,
+          maxOutputTokensRecoveryCount: 0,
+          hasAttemptedReactiveCompact: false,
+          maxOutputTokensOverride: undefined,
+          pendingToolUseSummary: undefined,
+          stopHookActive: undefined,
+          turnCount: nextTurnCount,
+          transition: {
+            reason: 'goal_continuation',
+            attempt: nextTurnCount,
+          },
+        }
         continue
       }
 

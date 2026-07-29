@@ -38,11 +38,15 @@ const ROUTE_ICON_CLASS = 'flex h-[28px] w-[28px] shrink-0 items-center justify-c
 const AGENT_VISUALS: Record<ExternalAgentId, { src: string; imageClass?: string }> = {
   cybercode: { src: '/app-icon.png' },
   openclaw: { src: '/agent-icons/openclaw.png', imageClass: 'p-[2px]' },
+  workbuddy: { src: '/agent-icons/workbuddy.svg' },
   'claude-code': { src: '/agent-icons/claude-code.png', imageClass: 'p-[7px]' },
   codex: { src: '/agent-icons/codex.png' },
   cursor: { src: '/agent-icons/cursor.png' },
+  trae: { src: '/agent-icons/trae.svg', imageClass: 'p-[4px]' },
   'hermes-agent': { src: '/agent-icons/hermes-agent.png' },
   'deepseek-tui': { src: '/agent-icons/codewhale.svg' },
+  'kimi-code': { src: '/agent-icons/kimi-code.png' },
+  pi: { src: '/agent-icons/pi.svg' },
 }
 
 export function AgentMigration() {
@@ -259,11 +263,12 @@ export function AgentMigration() {
           target={targetAgent}
           targetAgentId={targetAgentId}
           disabled={loading || Boolean(migrating)}
+          onSelectSource={selectAgent}
           onSelectTarget={selectTarget}
           onSwap={swapDirection}
         />
-        <div className="grid min-h-[520px] grid-cols-1 md:grid-cols-[224px_minmax(0,1fr)]">
-          <aside className="border-b border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] md:border-b-0 md:border-r">
+        <div className="agent-migration-layout grid min-h-[420px] grid-cols-1 lg:min-h-[520px] lg:grid-cols-[224px_minmax(0,1fr)]">
+          <aside className="hidden border-r border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] lg:block">
             <div className="flex h-[50px] items-center justify-between border-b border-[var(--color-border-separator)] px-[14px]">
               <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">
                 {t('agentMigration.sources')}
@@ -279,7 +284,7 @@ export function AgentMigration() {
                 <RefreshCw size={15} className={loading ? 'animate-spin' : undefined} />
               </button>
             </div>
-            <div className="flex gap-[6px] overflow-x-auto p-[8px] md:flex-col md:overflow-x-visible">
+            <div className="flex flex-col gap-[6px] p-[8px]">
               {agents.map(agent => (
                 <AgentSourceRow
                   key={agent.id}
@@ -335,7 +340,7 @@ export function AgentMigration() {
                   )}
                 </div>
 
-                <div className="max-h-[430px] min-h-[280px] overflow-y-auto">
+                <div className="agent-migration-list max-h-[430px] min-h-[220px] overflow-y-auto lg:min-h-[280px]">
                   {filter === 'project' ? (
                     <ProjectList
                       projects={activeAgent.projects}
@@ -418,6 +423,7 @@ function MigrationRoute({
   target,
   targetAgentId,
   disabled,
+  onSelectSource,
   onSelectTarget,
   onSwap,
 }: {
@@ -426,25 +432,22 @@ function MigrationRoute({
   target: DetectedExternalAgent | null
   targetAgentId: ExternalAgentId
   disabled: boolean
+  onSelectSource: (agentId: ExternalAgentId) => void
   onSelectTarget: (agentId: ExternalAgentId) => void
   onSwap: () => void
 }) {
   const t = useTranslation()
   return (
     <div className="grid min-h-[70px] grid-cols-[minmax(0,1fr)_40px_minmax(0,1fr)] items-end gap-[10px] border-b border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] px-[14px] py-[9px]">
-      <div className="min-w-0">
-        <span className="block text-[9px] font-bold text-[var(--color-text-tertiary)]">
-          {t('agentMigration.sourceAgent')}
-        </span>
-        <div data-testid="source-agent-field" className={ROUTE_FIELD_CLASS}>
-          <span className={ROUTE_ICON_CLASS}>
-            {source && <AgentBrandImage agentId={source.id} />}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-[var(--color-text-primary)]">
-            {source?.name ?? t('agentMigration.scanning')}
-          </span>
-        </div>
-      </div>
+      <AgentRoutePicker
+        role="source"
+        agents={agents}
+        selectedAgent={source}
+        selectedAgentId={source?.id ?? null}
+        blockedAgentId={targetAgentId}
+        disabled={disabled}
+        onSelect={onSelectSource}
+      />
 
       <button
         type="button"
@@ -457,11 +460,12 @@ function MigrationRoute({
         <ArrowLeftRight size={15} />
       </button>
 
-      <AgentTargetPicker
+      <AgentRoutePicker
+        role="target"
         agents={agents}
-        source={source}
-        target={target}
-        targetAgentId={targetAgentId}
+        selectedAgent={target}
+        selectedAgentId={targetAgentId}
+        blockedAgentId={source?.id ?? null}
         disabled={disabled}
         onSelect={onSelectTarget}
       />
@@ -469,7 +473,9 @@ function MigrationRoute({
   )
 }
 
-type TargetPickerPosition = {
+type AgentPickerRole = 'source' | 'target'
+
+type AgentPickerPosition = {
   top: number
   left: number
   width: number
@@ -477,36 +483,40 @@ type TargetPickerPosition = {
   direction: 'up' | 'down'
 }
 
-function AgentTargetPicker({
+function AgentRoutePicker({
+  role,
   agents,
-  source,
-  target,
-  targetAgentId,
+  selectedAgent,
+  selectedAgentId,
+  blockedAgentId,
   disabled,
   onSelect,
 }: {
+  role: AgentPickerRole
   agents: DetectedExternalAgent[]
-  source: DetectedExternalAgent | null
-  target: DetectedExternalAgent | null
-  targetAgentId: ExternalAgentId
+  selectedAgent: DetectedExternalAgent | null
+  selectedAgentId: ExternalAgentId | null
+  blockedAgentId: ExternalAgentId | null
   disabled: boolean
   onSelect: (agentId: ExternalAgentId) => void
 }) {
   const t = useTranslation()
+  const isSourcePicker = role === 'source'
+  const fieldLabel = t(isSourcePicker ? 'agentMigration.sourceAgent' : 'agentMigration.targetAgent')
   const listboxId = useId()
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [position, setPosition] = useState<TargetPickerPosition | null>(null)
-  const targetName = target?.name ?? t('agentMigration.scanning')
+  const [position, setPosition] = useState<AgentPickerPosition | null>(null)
+  const selectedName = selectedAgent?.name ?? t('agentMigration.scanning')
 
   const enabledIndices = useMemo(
     () => agents
-      .map((agent, index) => agent.installed && agent.id !== source?.id ? index : -1)
+      .map((agent, index) => agent.installed && agent.id !== blockedAgentId ? index : -1)
       .filter(index => index >= 0),
-    [agents, source?.id],
+    [agents, blockedAgentId],
   )
 
   const updatePosition = useCallback(() => {
@@ -516,8 +526,9 @@ function AgentTargetPicker({
     const viewportPadding = 12
     const availableWidth = Math.max(220, window.innerWidth - viewportPadding * 2)
     const width = Math.min(Math.max(rect.width, 300), availableWidth)
+    const preferredLeft = isSourcePicker ? rect.left : rect.right - width
     const left = Math.min(
-      Math.max(viewportPadding, rect.right - width),
+      Math.max(viewportPadding, preferredLeft),
       Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
     )
     const spaceAbove = rect.top - viewportPadding
@@ -531,7 +542,7 @@ function AgentTargetPicker({
       maxHeight: Math.max(160, Math.min(360, availableHeight)),
       direction,
     })
-  }, [])
+  }, [isSourcePicker])
 
   const close = useCallback((restoreFocus = false) => {
     setOpen(false)
@@ -540,7 +551,7 @@ function AgentTargetPicker({
 
   const show = (direction: 'first' | 'last' | 'selected' = 'selected') => {
     if (disabled || agents.length === 0) return
-    const selectedIndex = agents.findIndex(agent => agent.id === targetAgentId)
+    const selectedIndex = agents.findIndex(agent => agent.id === selectedAgentId)
     const nextIndex = direction === 'first'
       ? enabledIndices[0]
       : direction === 'last'
@@ -589,6 +600,7 @@ function AgentTargetPicker({
   }, [activeIndex, open])
 
   const moveFocus = (direction: 1 | -1) => {
+    if (enabledIndices.length === 0) return
     const current = enabledIndices.indexOf(activeIndex)
     const currentPosition = current >= 0 ? current : 0
     const nextPosition = (currentPosition + direction + enabledIndices.length) % enabledIndices.length
@@ -620,7 +632,7 @@ function AgentTargetPicker({
   }
 
   const choose = (agent: DetectedExternalAgent) => {
-    if (!agent.installed || agent.id === source?.id) return
+    if (!agent.installed || agent.id === blockedAgentId) return
     close(true)
     onSelect(agent.id)
   }
@@ -628,18 +640,19 @@ function AgentTargetPicker({
   return (
     <div className="min-w-0">
       <span className="block text-[9px] font-bold text-[var(--color-text-tertiary)]">
-        {t('agentMigration.targetAgent')}
+        {fieldLabel}
       </span>
       <button
         ref={triggerRef}
         type="button"
         disabled={disabled || agents.length === 0}
-        aria-label={`${t('agentMigration.targetAgent')}: ${targetName}`}
+        aria-label={`${fieldLabel}: ${selectedName}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        data-testid="target-agent-picker"
-        data-target-agent={targetAgentId}
+        data-testid={`${role}-agent-picker`}
+        data-source-agent={isSourcePicker ? selectedAgentId ?? undefined : undefined}
+        data-target-agent={!isSourcePicker ? selectedAgentId ?? undefined : undefined}
         onClick={() => open ? close() : show()}
         onKeyDown={event => {
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -650,10 +663,10 @@ function AgentTargetPicker({
         className={`${ROUTE_FIELD_CLASS} transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus-visible:border-[var(--color-border-focus)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] disabled:cursor-not-allowed disabled:opacity-55`}
       >
         <span className={ROUTE_ICON_CLASS}>
-          <AgentBrandImage agentId={targetAgentId} />
+          {selectedAgentId && <AgentBrandImage agentId={selectedAgentId} />}
         </span>
         <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-[var(--color-text-primary)]">
-          {targetName}
+          {selectedName}
         </span>
         <ChevronDown
           size={15}
@@ -666,7 +679,7 @@ function AgentTargetPicker({
           ref={menuRef}
           id={listboxId}
           role="listbox"
-          aria-label={t('agentMigration.targetAgent')}
+          aria-label={fieldLabel}
           onKeyDown={handleMenuKeyDown}
           className="settings-ui native-ui-text overflow-y-auto rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-background)] p-[5px] shadow-[var(--shadow-dropdown)]"
           style={{
@@ -681,10 +694,12 @@ function AgentTargetPicker({
           }}
         >
           {agents.map((agent, index) => {
-            const isSource = agent.id === source?.id
-            const unavailable = disabled || !agent.installed || isSource
-            const selected = agent.id === targetAgentId
-            const isDefault = agent.id === DEFAULT_TARGET_AGENT_ID && !isSource
+            const isBlocked = agent.id === blockedAgentId
+            const unavailable = disabled || !agent.installed || isBlocked
+            const selected = agent.id === selectedAgentId
+            const isDefault = !isSourcePicker
+              && agent.id === DEFAULT_TARGET_AGENT_ID
+              && !isBlocked
             return (
               <button
                 key={agent.id}
@@ -717,8 +732,10 @@ function AgentTargetPicker({
                     )}
                   </span>
                   <span className="mt-[1px] block truncate text-[10px] text-[var(--color-text-tertiary)]">
-                    {isSource
-                      ? t('agentMigration.currentSource')
+                    {isBlocked
+                      ? t(isSourcePicker
+                        ? 'agentMigration.currentTarget'
+                        : 'agentMigration.currentSource')
                       : agent.installed
                         ? t('agentMigration.detected')
                         : t('agentMigration.notDetected')}

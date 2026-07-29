@@ -1,3 +1,4 @@
+import type { PointerEventHandler } from 'react'
 import { CopyButton } from '../shared/CopyButton'
 import { Icon } from '../shared/Icon'
 import { useTranslation } from '../../i18n'
@@ -13,7 +14,18 @@ type Props = {
   branching?: boolean
   branchDisabled?: boolean
   align?: 'start' | 'end'
+  onPointerEnter?: PointerEventHandler<HTMLDivElement>
+  onPointerLeave?: PointerEventHandler<HTMLDivElement>
 }
+
+const messageActionButtonClassName = [
+  'message-action-button inline-flex h-[24px] w-[24px] shrink-0 items-center justify-center',
+  'rounded-[8px] border-0 bg-[var(--color-surface-container-low)] bg-clip-padding',
+  'text-[var(--color-text-tertiary)] shadow-[inset_0_0_0_1px_var(--color-border)]',
+  'hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-brand)]',
+  'hover:shadow-[inset_0_0_0_1px_var(--color-brand)]',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]/20',
+].join(' ')
 
 export function MessageActionBar({
   copyText,
@@ -26,6 +38,8 @@ export function MessageActionBar({
   branching = false,
   branchDisabled = false,
   align = 'start',
+  onPointerEnter,
+  onPointerLeave,
 }: Props) {
   const t = useTranslation()
   const resolvedRewindLabel = rewindLabel ?? t('chat.rewindAction')
@@ -40,18 +54,23 @@ export function MessageActionBar({
     <div
       data-message-actions
       data-align={align}
-      className={`flex w-full ${
+      className={`pointer-events-none flex w-full ${
         align === 'end' ? 'justify-end' : 'justify-start'
       }`}
     >
-      <div className="flex items-center gap-1.5">
+      <div
+        data-message-action-cluster
+        onPointerEnter={onPointerEnter}
+        onPointerLeave={onPointerLeave}
+        className="pointer-events-auto flex items-center gap-[6px] pt-[8px]"
+      >
         {hasRewind && (
           <button
             type="button"
             onClick={onRewind}
             aria-label={resolvedRewindLabel}
             title={resolvedRewindLabel}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-[var(--color-text-tertiary)] transition-colors hover:border-[var(--color-brand)] hover:text-[var(--color-brand)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-brand)]/30"
+            className={messageActionButtonClassName}
           >
             <Icon name="undo" size={12} />
           </button>
@@ -65,17 +84,18 @@ export function MessageActionBar({
             aria-label={resolvedBranchLabel}
             aria-busy={branching || undefined}
             title={branchDisabled ? branchDisabledLabel ?? resolvedBranchLabel : resolvedBranchLabel}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-[var(--color-text-tertiary)] transition-colors hover:border-[var(--color-brand)] hover:text-[var(--color-brand)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-brand)]/30 disabled:cursor-not-allowed disabled:opacity-45"
+            className={`${messageActionButtonClassName} disabled:cursor-not-allowed disabled:opacity-45`}
           >
-            <Icon name={branching ? 'loading' : 'account_tree'} size={13} />
+            <Icon name={branching ? 'loading' : 'account_tree'} size={12} />
           </button>
         )}
         {hasCopy && (
           <CopyButton
             text={copyText!}
             label={copyLabel}
+            copiedLabel={t('chat.copySuccess')}
             iconOnly
-            className="border border-[var(--color-border)] hover:border-[var(--color-brand)]"
+            className={messageActionButtonClassName}
           />
         )}
       </div>

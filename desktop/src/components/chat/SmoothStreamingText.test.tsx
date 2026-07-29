@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react'
+import { act, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   advanceCodePointIndex,
@@ -104,7 +104,9 @@ describe('SmoothStreamingText', () => {
     })))
 
     const { getByTestId } = render(<SmoothStreamingText content="full response" />)
-    expect(getByTestId('smooth-streaming-text').textContent).toBe('full response')
+    const text = getByTestId('smooth-streaming-text')
+    expect(text.textContent).toBe('full response')
+    expect(text.querySelector('.streaming-grapheme-reveal')).toBeNull()
     expect(callbacks.size).toBe(0)
   })
 
@@ -150,6 +152,26 @@ describe('SmoothStreamingText', () => {
       runFrame()
       expect(text.firstChild).toBe(stableTextNode)
     }
+  })
+
+  it('fades newly revealed graphemes and compacts them into the stable text node', () => {
+    const content = 'A light streaming response'
+    const { getByTestId } = render(
+      <SmoothStreamingText content={content} onCaughtUp={() => {}} />,
+    )
+    const text = getByTestId('smooth-streaming-text')
+
+    runFrame()
+    const visibleBeforeSettling = text.textContent
+    const revealNodes = text.querySelectorAll('.streaming-grapheme-reveal')
+    expect(revealNodes.length).toBeGreaterThan(0)
+    expect((revealNodes[0] as HTMLElement).style.getPropertyValue('--streaming-reveal-delay')).toBe('0ms')
+
+    revealNodes.forEach((node) => fireEvent.animationEnd(node))
+    expect(text.textContent).toBe(visibleBeforeSettling)
+    expect(text.querySelectorAll('.streaming-grapheme-reveal')).toHaveLength(0)
+    expect(text.childNodes).toHaveLength(1)
+    expect(text.firstChild?.nodeType).toBe(Node.TEXT_NODE)
   })
 
   it('adapts reveal speed without dumping a network chunk into one frame', () => {

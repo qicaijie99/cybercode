@@ -3,6 +3,7 @@ import { api } from './client'
 export type ComputerUseStatus = {
   platform: string
   supported: boolean
+  runtime: ComputerUseRuntimeStatus
   python: {
     installed: boolean
     version: string | null
@@ -19,7 +20,31 @@ export type ComputerUseStatus = {
   permissions: {
     accessibility: boolean | null
     screenRecording: boolean | null
+    inputAvailable?: boolean | null
   }
+}
+
+export type ComputerUseRuntimePhase =
+  | 'not-installed'
+  | 'checking'
+  | 'downloading'
+  | 'verifying'
+  | 'installing'
+  | 'ready'
+  | 'paused'
+  | 'error'
+
+export type ComputerUseRuntimeStatus = {
+  phase: ComputerUseRuntimePhase
+  ready: boolean
+  version: string | null
+  platformKey: string | null
+  source: 'managed' | 'legacy' | null
+  downloadedBytes: number
+  totalBytes: number | null
+  progressPercent: number
+  error: string | null
+  canPause: boolean
 }
 
 export type SetupStep = {
@@ -60,6 +85,12 @@ export const computerUseApi = {
   },
   runSetup() {
     return api.post<SetupResult>('/api/computer-use/setup', undefined, { timeout: 300_000 })
+  },
+  prepareRuntime() {
+    return api.post<ComputerUseRuntimeStatus>('/api/computer-use/runtime')
+  },
+  pauseRuntime() {
+    return api.delete<ComputerUseRuntimeStatus>('/api/computer-use/runtime')
   },
   getInstalledApps() {
     return api.get<{ apps: InstalledApp[] }>('/api/computer-use/apps')

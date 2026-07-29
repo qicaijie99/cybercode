@@ -14,5 +14,21 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('heading', { name: '大模型' })).toBeInTheDocument()
     expect(screen.getByText('配置模型供应商')).toBeInTheDocument()
     expect(container.querySelector('.codicon')).toBeNull()
+    expect(container.firstElementChild).toHaveClass('settings-page', 'gap-[20px]')
+    expect(screen.getByRole('heading', { name: '大模型' })).toHaveClass('settings-page-title')
+    expect(screen.getByRole('heading', { name: '大模型' }).closest('header'))
+      .toHaveClass('settings-page-header', 'min-h-[60px]')
+  })
+
+  it('supports a full-width workspace layout', () => {
+    const { container } = render(
+      <SettingsPage title="大模型" layout="workspace">
+        <div>模型来源</div>
+      </SettingsPage>,
+    )
+
+    expect(container.firstElementChild).toHaveAttribute('data-settings-layout', 'workspace')
+    expect(container.firstElementChild).toHaveClass('max-w-none')
+    expect(container.firstElementChild).not.toHaveClass('max-w-[896px]')
   })
 })

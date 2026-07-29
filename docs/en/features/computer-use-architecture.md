@@ -1,13 +1,13 @@
 # Computer Use Architecture Deep Dive
 
-> A deep dive into the Computer Use implementation: from MCP tool definitions to Python Bridge, from 9-layer security gates to feature flag bypasses.
+> A deep dive into Computer Use: MCP tool definitions, native macOS/Linux capture helpers, the cross-platform Python input bridge, and the 9-layer security gates.
 
 <p align="center">
 <a href="#1-patch-environment-overview">Patch Environment</a> ·
 <a href="#2-layered-architecture">Layered Architecture</a> ·
 <a href="#3-mcp-tool-layer">MCP Tool Layer</a> ·
 <a href="#4-security-gate-system">Security Gates</a> ·
-<a href="#5-python-bridge-mechanism">Python Bridge</a> ·
+<a href="#5-hybrid-bridge-mechanism">Hybrid Bridge</a> ·
 <a href="#6-screenshot-analyze-act-loop">Interaction Loop</a> ·
 <a href="#7-key-source-file-index">Source File Index</a>
 </p>
@@ -35,7 +35,7 @@ Our approach: **preserve the original MCP tool definitions and security mechanis
 ```
 Original Claude Code                     CyberCode (Patched)
 ────────────────────                     ─────────────────────────
-@ant/computer-use-swift  ──replaced──→   Python Bridge (mac_helper.py)
+@ant/computer-use-swift  ──replaced──→   CyberCode Computer Use.app
 @ant/computer-use-input  ──replaced──→   pyautogui + pyobjc
 GrowthBook feature flags ──bypassed──→   gates.ts hardcoded return true
 Subscription check (Max/Pro) ──bypassed──→ getChicagoEnabled() = true
@@ -103,13 +103,14 @@ Computer Use uses a **6-layer architecture** with clear responsibilities and bou
 │  setup.ts: MCP config initialization                        │
 │  gates.ts: feature flags (bypassed)                         │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 5 — Python Bridge IPC                        [PATCH] │
-│  pythonBridge.ts: venv mgmt + JSON RPC + error handling     │
-│  callPythonHelper<T>(command, payload) → T                  │
+│  Layer 5 — Hybrid Bridge Routing                    [PATCH] │
+│  macOS/Linux capture → native helper; input → Python       │
+│  Windows capture and input → Python Bridge                 │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 6 — Python Runtime Execution                 [PATCH] │
-│  mac_helper.py: pyautogui + mss + pyobjc                    │
-│  660 lines of Python implementing all system interactions   │
+│  Layer 6 — Platform Execution                       [PATCH] │
+│  macOS helper: signed capture + stable TCC identity         │
+│  Linux helper: X11 / XDG Desktop Portal capture             │
+│  mac / win / linux_helper.py: input, windows, fallback      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -122,7 +123,7 @@ Layers marked **[PATCH]** are our replaced/new code. **All other layers** are pr
 | Layer 1-2 | `vendor/computer-use-mcp/` | Platform-agnostic, reusable for Electron, Web hosts |
 | Layer 3 | `vendor/computer-use-mcp/` | Platform-agnostic, standard MCP protocol |
 | Layer 4 | `utils/computerUse/` | CLI-specific, bound to app state |
-| Layer 5-6 | `utils/computerUse/` + `runtime/` | macOS-specific, Python implementation |
+| Layer 5-6 | `utils/computerUse/` + `runtime/` + `desktop/computer-use-{macos,linux}/` | Native macOS/Linux capture plus cross-platform Python input |
 
 ---
 
@@ -217,9 +218,8 @@ Reads `getChicagoEnabled()` — always returns `true` in patched version.
 #### Gate 2: TCC Permission Check
 ```typescript
 await adapter.ensureOsPermissions()
-// → Python: check_permissions
-//   → Accessibility: osascript "tell System Events..."
-//   → Screen Recording: CGDisplayCaptureDisplay()
+// → Python: Accessibility check
+// → CyberCode Computer Use: CGPreflightScreenCaptureAccess()
 ```
 Reports error if macOS Accessibility or Screen Recording permissions are missing.
 
@@ -319,49 +319,50 @@ Validation: sample 9x9 pixel grid at [756,342]
 
 ---
 
-## 5. Python Bridge Mechanism
+## 5. Hybrid Bridge Mechanism
 
 ![Python Bridge Communication](./images/03-computer-use-python-bridge.jpg)
 
 ### Architecture Design
 
-Original Claude Code uses compiled Swift native modules (.node NAPI plugins) to directly call macOS APIs. We replaced this layer with **Python subprocess + JSON RPC**:
+Original Claude Code uses private Swift NAPI modules. CyberCode uses a maintainable hybrid: macOS screen pixels go through a standalone signed helper; Linux screen pixels go through a bundled Rust helper that selects an X11 backend or the XDG Desktop Portal; input and app management use **Python subprocess + JSON RPC**. Windows capture and input remain on Python.
 
 ```
-TypeScript (Bun Runtime)                    Python (venv)
-┌────────────────────┐                   ┌────────────────────┐
-│  executor.ts       │                   │  mac_helper.py     │
-│                    │   execFile()      │                    │
-│  callPythonHelper  │ ──────────────→   │  main()            │
-│  ('click',         │   command +       │    ├─ parse argv   │
-│   {x:756,y:342})   │   --payload JSON  │    ├─ dispatch()   │
-│                    │                   │    └─ click()      │
-│  ← JSON.parse ──── │ ←──────────────   │       pyautogui    │
-│  {ok:true,         │   stdout JSON     │                    │
-│   result:true}     │                   │  json_output(...)  │
-└────────────────────┘                   └────────────────────┘
+TypeScript (Bun)
+  ├─ screenshot / zoom / display
+  │    ├─ macOS helper (CoreGraphics + ImageIO)
+  │    │    Bundle ID: com.cybercode.computer-use
+  │    └─ Linux helper (X11 tools + XDG Desktop Portal)
+  └─ click / key / app / clipboard
+       └─ managed Python runtime (pyautogui + pyobjc / Win32 / X11)
 ```
+
+At desktop startup, the platform helper is atomically installed under
+`~/.cyber/computer-use/`. Proper macOS releases sign it with the same Apple
+Team as the main app, so Screen Recording permission follows a stable code
+identity instead of a transient Bun or Python PID. Linux bundles its helper;
+when Wayland uses the system portal, the desktop environment owns any required
+confirmation UI.
 
 ### Bootstrap Flow
 
-First call to `callPythonHelper()` automatically completes environment setup:
+The first call to `callPythonHelper()` automatically prepares the runtime:
 
 ```
 ensureBootstrapped()
   │
-  ├─ Check if .runtime/venv/bin/python3 exists
-  │   └─ Missing → python3 -m venv .runtime/venv/
+  ├─ Check the active managed runtime
+  │   └─ Missing → check the legacy .runtime/venv/
   │
-  ├─ Check if pip is available
-  │   └─ Missing → python3 -m ensurepip --upgrade
+  ├─ Fetch the platform manifest (primary + mirrors)
   │
-  ├─ Compute SHA256 of runtime/requirements.txt
-  │   └─ Compare with .runtime/requirements.sha256
-  │       └─ Different → pip install -r requirements.txt
-  │                      Write new SHA256 hash
-  │       └─ Same → skip installation
+  ├─ Resume the platform archive download
   │
-  └─ Ready, return venv Python path
+  ├─ Verify SHA-256 and extract into a staging directory
+  │
+  ├─ Validate Python startup and required imports
+  │
+  └─ Atomically write active.json and return the private Python path
 ```
 
 **Dependencies** (`runtime/requirements.txt`):
@@ -374,15 +375,16 @@ ensureBootstrapped()
 | `pyobjc-core` | macOS Objective-C bridge |
 | `pyobjc-framework-Cocoa` | NSWorkspace (app management), NSPasteboard (clipboard) |
 | `pyobjc-framework-Quartz` | CGDisplay (monitors), CGWindow (window list) |
+| `psutil` / `pyperclip` / `screeninfo` | Process, clipboard, and display integration on Windows and Linux |
 
 ### Command Mapping
 
-`mac_helper.py` (660 lines) implements the following commands:
+The native capture helpers and platform Python helpers divide the commands as follows:
 
-| Command | Python Implementation | Return Value |
+| Command | Implementation | Return Value |
 |---------|----------------------|-------------|
-| `screenshot` | `mss.grab()` + `PIL.Image` JPEG encoding | `{base64, width, height, displayWidth, displayHeight}` |
-| `zoom` | `mss.grab(region)` region capture | `{base64, width, height}` |
+| `screenshot` | Native `CGDisplayCreateImage` + ImageIO JPEG | `{base64, width, height, displayWidth, displayHeight}` |
+| `zoom` | Native `CGWindowListCreateImage` region capture | `{base64, width, height}` |
 | `click` | `pyautogui.moveTo()` + `pyautogui.click()` | `true` |
 | `key` | `pyautogui.hotkey()` / `pyautogui.press()` | `true` |
 | `type` | `pyautogui.write(interval=0.008)` | `true` |
@@ -390,11 +392,11 @@ ensureBootstrapped()
 | `scroll` | `pyautogui.scroll()` / `pyautogui.hscroll()` | `true` |
 | `hold_key` | `pyautogui.keyDown()` + `sleep` + `pyautogui.keyUp()` | `true` |
 | `frontmost_app` | `NSWorkspace.frontmostApplication()` | `{bundleId, displayName}` |
-| `list_displays` | `CGGetActiveDisplayList()` + `CGDisplayBounds()` | `[DisplayGeometry...]` |
+| `list_displays` | Native `CGGetActiveDisplayList()` + `CGDisplayBounds()` | `[DisplayGeometry...]` |
 | `open_app` | `NSWorkspace.launchApplicationAtURL_options_` | `void` |
 | `read_clipboard` | `NSPasteboard.stringForType_()` | `string` |
 | `write_clipboard` | `NSPasteboard.setString_forType_()` | `void` |
-| `check_permissions` | `osascript` + `CGDisplayCaptureDisplay` | `{accessibility, screenRecording}` |
+| `check_permissions` | Python Accessibility + native Screen Recording preflight | `{accessibility, screenRecording}` |
 
 ### Error Handling
 
@@ -549,8 +551,10 @@ bindSessionContext closure
 
 | File | Lines | Responsibility | Patched? |
 |------|-------|---------------|----------|
-| `executor.ts` | 231 | ComputerExecutor Python bridge implementation | Yes, rewritten |
-| `pythonBridge.ts` | 111 | Python subprocess management, venv bootstrap, JSON RPC | Yes, new |
+| `executor.ts` | 231 | ComputerExecutor hybrid bridge implementation | Yes, rewritten |
+| `runtimeManager.ts` | — | Platform runtime download, resume, verification, and atomic activation | Yes, new |
+| `pythonBridge.ts` | — | Native capture / Python input routing and runtime compatibility | Yes, new |
+| `nativeCapture.ts` | — | macOS/Linux helper path resolution, JSON RPC, and fallback policy | Yes, new |
 | `hostAdapter.ts` | 54 | HostAdapter implementation (permission checks, flag reading) | Partially |
 | `gates.ts` | 51 | GrowthBook feature flags (`getChicagoEnabled` bypass) | Yes, modified |
 | `wrapper.tsx` | 300+ | Session context construction, permission dialogs, lock management | Unchanged |
@@ -564,25 +568,41 @@ bindSessionContext closure
 
 | File | Lines | Responsibility | Patched? |
 |------|-------|---------------|----------|
-| `mac_helper.py` | 660 | All system interactions in Python | Yes, new |
-| `requirements.txt` | 6 | Python dependency declarations | Yes, new |
+| `mac_helper.py` | 660 | macOS input, app, and window interaction | Yes, new |
+| `win_helper.py` | — | Windows capture, input, app, and window interaction | Yes, new |
+| `linux_helper.py` | — | Linux X11/XWayland input and capture fallback | Yes, new |
+| `requirements*.txt` | — | Platform Python dependency declarations | Yes, new |
+
+### desktop/computer-use-macos/ (Native Capture Helper)
+
+| File | Responsibility |
+|------|----------------|
+| `main.swift` | Display enumeration, JPEG/PNG capture, permission requests |
+| `Info.plist` | Stable `com.cybercode.computer-use` bundle identity |
+
+### desktop/computer-use-linux/ (Native Capture Helper)
+
+| File | Responsibility |
+|------|----------------|
+| `src/main.rs` | X11 capture backend discovery, XDG Desktop Portal calls, cropping, and encoding |
+| `Cargo.toml` | Linux-native dependencies including `ashpd` and `image` |
 
 ---
 
 ## 8. Design Trade-offs
 
-### Why Python Bridge?
+### Why a Hybrid Bridge?
 
-| Dimension | Native Swift (.node) | Python Bridge |
+| Dimension | Private Swift NAPI | CyberCode Hybrid Bridge |
 |-----------|---------------------|---------------|
-| **Performance** | ~0ms (in-process call) | ~50-100ms (subprocess startup) |
-| **Readability** | Not readable after compilation | 660 lines of clear Python |
-| **Modifiability** | Requires Swift build environment | Edit .py files directly |
-| **Dependencies** | Specific Bun version NAPI | Any Python 3.8+ |
-| **Cross-platform** | macOS only | pyautogui/mss are natively cross-platform |
+| **Performance** | ~0ms (in-process call) | Native capture is millisecond-scale; Python input starts in ~50-100ms |
+| **Readability** | Private implementation | Small public Swift helper plus readable Python |
+| **Modifiability** | Private NAPI ABI | Buildable Swift CLI and editable `.py` files |
+| **Dependencies** | Specific Bun version NAPI | System CoreGraphics plus managed CPython |
+| **Cross-platform** | macOS only | Native macOS/Linux capture with Windows/Python compatibility |
 | **User experience** | Imperceptible | Imperceptible (model thinking takes 2-5s) |
 
-**Conclusion**: The 50-100ms extra latency is completely negligible in Computer Use scenarios — the model typically takes 2-5 seconds for screenshot analysis and decision-making, so users won't notice the additional 100ms for underlying operations.
+**Conclusion**: Frequent screenshots use the lightweight native helper while the cross-platform input layer stays maintainable. Python input startup is negligible next to model analysis time.
 
 ### Approaches We Tried But Abandoned
 

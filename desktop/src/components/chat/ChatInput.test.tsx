@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatInput } from './ChatInput'
@@ -96,21 +96,42 @@ describe('ChatInput composer controls', () => {
     const column = container.querySelector('[data-chat-content-column]')
     expect(column).toHaveClass('w-full', 'max-w-[878px]')
     expect(column?.parentElement).toHaveClass('p-[24px]')
+    expect(column?.parentElement).toHaveClass('pointer-events-auto')
+    expect(column?.parentElement).not.toHaveClass('pointer-events-none')
   })
 
   it('shows permission mode as its own icon button outside the plus menu', () => {
     render(<ChatInput />)
 
-    expect(screen.getByRole('button', { name: 'Ask permissions' })).toBeInTheDocument()
+    const permissionButton = screen.getByRole('button', { name: 'Set permissions' })
+    expect(permissionButton).toHaveAttribute('title', 'Set permissions')
+    expect(screen.getByText('Set permissions')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
     expect(screen.getAllByText('Slash commands').length).toBeGreaterThan(0)
     expect(screen.getByText('Add file reference')).toBeInTheDocument()
     expect(screen.queryByText('Execution Permissions')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
-    expect(screen.getByText('Execution Permissions')).toBeInTheDocument()
+    fireEvent.click(permissionButton)
+    expect(screen.queryByText('Execution Permissions')).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('permission-mode-options')).getAllByRole('button')).toHaveLength(4)
+    expect(screen.getByText('Ask permissions')).toBeInTheDocument()
     expect(screen.getByText('Auto accept edits')).toBeInTheDocument()
+    expect(screen.getByText('Plan mode')).toBeInTheDocument()
+    expect(screen.getByText('Bypass permissions')).toBeInTheDocument()
+  })
+
+  it('inserts /goal from the plus menu and keeps the composer ready for the objective', async () => {
+    render(<ChatInput onSubmit={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    fireEvent.click(screen.getByRole('button', { name: /Goal mode/ }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveValue('/goal ')
+      expect(screen.getByRole('textbox')).toHaveFocus()
+    })
+    expect(screen.queryByText('Keep working and verifying until the objective is done')).not.toBeInTheDocument()
   })
 
   it('keeps token usage in the same runtime control row as the model selector', () => {

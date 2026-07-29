@@ -3,11 +3,15 @@ import { api } from './client'
 export type ExternalAgentId =
   | 'cybercode'
   | 'openclaw'
+  | 'workbuddy'
   | 'claude-code'
   | 'codex'
   | 'cursor'
+  | 'trae'
   | 'hermes-agent'
   | 'deepseek-tui'
+  | 'kimi-code'
+  | 'pi'
 
 export type AgentMigrationItemKind = 'skill' | 'memory' | 'instruction'
 export type AgentMigrationItemScope = 'global' | 'project'
@@ -37,6 +41,7 @@ export type AgentMigrationItem = {
     | 'markdown-merge'
     | 'agent-skill'
     | 'cursor-mdc'
+    | 'trae-rule'
     | 'hermes-memory'
     | 'codewhale-memory'
   compatibilityNote?: string

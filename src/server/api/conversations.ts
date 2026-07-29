@@ -11,6 +11,7 @@
  */
 
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import { conversationService } from '../services/conversationService.js'
 import { sessionService } from '../services/sessionService.js'
 
 // In-memory conversation state per session
@@ -59,7 +60,7 @@ export async function handleConversationsApi(
     // POST /chat/stop
     // -----------------------------------------------------------------------
     if (subAction === 'stop' && req.method === 'POST') {
-      return stopChat(sessionId)
+      return await stopChat(sessionId)
     }
 
     // -----------------------------------------------------------------------
@@ -122,11 +123,10 @@ function getChatStatus(sessionId: string): Response {
   return Response.json({ state })
 }
 
-function stopChat(sessionId: string): Response {
-  // Reset to idle — in a full implementation this would signal the
-  // WebSocket handler / subprocess to abort the current generation.
+async function stopChat(sessionId: string): Promise<Response> {
+  const result = await conversationService.stopGeneration(sessionId)
   sessionStates.set(sessionId, 'idle')
-  return Response.json({ ok: true })
+  return Response.json({ ok: true, forced: result === 'killed' })
 }
 
 // ============================================================================

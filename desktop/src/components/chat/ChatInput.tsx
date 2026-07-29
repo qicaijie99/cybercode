@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ArrowUp, Folder, Paperclip, Plus, Scissors, Square, UploadCloud } from 'lucide-react'
+import { ArrowUp, Folder, Paperclip, Plus, Scissors, Square, Target, UploadCloud } from 'lucide-react'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 
 import { useTranslation } from '../../i18n'
@@ -940,6 +940,21 @@ export function ChatInput({ variant = 'default', sessionId: sessionIdProp, proje
     })
   }
 
+  const insertGoalCommand = () => {
+    if (isMemberSession) return
+    const el = textareaRef.current
+    const cursorPos = el?.selectionStart ?? input.length
+    const replacement = replaceSlashToken(input, cursorPos, 'goal')
+    setInput(replacement.value)
+    setPlusMenuOpen(false)
+    setSlashMenuOpen(false)
+    setFileSearchOpen(false)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(replacement.cursorPos, replacement.cursorPos)
+    })
+  }
+
   const insertAtTrigger = () => {
     if (isMemberSession) return
     const el = textareaRef.current
@@ -976,7 +991,7 @@ export function ChatInput({ variant = 'default', sessionId: sessionIdProp, proje
   const composerToolButtonClassName = 'group relative flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-transparent text-[var(--color-text-tertiary)] transition-colors duration-100 hover:border-[var(--color-border-separator)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
 
   return (
-    <div className={isHeroComposer ? '' : 'wechat-input-container pointer-events-none flex justify-center p-[24px]'}>
+    <div className={isHeroComposer ? '' : 'wechat-input-container pointer-events-auto flex justify-center p-[24px]'}>
       <div
         data-chat-content-column={isHeroComposer ? undefined : true}
         className={isHeroComposer ? 'relative w-full' : 'pointer-events-auto relative w-full max-w-[878px]'}
@@ -1111,7 +1126,7 @@ export function ChatInput({ variant = 'default', sessionId: sessionIdProp, proje
               placeholder={composerPlaceholder}
               disabled={isWorkspaceMissing}
               rows={1}
-              className="min-h-[50px] max-h-[200px] w-full flex-1 resize-none bg-transparent px-[8px] py-[8px] text-[15px] font-medium leading-relaxed text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-50"
+              className="chat-composer-textarea min-h-[50px] max-h-[200px] w-full flex-1 resize-none bg-transparent px-[8px] py-[8px] text-[15px] font-medium leading-relaxed text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-50"
             />
           </div>
 
@@ -1143,6 +1158,7 @@ export function ChatInput({ variant = 'default', sessionId: sessionIdProp, proje
                       <div className="absolute bottom-full left-0 z-50 mb-[10px] w-[260px] overflow-hidden rounded-[24px] border-2 border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-[8px] shadow-[var(--shadow-dropdown)]">
                         <button
                           onClick={insertSlashCommand}
+                          type="button"
                           className="group flex min-h-[54px] w-full items-center gap-[10px] rounded-[16px] px-[10px] py-[8px] text-left transition-colors hover:bg-[var(--color-surface-hover)]"
                         >
                           <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border-separator)] bg-[var(--color-surface-container)] font-mono text-[15px] font-semibold text-[var(--color-text-secondary)]">/</span>
@@ -1152,7 +1168,21 @@ export function ChatInput({ variant = 'default', sessionId: sessionIdProp, proje
                           </span>
                         </button>
                         <button
+                          onClick={insertGoalCommand}
+                          type="button"
+                          className="group flex min-h-[54px] w-full items-center gap-[10px] rounded-[16px] px-[10px] py-[8px] text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                        >
+                          <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border-separator)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
+                            <Target size={16} strokeWidth={2.2} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{t('chat.goalMode')}</span>
+                            <span className="mt-[2px] block truncate text-[11px] font-medium text-[var(--color-text-tertiary)]">{t('chat.goalModeDescription')}</span>
+                          </span>
+                        </button>
+                        <button
                           onClick={insertAtTrigger}
+                          type="button"
                           className="group flex min-h-[54px] w-full items-center gap-[10px] rounded-[16px] px-[10px] py-[8px] text-left transition-colors hover:bg-[var(--color-surface-hover)]"
                         >
                           <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border-separator)] bg-[var(--color-surface-container)] font-mono text-[14px] font-semibold text-[var(--color-text-secondary)]">@</span>

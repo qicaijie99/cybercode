@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { motion } from 'motion/react'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import type {
@@ -5,7 +6,10 @@ import type {
   PromptMemoryInsightCategory,
   PromptMemoryInsights,
 } from '../../api/promptMemory'
+import { Button } from '../shared/Button'
 import { Icon } from '../shared/Icon'
+import { Modal } from '../shared/Modal'
+import { Textarea } from '../shared/Textarea'
 
 const CATEGORY_KEYS: Record<PromptMemoryInsightCategory, TranslationKey> = {
   identity: 'settings.memory.insight.category.identity',
@@ -26,6 +30,42 @@ const SOURCE_KEYS: Record<PromptMemoryInsight['source'], TranslationKey> = {
   observed: 'settings.memory.insight.source.observed',
   manual: 'settings.memory.insight.source.manual',
 }
+
+const USER_CATEGORIES: PromptMemoryInsightCategory[] = [
+  'identity',
+  'communication',
+  'collaboration',
+  'workflow',
+  'quality',
+  'boundaries',
+  'expertise',
+  'other',
+]
+
+const METHOD_CATEGORIES: PromptMemoryInsightCategory[] = [
+  'meta-method',
+  'environment',
+  'lesson',
+]
+
+type EntryEditor = {
+  mode: 'add' | 'edit'
+  target: PromptMemoryInsight['target']
+  category: PromptMemoryInsightCategory
+  content: string
+  original?: PromptMemoryInsight
+}
+
+export type PromptMemoryEntrySave = {
+  target: PromptMemoryInsight['target']
+  category: PromptMemoryInsightCategory
+  content: string
+  original?: PromptMemoryInsight
+}
+
+export type PromptMemoryEntrySaveResult =
+  | { ok: true }
+  | { ok: false; error: string }
 
 function InsightRow({
   insight,
@@ -65,7 +105,7 @@ function InsightRow({
           {insight.content}
         </p>
       </div>
-      <div className="flex shrink-0 items-start gap-[2px] opacity-60 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+      <div className="pointer-events-none flex shrink-0 items-start gap-[2px] opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
         <button
           type="button"
           onClick={() => onEdit(insight)}
@@ -98,6 +138,7 @@ function InsightGroup({
   removingId,
   onEdit,
   onRemove,
+  onAdd,
 }: {
   title: string
   icon: 'person' | 'psychology'
@@ -106,7 +147,9 @@ function InsightGroup({
   removingId: string | null
   onEdit: (insight: PromptMemoryInsight) => void
   onRemove: (insight: PromptMemoryInsight) => void
+  onAdd: () => void
 }) {
+  const t = useTranslation()
   return (
     <section className="min-w-0 border-t border-[var(--color-border-separator)] first:border-t-0">
       <header className="flex min-h-[58px] items-center gap-[10px] border-b border-[var(--color-border-separator)] px-[16px] py-[11px]">
@@ -114,6 +157,15 @@ function InsightGroup({
         <h3 className="w-full max-w-none whitespace-normal text-[13px] font-semibold leading-[19px] text-[var(--color-text-primary)]">
           {title}
         </h3>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[6px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-container-high)] hover:text-[var(--color-text-primary)]"
+          aria-label={t('settings.memory.insight.add')}
+          title={t('settings.memory.insight.add')}
+        >
+          <Icon name="add" size={14} />
+        </button>
         <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
           {insights.length}
         </span>
@@ -138,18 +190,126 @@ function InsightGroup({
   )
 }
 
+function MemoryEntryEditor({
+  editor,
+  saving,
+  error,
+  onChange,
+  onClose,
+  onSave,
+}: {
+  editor: EntryEditor
+  saving: boolean
+  error: string | null
+  onChange: (next: EntryEditor) => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const t = useTranslation()
+  const baseCategories = editor.target === 'user'
+    ? USER_CATEGORIES
+    : METHOD_CATEGORIES
+  const categories = baseCategories.includes(editor.category)
+    ? baseCategories
+    : [editor.category, ...baseCategories]
+  const trimmedContent = editor.content.trim()
+
+  return (
+    <Modal
+      open
+      onClose={saving ? () => {} : onClose}
+      title={t(editor.mode === 'add'
+        ? 'settings.memory.insight.addTitle'
+        : 'settings.memory.insight.editTitle')}
+      width={520}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={onSave} loading={saving} disabled={!trimmedContent}>
+            {editor.mode === 'add' ? t('common.add') : t('common.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-[18px]">
+        <div>
+          <label
+            htmlFor="prompt-memory-entry-category"
+            className="mb-[7px] block text-[12px] font-semibold text-[var(--color-text-primary)]"
+          >
+            {t('settings.memory.insight.categoryLabel')}
+          </label>
+          <div className="relative">
+            <select
+              id="prompt-memory-entry-category"
+              value={editor.category}
+              onChange={(event) => onChange({
+                ...editor,
+                category: event.target.value as PromptMemoryInsightCategory,
+              })}
+              disabled={saving}
+              className="h-[40px] w-full appearance-none rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-[12px] pr-[38px] text-[12px] font-medium text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)] disabled:opacity-50"
+            >
+              {categories.map(category => (
+                <option key={category} value={category}>
+                  {t(CATEGORY_KEYS[category])}
+                </option>
+              ))}
+            </select>
+            <Icon
+              name="expand_more"
+              size={16}
+              className="pointer-events-none absolute right-[11px] top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
+            />
+          </div>
+        </div>
+
+        <div>
+          <Textarea
+            id="prompt-memory-entry-content"
+            label={t('settings.memory.insight.contentLabel')}
+            value={editor.content}
+            onChange={(event) => onChange({
+              ...editor,
+              content: event.target.value,
+            })}
+            disabled={saving}
+            rows={5}
+            maxLength={220}
+            autoFocus
+            error={error ?? undefined}
+            className="min-h-[132px] rounded-[8px] text-[12px] leading-[19px]"
+            placeholder={t('settings.memory.insight.contentPlaceholder')}
+          />
+          <div className="mt-[6px] text-right font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
+            {editor.content.length}/220
+          </div>
+        </div>
+
+      </div>
+    </Modal>
+  )
+}
+
 export function EvolutionProfile({
   overview,
   removingId,
-  onEdit,
   onRemove,
+  onSaveEntry,
 }: {
   overview: PromptMemoryInsights | null
   removingId: string | null
-  onEdit: (insight: PromptMemoryInsight) => void
   onRemove: (insight: PromptMemoryInsight) => void
+  onSaveEntry: (
+    entry: PromptMemoryEntrySave,
+  ) => Promise<PromptMemoryEntrySaveResult>
 }) {
   const t = useTranslation()
+  const [editor, setEditor] = useState<EntryEditor | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const userInsights = overview?.insights.filter(insight => insight.target === 'user') ?? []
   const methodInsights = overview?.insights.filter(insight => insight.target === 'brief') ?? []
   const stats = overview?.stats ?? {
@@ -166,43 +326,108 @@ export function EvolutionProfile({
     ['settings.memory.insight.stat.methods', stats.methods],
   ] as const
 
+  const openAddEditor = (target: PromptMemoryInsight['target']) => {
+    setSaveError(null)
+    setEditor({
+      mode: 'add',
+      target,
+      category: target === 'user' ? 'collaboration' : 'meta-method',
+      content: '',
+    })
+  }
+
+  const openEditEditor = (insight: PromptMemoryInsight) => {
+    setSaveError(null)
+    setEditor({
+      mode: 'edit',
+      target: insight.target,
+      category: insight.category,
+      content: insight.content,
+      original: insight,
+    })
+  }
+
+  const closeEditor = () => {
+    if (isSaving) return
+    setEditor(null)
+    setSaveError(null)
+  }
+
+  const saveEditor = async () => {
+    if (!editor || !editor.content.trim()) return
+    setIsSaving(true)
+    setSaveError(null)
+    try {
+      const result = await onSaveEntry({
+        target: editor.target,
+        category: editor.category,
+        content: editor.content.trim(),
+        original: editor.original,
+      })
+      if (result.ok) {
+        setEditor(null)
+      } else {
+        setSaveError(result.error)
+      }
+    } catch {
+      setSaveError(t('settings.memory.insight.saveFailed'))
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   return (
-    <section
-      data-testid="evolution-profile"
-      className="overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
-    >
-      <div className="grid grid-flow-dense grid-cols-2 divide-x divide-y divide-[var(--color-border-separator)] border-b border-[var(--color-border-separator)] sm:grid-cols-4 sm:divide-y-0">
-        {summary.map(([key, value], index) => (
-          <motion.div
-            key={key}
-            initial={{ opacity: 0, y: 5 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: index * 0.04, duration: 0.22 }}
-            className="min-w-0 px-[16px] py-[13px]"
-          >
-            <strong className="font-mono text-[19px] font-semibold tabular-nums text-[var(--color-text-primary)]">{value}</strong>
-            <div className="mt-[3px] whitespace-normal text-[10px] leading-[15px] text-[var(--color-text-secondary)]">{t(key)}</div>
-          </motion.div>
-        ))}
-      </div>
-      <InsightGroup
-        title={t('settings.memory.insight.userTitle')}
-        icon="person"
-        insights={userInsights}
-        emptyText={t('settings.memory.insight.userEmpty')}
-        removingId={removingId}
-        onEdit={onEdit}
-        onRemove={onRemove}
-      />
-      <InsightGroup
-        title={t('settings.memory.insight.methodTitle')}
-        icon="psychology"
-        insights={methodInsights}
-        emptyText={t('settings.memory.insight.methodEmpty')}
-        removingId={removingId}
-        onEdit={onEdit}
-        onRemove={onRemove}
-      />
-    </section>
+    <>
+      <section
+        data-testid="evolution-profile"
+        className="overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
+      >
+        <div className="grid grid-flow-dense grid-cols-2 divide-x divide-y divide-[var(--color-border-separator)] border-b border-[var(--color-border-separator)] sm:grid-cols-4 sm:divide-y-0">
+          {summary.map(([key, value], index) => (
+            <motion.div
+              key={key}
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: index * 0.04, duration: 0.22 }}
+              className="min-w-0 px-[16px] py-[13px]"
+            >
+              <strong className="font-mono text-[19px] font-semibold tabular-nums text-[var(--color-text-primary)]">{value}</strong>
+              <div className="mt-[3px] whitespace-normal text-[10px] leading-[15px] text-[var(--color-text-secondary)]">{t(key)}</div>
+            </motion.div>
+          ))}
+        </div>
+        <InsightGroup
+          title={t('settings.memory.insight.userTitle')}
+          icon="person"
+          insights={userInsights}
+          emptyText={t('settings.memory.insight.userEmpty')}
+          removingId={removingId}
+          onEdit={openEditEditor}
+          onRemove={onRemove}
+          onAdd={() => openAddEditor('user')}
+        />
+        <InsightGroup
+          title={t('settings.memory.insight.methodTitle')}
+          icon="psychology"
+          insights={methodInsights}
+          emptyText={t('settings.memory.insight.methodEmpty')}
+          removingId={removingId}
+          onEdit={openEditEditor}
+          onRemove={onRemove}
+          onAdd={() => openAddEditor('brief')}
+        />
+      </section>
+
+      {editor && (
+        <MemoryEntryEditor
+          editor={editor}
+          saving={isSaving}
+          error={saveError}
+          onChange={setEditor}
+          onClose={closeEditor}
+          onSave={() => void saveEditor()}
+        />
+      )}
+    </>
   )
 }

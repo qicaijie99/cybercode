@@ -6,7 +6,7 @@ use std::{
     process::{Command as StdCommand, Stdio},
     str,
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Condvar, Mutex,
     },
     thread,
@@ -38,8 +38,16 @@ const SCREENSHOT_OVERLAY_LABEL: &str = "screenshot-overlay";
 const SCREENSHOT_SOURCE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const SCREENSHOT_RESULT_MAX_BYTES: usize = 32 * 1024 * 1024;
 const SCREENSHOT_SELECTION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const SERVER_CONNECTION_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const SERVER_STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+const SERVER_CONNECTION_WAIT_TIMEOUT: Duration = Duration::from_secs(65);
+#[cfg(target_os = "macos")]
+const COMPUTER_USE_HELPER_APP_NAME: &str = "CyberCode Computer Use.app";
+#[cfg(target_os = "macos")]
+const COMPUTER_USE_HELPER_EXECUTABLE_NAME: &str = "CyberCodeComputerUse";
+#[cfg(target_os = "linux")]
+const COMPUTER_USE_HELPER_EXECUTABLE_NAME: &str = "cybercode-computer-use";
 static SCREENSHOT_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+static AGENT_BROWSER_PREPARE_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct ServerState(Arc<Mutex<ServerStatus>>);
@@ -92,9 +100,9 @@ struct ScreenshotCaptureState(Arc<(Mutex<ScreenshotCaptureSession>, Condvar)>);
 
 /// 与 ServerState 平级的 adapter 子进程状态。
 ///
-/// adapter sidecar（cybercode-sidecar adapters --feishu --telegram）的生命周期
+/// adapter sidecar（cybercode-sidecar adapters + platform flags）的生命周期
 /// 跟 server 不同：它没有 HTTP 端口可探活，没配凭据时会自己干净退出，
-/// 而且需要支持运行时热重启 —— 用户在设置页保存飞书 / Telegram 凭据后，
+/// 而且需要支持运行时热重启 —— 用户在设置页保存 IM 凭据后，
 /// 前端会通过 invoke('restart_adapters_sidecar') 来重启它，让新凭据生效。
 #[derive(Default)]
 struct AdapterState(Mutex<Option<CommandChild>>);
@@ -178,19 +186,22 @@ fn wait_for_server_connection(
         }
 
         if Instant::now() >= deadline {
-            return Err("desktop server did not become ready within 15 seconds".to_string());
+            return Err(format!(
+                "desktop server did not become ready within {} seconds",
+                SERVER_CONNECTION_WAIT_TIMEOUT.as_secs()
+            ));
         }
         thread::sleep(Duration::from_millis(25));
     }
 }
 
-/// 前端在设置页保存飞书 / Telegram 凭据后调用，触发 adapter sidecar 热重启。
+/// 前端在设置页保存 IM 凭据后调用，触发 adapter sidecar 热重启。
 ///
 /// 流程：
 ///   1. kill 当前 adapter 子进程（如果在跑）
 ///   2. spawn 新的 adapter 子进程
 ///   3. 新 sidecar 内部的 loadConfig() 会读到最新的 ~/.cyber/adapters.json
-///      并重新建立 WebSocket 连接到飞书 / Telegram
+///      并重新建立各平台的长连接或长轮询
 ///
 /// 凭据缺失时 sidecar 自己会 warn + skip + 退出，所以这里不需要前置检查。
 #[tauri::command]
@@ -232,6 +243,170 @@ fn claude_config_home_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "home directory is unavailable".to_string())?;
 
     Ok(PathBuf::from(home).join(".cyber"))
+}
+
+#[cfg(target_os = "macos")]
+fn copy_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(destination)
+        .map_err(|error| format!("create helper directory: {error}"))?;
+    for entry in
+        std::fs::read_dir(source).map_err(|error| format!("read helper directory: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("read helper entry: {error}"))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect helper entry: {error}"))?;
+        if file_type.is_dir() {
+            copy_directory(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&source_path, &destination_path)
+                .map_err(|error| format!("copy helper file: {error}"))?;
+        } else {
+            return Err(format!(
+                "unsupported helper bundle entry: {}",
+                source_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn helper_executable_path(app_bundle: &Path) -> PathBuf {
+    app_bundle
+        .join("Contents")
+        .join("MacOS")
+        .join(COMPUTER_USE_HELPER_EXECUTABLE_NAME)
+}
+
+#[cfg(target_os = "macos")]
+fn install_computer_use_helper(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let source_root = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("resolve Computer Use resources: {error}"))?
+        .join("resources")
+        .join("computer-use");
+    let source_app = source_root.join(COMPUTER_USE_HELPER_APP_NAME);
+    if !helper_executable_path(&source_app).is_file() {
+        return Ok(None);
+    }
+
+    let destination_root = claude_config_home_dir()?.join("computer-use");
+    let destination_app = destination_root.join(COMPUTER_USE_HELPER_APP_NAME);
+    let source_manifest = source_root.join("manifest.json");
+    let destination_manifest = destination_root.join("manifest.json");
+    let current_manifest_matches = std::fs::read(&source_manifest)
+        .ok()
+        .zip(std::fs::read(&destination_manifest).ok())
+        .map(|(source, destination)| source == destination)
+        .unwrap_or(false);
+    if current_manifest_matches && helper_executable_path(&destination_app).is_file() {
+        return Ok(Some(helper_executable_path(&destination_app)));
+    }
+
+    std::fs::create_dir_all(&destination_root)
+        .map_err(|error| format!("create Computer Use helper state: {error}"))?;
+    let staging_app = destination_root.join(format!(
+        ".computer-use-helper-preparing-{}",
+        std::process::id()
+    ));
+    let backup_app = destination_root.join(format!(
+        ".computer-use-helper-backup-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&staging_app);
+    let _ = std::fs::remove_dir_all(&backup_app);
+    copy_directory(&source_app, &staging_app)?;
+
+    if destination_app.exists() {
+        std::fs::rename(&destination_app, &backup_app)
+            .map_err(|error| format!("stage existing Computer Use helper: {error}"))?;
+    }
+    if let Err(error) = std::fs::rename(&staging_app, &destination_app) {
+        if backup_app.exists() && !destination_app.exists() {
+            let _ = std::fs::rename(&backup_app, &destination_app);
+        }
+        return Err(format!("activate Computer Use helper: {error}"));
+    }
+    let _ = std::fs::remove_dir_all(&backup_app);
+    if source_manifest.is_file() {
+        std::fs::copy(&source_manifest, &destination_manifest)
+            .map_err(|error| format!("record Computer Use helper version: {error}"))?;
+    }
+
+    Ok(Some(helper_executable_path(&destination_app)))
+}
+
+#[cfg(target_os = "linux")]
+fn install_computer_use_helper(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let source_root = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("resolve Computer Use resources: {error}"))?
+        .join("resources")
+        .join("computer-use");
+    let source_helper = source_root.join(COMPUTER_USE_HELPER_EXECUTABLE_NAME);
+    if !source_helper.is_file() {
+        return Ok(None);
+    }
+
+    let destination_root = claude_config_home_dir()?.join("computer-use");
+    let destination_helper = destination_root.join(COMPUTER_USE_HELPER_EXECUTABLE_NAME);
+    let source_manifest = source_root.join("manifest.json");
+    let destination_manifest = destination_root.join("manifest.json");
+    let current_manifest_matches = std::fs::read(&source_manifest)
+        .ok()
+        .zip(std::fs::read(&destination_manifest).ok())
+        .map(|(source, destination)| source == destination)
+        .unwrap_or(false);
+    if current_manifest_matches && destination_helper.is_file() {
+        return Ok(Some(destination_helper));
+    }
+
+    std::fs::create_dir_all(&destination_root)
+        .map_err(|error| format!("create Computer Use helper state: {error}"))?;
+    let staging_helper = destination_root.join(format!(
+        ".computer-use-helper-preparing-{}",
+        std::process::id()
+    ));
+    let backup_helper = destination_root.join(format!(
+        ".computer-use-helper-backup-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&staging_helper);
+    let _ = std::fs::remove_file(&backup_helper);
+    std::fs::copy(&source_helper, &staging_helper)
+        .map_err(|error| format!("copy Computer Use helper: {error}"))?;
+    std::fs::set_permissions(&staging_helper, std::fs::Permissions::from_mode(0o755))
+        .map_err(|error| format!("make Computer Use helper executable: {error}"))?;
+
+    if destination_helper.exists() {
+        std::fs::rename(&destination_helper, &backup_helper)
+            .map_err(|error| format!("stage existing Computer Use helper: {error}"))?;
+    }
+    if let Err(error) = std::fs::rename(&staging_helper, &destination_helper) {
+        if backup_helper.exists() && !destination_helper.exists() {
+            let _ = std::fs::rename(&backup_helper, &destination_helper);
+        }
+        return Err(format!("activate Computer Use helper: {error}"));
+    }
+    let _ = std::fs::remove_file(&backup_helper);
+    if source_manifest.is_file() {
+        std::fs::copy(&source_manifest, &destination_manifest)
+            .map_err(|error| format!("record Computer Use helper version: {error}"))?;
+    }
+
+    Ok(Some(destination_helper))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn install_computer_use_helper(_app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    Ok(None)
 }
 
 #[tauri::command]
@@ -355,10 +530,13 @@ fn capture_source_command_result(
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let detail = if stderr.is_empty() {
-        format!("exit status {}", output.status)
-    } else {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
         stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("exit status {}", output.status)
     };
     Err(format!("{tool_name} failed: {detail}"))
 }
@@ -397,15 +575,39 @@ fn ensure_screen_capture_permission() -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn capture_screen_source_blocking(display: CaptureDisplay) -> Result<PathBuf, String> {
+fn capture_screen_source_blocking(
+    display: CaptureDisplay,
+    computer_use_helper: Option<PathBuf>,
+) -> Result<PathBuf, String> {
     let path = screenshot_source_temp_path();
     let scale_factor = display.scale_factor.max(1.0);
+    let x = f64::from(display.x) / scale_factor;
+    let y = f64::from(display.y) / scale_factor;
+    let width = (f64::from(display.width) / scale_factor).max(1.0);
+    let height = (f64::from(display.height) / scale_factor).max(1.0);
+
+    if let Some(helper) = computer_use_helper {
+        let payload = serde_json::json!({
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "outputPath": path.to_string_lossy(),
+        })
+        .to_string();
+        let output = StdCommand::new(&helper)
+            .args(["capture_png_to_file", "--payload", &payload])
+            .output()
+            .map_err(|error| format!("launch CyberCode Computer Use helper: {error}"))?;
+        return capture_source_command_result(&path, output, "CyberCode Computer Use helper");
+    }
+
     let rect = format!(
         "{},{},{},{}",
-        (f64::from(display.x) / scale_factor).round() as i32,
-        (f64::from(display.y) / scale_factor).round() as i32,
-        (f64::from(display.width) / scale_factor).round().max(1.0) as u32,
-        (f64::from(display.height) / scale_factor).round().max(1.0) as u32
+        x.round() as i32,
+        y.round() as i32,
+        width.round() as u32,
+        height.round() as u32
     );
     let output = StdCommand::new("/usr/sbin/screencapture")
         .args(["-x", "-t", "png"])
@@ -418,7 +620,10 @@ fn capture_screen_source_blocking(display: CaptureDisplay) -> Result<PathBuf, St
 }
 
 #[cfg(target_os = "windows")]
-fn capture_screen_source_blocking(display: CaptureDisplay) -> Result<PathBuf, String> {
+fn capture_screen_source_blocking(
+    display: CaptureDisplay,
+    _computer_use_helper: Option<PathBuf>,
+) -> Result<PathBuf, String> {
     const SCRIPT: &str = r#"
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
@@ -480,8 +685,36 @@ fn linux_command_available(command: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn capture_screen_source_blocking(display: CaptureDisplay) -> Result<PathBuf, String> {
+fn capture_screen_source_blocking(
+    display: CaptureDisplay,
+    computer_use_helper: Option<PathBuf>,
+) -> Result<PathBuf, String> {
     let path = screenshot_source_temp_path();
+
+    if let Some(helper) = computer_use_helper {
+        let payload = serde_json::json!({
+            "x": display.x,
+            "y": display.y,
+            "width": display.width,
+            "height": display.height,
+            "outputPath": path.to_string_lossy(),
+        })
+        .to_string();
+        let output = StdCommand::new(&helper)
+            .args(["capture_png_to_file", "--payload", &payload])
+            .output()
+            .map_err(|error| format!("launch CyberCode Computer Use helper: {error}"))?;
+        match capture_source_command_result(&path, output, "CyberCode Computer Use helper") {
+            Ok(captured) => return Ok(captured),
+            Err(error)
+                if error.contains("portal_unavailable")
+                    || error.contains("capture_backend_unavailable") =>
+            {
+                eprintln!("[computer-use] native Linux capture unavailable: {error}");
+            }
+            Err(error) => return Err(error),
+        }
+    }
 
     if linux_command_available("grim") {
         let geometry = format!(
@@ -526,7 +759,10 @@ fn capture_screen_source_blocking(display: CaptureDisplay) -> Result<PathBuf, St
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-fn capture_screen_source_blocking(_display: CaptureDisplay) -> Result<PathBuf, String> {
+fn capture_screen_source_blocking(
+    _display: CaptureDisplay,
+    _computer_use_helper: Option<PathBuf>,
+) -> Result<PathBuf, String> {
     Err("region screenshots are not supported on this platform".to_string())
 }
 
@@ -755,14 +991,23 @@ async fn capture_screen_region(
     begin_screen_capture(&state)?;
 
     let operation = async {
-        ensure_screen_capture_permission()?;
+        let computer_use_helper = match install_computer_use_helper(&app) {
+            Ok(helper) => helper,
+            Err(error) => {
+                eprintln!("[computer-use] helper installation failed: {error}");
+                None
+            }
+        };
+        if computer_use_helper.is_none() {
+            ensure_screen_capture_permission()?;
+        }
         main_window
             .hide()
             .map_err(|error| format!("hide CyberCode before screen capture: {error}"))?;
 
         let source_path = tauri::async_runtime::spawn_blocking(move || {
             thread::sleep(Duration::from_millis(140));
-            capture_screen_source_blocking(display)
+            capture_screen_source_blocking(display, computer_use_helper)
         })
         .await
         .map_err(|error| format!("screen capture task failed: {error}"))??;
@@ -1287,7 +1532,7 @@ fn wait_for_server(
     let addr: SocketAddr = format!("{url_host}:{port}")
         .parse()
         .map_err(|err| format!("parse server address: {err}"))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + SERVER_STARTUP_WAIT_TIMEOUT;
 
     while Instant::now() < deadline {
         if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
@@ -1302,7 +1547,8 @@ fn wait_for_server(
     }
 
     Err(format!(
-        "desktop server did not start listening on {url_host}:{port} within 10 seconds"
+        "desktop server did not start listening on {url_host}:{port} within {} seconds",
+        SERVER_STARTUP_WAIT_TIMEOUT.as_secs()
     ))
 }
 
@@ -1372,6 +1618,17 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
     let codegraph_asset_dir_arg = codegraph_asset_dir.to_string_lossy().to_string();
     let rtk_binary = resolve_rtk_binary(app, &app_root)?;
     let rtk_binary_arg = rtk_binary.to_string_lossy().to_string();
+    let agent_browser_binary = resolve_agent_browser_binary(app, &app_root)?;
+    let agent_browser_binary_arg = agent_browser_binary.to_string_lossy().to_string();
+    let browser_executable = resolve_browser_executable();
+    prepare_agent_browser_runtime(&agent_browser_binary, browser_executable.is_some());
+    let computer_use_helper = match install_computer_use_helper(app) {
+        Ok(helper) => helper,
+        Err(error) => {
+            eprintln!("[computer-use] helper installation failed: {error}");
+            None
+        }
+    };
 
     // 单一合并 sidecar：第一个参数选 server / cli / adapters 模式。
     let mut sidecar = app
@@ -1381,20 +1638,33 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
     for (key, value) in terminal_environment(&default_shell()) {
         sidecar = sidecar.env(key, value);
     }
-    let sidecar = sidecar
+    sidecar = sidecar
         .env("SERVER_AUTH_TOKEN", &auth_token)
         .env("CYBER_CODEGRAPH_ASSET_DIR", &codegraph_asset_dir_arg)
         .env("CYBER_RTK_PATH", &rtk_binary_arg)
-        .args([
-            "server",
-            "--auth-required",
-            "--app-root",
-            &app_root_arg,
-            "--host",
-            host,
-            "--port",
-            &port.to_string(),
-        ]);
+        .env("CYBER_AGENT_BROWSER_PATH", &agent_browser_binary_arg);
+    if let Some(computer_use_helper) = computer_use_helper {
+        sidecar = sidecar.env(
+            "CYBER_COMPUTER_USE_HELPER_PATH",
+            computer_use_helper.to_string_lossy().to_string(),
+        );
+    }
+    if let Some(browser_executable) = browser_executable {
+        sidecar = sidecar.env(
+            "CYBER_AGENT_BROWSER_EXECUTABLE_PATH",
+            browser_executable.to_string_lossy().to_string(),
+        );
+    }
+    let sidecar = sidecar.args([
+        "server",
+        "--auth-required",
+        "--app-root",
+        &app_root_arg,
+        "--host",
+        host,
+        "--port",
+        &port.to_string(),
+    ]);
 
     let startup_logs = Arc::new(Mutex::new(VecDeque::new()));
     let logs_for_task = Arc::clone(&startup_logs);
@@ -1466,6 +1736,114 @@ fn resolve_rtk_binary(app: &AppHandle, app_root: &Path) -> Result<PathBuf, Strin
         .join(binary_name))
 }
 
+fn resolve_agent_browser_binary(app: &AppHandle, app_root: &Path) -> Result<PathBuf, String> {
+    let binary_name = if cfg!(windows) {
+        "agent-browser.exe"
+    } else {
+        "agent-browser"
+    };
+    let external_binary = app_root.join(binary_name);
+    if external_binary.is_file() {
+        return Ok(external_binary);
+    }
+
+    Ok(app
+        .path()
+        .resource_dir()
+        .map_err(|err| format!("resolve agent-browser resources: {err}"))?
+        .join("resources")
+        .join("agent-browser")
+        .join(binary_name))
+}
+
+fn resolve_browser_executable() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("AGENT_BROWSER_EXECUTABLE_PATH")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+    {
+        return Some(path);
+    }
+
+    let mut candidates = Vec::new();
+    if cfg!(target_os = "macos") {
+        candidates.extend([
+            PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            PathBuf::from("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+            PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+        ]);
+    } else if cfg!(windows) {
+        for root in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+            let Some(root) = std::env::var_os(root) else {
+                continue;
+            };
+            let root = PathBuf::from(root);
+            candidates.extend([
+                root.join("Google/Chrome/Application/chrome.exe"),
+                root.join("Microsoft/Edge/Application/msedge.exe"),
+                root.join("BraveSoftware/Brave-Browser/Application/brave.exe"),
+                root.join("Chromium/Application/chrome.exe"),
+            ]);
+        }
+    } else {
+        candidates.extend([
+            PathBuf::from("/usr/bin/google-chrome"),
+            PathBuf::from("/usr/bin/google-chrome-stable"),
+            PathBuf::from("/usr/bin/chromium"),
+            PathBuf::from("/usr/bin/chromium-browser"),
+            PathBuf::from("/usr/bin/microsoft-edge"),
+            PathBuf::from("/usr/bin/brave-browser"),
+        ]);
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn prepare_agent_browser_runtime(binary: &Path, has_system_browser: bool) {
+    if has_system_browser
+        || AGENT_BROWSER_PREPARE_STARTED.swap(true, Ordering::SeqCst)
+        || !binary.is_file()
+    {
+        return;
+    }
+
+    let binary = binary.to_path_buf();
+    thread::spawn(move || {
+        let healthy = StdCommand::new(&binary)
+            .args(["doctor", "--offline", "--quick"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if healthy {
+            return;
+        }
+
+        eprintln!(
+            "[agent-browser] no compatible browser found; preparing Chrome for Testing in the background"
+        );
+        match StdCommand::new(&binary)
+            .arg("install")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(status) if status.success() => {
+                eprintln!("[agent-browser] browser runtime is ready");
+            }
+            Ok(status) => {
+                eprintln!(
+                    "[agent-browser] browser runtime preparation exited with status {status}"
+                );
+            }
+            Err(error) => {
+                eprintln!("[agent-browser] browser runtime preparation failed: {error}");
+            }
+        }
+    });
+}
+
 fn stop_server_sidecar(app: &AppHandle) {
     let Some(state) = app.try_state::<ServerState>() else {
         return;
@@ -1530,8 +1908,10 @@ fn start_adapters_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
         "adapters",
         "--app-root",
         &app_root_arg,
-        "--feishu",
         "--telegram",
+        "--weixin",
+        "--qq",
+        "--dingtalk",
     ]);
 
     let (mut rx, child) = sidecar
@@ -1621,7 +2001,7 @@ mod tests {
     use super::{
         completed_screenshot_path, decode_screenshot_png_data_url, decode_terminal_output,
         default_utf8_locale, ensure_utf8_locale, parse_env_block, screenshot_temp_path,
-        wait_for_server,
+        wait_for_server, SERVER_CONNECTION_WAIT_TIMEOUT, SERVER_STARTUP_WAIT_TIMEOUT,
     };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -1638,6 +2018,12 @@ mod tests {
 
         assert!(error.contains("sidecar exited (code=Some(3), signal=None)"));
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn frontend_wait_outlasts_the_sidecar_startup_window() {
+        assert_eq!(SERVER_STARTUP_WAIT_TIMEOUT, Duration::from_secs(60));
+        assert!(SERVER_CONNECTION_WAIT_TIMEOUT > SERVER_STARTUP_WAIT_TIMEOUT);
     }
 
     #[test]

@@ -190,6 +190,7 @@ type ChatStore = {
     options?: { displayContent?: string },
   ) => string
   sendPendingSteers: (sessionId: string, priority: 'next' | 'later', steerIds?: string[]) => void
+  reorderPendingSteer: (sessionId: string, steerId: string, targetSteerId: string) => void
   autoSendPendingSteers: (sessionId: string) => void
   editPendingSteer: (sessionId: string, steerId: string) => void
   cancelPendingSteer: (sessionId: string, steerId: string) => void
@@ -292,6 +293,31 @@ function isPendingSteerActionable(steer: PendingSteer): boolean {
 
 function isPendingSteerAutoSendable(steer: PendingSteer): boolean {
   return steer.status === 'draft'
+}
+
+function reorderActionablePendingSteers(
+  steers: PendingSteer[],
+  steerId: string,
+  targetSteerId: string,
+): PendingSteer[] {
+  if (steerId === targetSteerId) return steers
+
+  const actionable = steers.filter(isPendingSteerActionable)
+  const sourceIndex = actionable.findIndex((steer) => steer.id === steerId)
+  const targetIndex = actionable.findIndex((steer) => steer.id === targetSteerId)
+  if (sourceIndex < 0 || targetIndex < 0) return steers
+
+  const reordered = [...actionable]
+  const [moved] = reordered.splice(sourceIndex, 1)
+  if (!moved) return steers
+  reordered.splice(targetIndex, 0, moved)
+
+  let actionableIndex = 0
+  return steers.map((steer) =>
+    isPendingSteerActionable(steer)
+      ? reordered[actionableIndex++] ?? steer
+      : steer
+  )
 }
 
 function pendingSteerAttachmentsToRefs(attachments?: UIAttachment[]): AttachmentRef[] | undefined {
@@ -891,12 +917,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
+  reorderPendingSteer: (sessionId, steerId, targetSteerId) => {
+    set((s) => ({
+      sessions: updateSessionIn(s.sessions, sessionId, (session) => {
+        const current = session.pendingSteers ?? []
+        const pendingSteers = reorderActionablePendingSteers(current, steerId, targetSteerId)
+        return pendingSteers === current ? {} : { pendingSteers }
+      }),
+    }))
+  },
+
   autoSendPendingSteers: (sessionId) => {
     const session = get().sessions[sessionId]
     if (!session) return
-    const targets = (session.pendingSteers ?? [])
-      .filter(isPendingSteerAutoSendable)
-      .sort((a, b) => a.createdAt - b.createdAt)
+    const targets = (session.pendingSteers ?? []).filter(isPendingSteerAutoSendable)
     if (targets.length === 0) return
 
     const targetIds = new Set(targets.map((steer) => steer.id))
@@ -989,21 +1023,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((s) => {
       const session = s.sessions[sessionId]
       if (!session) return s
-      if (session.elapsedTimer) clearInterval(session.elapsedTimer)
       return {
         sessions: {
           ...s.sessions,
           [sessionId]: {
             ...session,
-            chatState: 'idle',
             pendingPermission: null,
             pendingComputerUsePermission: null,
-            activeThinkingId: null,
             dismissedThinkingPanelIdentityKey: getThinkingPanelIdentityKey(sessionId, session.messages),
-            elapsedTimer: null,
-            statusVerb: '',
-            turnStartedAt: null,
-            lastModelActivityAt: null,
           },
         },
       }
@@ -1681,6 +1708,44 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           lastModelActivityAt: null,
           pendingSteers: (session.pendingSteers ?? []).filter(isPendingSteerActionable),
         }))
+        if (shouldAutoSendPending) {
+          get().autoSendPendingSteers(sessionId)
+        }
+        break
+      }
+
+      case 'generation_stopped': {
+        const session = get().sessions[sessionId]
+        if (!session) break
+        const shouldAutoSendPending = (session.pendingSteers ?? []).some(isPendingSteerAutoSendable)
+        const text = `${session.streamingText}${consumePendingDelta(sessionId)}`
+        const messages = text.trim()
+          ? appendAssistantTextMessage(session.messages, text, Date.now())
+          : session.messages
+        if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+        update(() => ({
+          ...markConnectionActivity(),
+          messages,
+          streamingText: '',
+          settlingAssistant: text.trim()
+            ? createSettlingAssistant(session.messages, messages, text)
+            : null,
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          chatState: 'idle',
+          elapsedTimer: null,
+          statusVerb: '',
+          turnStartedAt: null,
+          lastModelActivityAt: null,
+          usageRevision:
+            (session.usageRevision ?? 0) + (msg.forced ? 1 : 0),
+          pendingSteers: (session.pendingSteers ?? []).filter(isPendingSteerActionable),
+        }))
+        useTabStore.getState().updateTabStatus(sessionId, 'idle')
         if (shouldAutoSendPending) {
           get().autoSendPendingSteers(sessionId)
         }

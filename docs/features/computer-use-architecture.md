@@ -1,13 +1,13 @@
 # Computer Use 架构深度解析
 
-> 深入解析 Computer Use 功能的底层实现：从 MCP 工具定义到 Python Bridge，从 9 层安全关卡到灰度控制绕过。
+> 深入解析 Computer Use 功能的底层实现：从 MCP 工具定义到 macOS / Linux 原生截图 helper、跨平台 Python 输入 Bridge，再到 9 层安全关卡。
 
 <p align="center">
 <a href="#一补丁环境总览">补丁环境</a> ·
 <a href="#二分层架构">分层架构</a> ·
 <a href="#三mcp-工具层">MCP 工具层</a> ·
 <a href="#四安全关卡体系">安全关卡</a> ·
-<a href="#五python-bridge-机制">Python Bridge</a> ·
+<a href="#五混合-bridge-机制">混合 Bridge</a> ·
 <a href="#六截图-分析-操作闭环">交互闭环</a> ·
 <a href="#七关键源文件索引">源文件索引</a>
 </p>
@@ -35,7 +35,7 @@ Claude Code 原版的 Computer Use 功能（内部代号 **Chicago**）依赖三
 ```
 原始 Claude Code                         CyberCode (补丁版)
 ─────────────────                        ─────────────────────────
-@ant/computer-use-swift  ──替换为──→     Python Bridge (mac_helper.py)
+@ant/computer-use-swift  ──替换为──→     CyberCode Computer Use.app
 @ant/computer-use-input  ──替换为──→     pyautogui + pyobjc
 GrowthBook 灰度控制      ──绕过──→      gates.ts 硬编码 return true
 订阅检查 (Max/Pro)       ──绕过──→      getChicagoEnabled() = true
@@ -103,13 +103,14 @@ Computer Use 采用 **6 层架构**，每层职责清晰、边界明确：
 │  setup.ts: MCP 配置初始化                                    │
 │  gates.ts: 灰度控制（已绕过）                                │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 5 — Python Bridge 进程通信层                  [补丁]  │
-│  pythonBridge.ts: venv 管理 + JSON RPC + 错误处理           │
-│  callPythonHelper<T>(command, payload) → T                  │
+│  Layer 5 — Hybrid Bridge 路由层                     [补丁]  │
+│  macOS / Linux 截图 → nativeCapture；输入 → Python Bridge  │
+│  Windows 截图与输入 → Python Bridge                         │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 6 — Python 运行时执行层                       [补丁]  │
-│  mac_helper.py: pyautogui + mss + pyobjc                    │
-│  660 行 Python 实现所有系统交互                              │
+│  Layer 6 — 平台执行层                               [补丁]  │
+│  macOS helper: 签名截图与固定 TCC 身份                      │
+│  Linux helper: X11 / XDG Desktop Portal 截图                │
+│  mac / win / linux_helper.py: 输入、窗口与截图兜底          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -122,7 +123,7 @@ Computer Use 采用 **6 层架构**，每层职责清晰、边界明确：
 | Layer 1-2 | `vendor/computer-use-mcp/` | 平台无关，可用于 Electron、Web 等宿主 |
 | Layer 3 | `vendor/computer-use-mcp/` | 平台无关，MCP 标准协议 |
 | Layer 4 | `utils/computerUse/` | CLI 专用，绑定应用状态 |
-| Layer 5-6 | `utils/computerUse/` + `runtime/` | macOS 专用，Python 实现 |
+| Layer 5-6 | `utils/computerUse/` + `runtime/` + `desktop/computer-use-{macos,linux}/` | macOS / Linux 原生截图 + 跨平台 Python 输入 |
 
 ---
 
@@ -217,9 +218,8 @@ if (adapter.isDisabled()) return errorResult("Computer Use is disabled")
 #### Gate 2：TCC 权限检查
 ```typescript
 await adapter.ensureOsPermissions()
-// → Python: check_permissions
-//   → Accessibility: osascript "tell System Events..."
-//   → Screen Recording: CGDisplayCaptureDisplay()
+// → Python: Accessibility 检测
+// → CyberCode Computer Use: CGPreflightScreenCaptureAccess()
 ```
 如果缺少 macOS Accessibility 或 Screen Recording 权限，直接报错。
 
@@ -319,49 +319,45 @@ function tierSatisfies(tier: CuAppPermTier, required: ActionKind): boolean {
 
 ---
 
-## 五、Python Bridge 机制
+## 五、混合 Bridge 机制
 
 ![Python Bridge 通信机制](./images/03-computer-use-python-bridge.jpg)
 
 ### 架构设计
 
-原始 Claude Code 使用编译好的 Swift 原生模块（.node NAPI 插件）直接调用 macOS API。我们用 **Python 子进程 + JSON RPC** 替代了这一层：
+原始 Claude Code 使用私有 Swift NAPI 模块。CyberCode 当前采用公开可维护的混合实现：macOS 屏幕像素走独立签名 helper；Linux 屏幕像素走内置 Rust helper，并按会话选择 X11 后端或 XDG Desktop Portal；输入与应用管理走 **Python 子进程 + JSON RPC**；Windows 截图与输入均走 Python。
 
 ```
-TypeScript (Bun 运行时)                    Python (venv)
-┌────────────────────┐                   ┌────────────────────┐
-│  executor.ts       │                   │  mac_helper.py     │
-│                    │   execFile()      │                    │
-│  callPythonHelper  │ ──────────────→   │  main()            │
-│  ('click',         │   command +       │    ├─ 解析 argv    │
-│   {x:756,y:342})   │   --payload JSON  │    ├─ dispatch()   │
-│                    │                   │    └─ click()      │
-│  ← JSON.parse ──── │ ←──────────────   │       pyautogui    │
-│  {ok:true,         │   stdout JSON     │                    │
-│   result:true}     │                   │  json_output(...)  │
-└────────────────────┘                   └────────────────────┘
+TypeScript (Bun)
+  ├─ screenshot / zoom / display
+  │    ├─ macOS helper (CoreGraphics + ImageIO)
+  │    │    Bundle ID: com.cybercode.computer-use
+  │    └─ Linux helper (X11 tools + XDG Desktop Portal)
+  └─ click / key / app / clipboard
+       └─ managed Python runtime (pyautogui + pyobjc / Win32 / X11)
 ```
+
+桌面端启动时会把平台 helper 原子安装到 `~/.cyber/computer-use/`。macOS 正式发布时 helper 与主应用使用同一 Apple Team 签名，因此 Screen Recording 权限绑定稳定代码身份，而不是某次启动的 Bun 或 Python PID。Linux helper 随桌面包内置，不要求用户安装 Python 或截图工具；Wayland 使用系统 Portal 时由桌面环境显示必要的确认界面。
 
 ### 启动引导流程
 
-首次调用 `callPythonHelper()` 时自动完成环境初始化：
+首次调用 `callPythonHelper()` 时自动完成运行组件初始化：
 
 ```
 ensureBootstrapped()
   │
-  ├─ 检查 .runtime/venv/bin/python3 是否存在
-  │   └─ 不存在 → python3 -m venv .runtime/venv/
+  ├─ 检查已激活的 managed runtime
+  │   └─ 无 → 检查老用户的 .runtime/venv/
   │
-  ├─ 检查 pip 是否可用
-  │   └─ 不可用 → python3 -m ensurepip --upgrade
+  ├─ 获取平台 manifest（GitHub 主线路 + 镜像兜底）
   │
-  ├─ 计算 runtime/requirements.txt 的 SHA256
-  │   └─ 与 .runtime/requirements.sha256 对比
-  │       └─ 不同 → pip install -r requirements.txt
-  │                 写入新的 SHA256 哈希
-  │       └─ 相同 → 跳过安装
+  ├─ 断点续传平台压缩包
   │
-  └─ 就绪，返回 venv Python 路径
+  ├─ SHA-256 校验 → 解压到 staging 目录
+  │
+  ├─ 验证 Python 可启动且平台依赖可导入
+  │
+  └─ 原子写入 active.json，返回私有 Python 路径
 ```
 
 **依赖清单**（`runtime/requirements.txt`）：
@@ -374,15 +370,16 @@ ensureBootstrapped()
 | `pyobjc-core` | macOS Objective-C 桥接 |
 | `pyobjc-framework-Cocoa` | NSWorkspace（应用管理）、NSPasteboard（剪贴板） |
 | `pyobjc-framework-Quartz` | CGDisplay（显示器）、CGWindow（窗口列表） |
+| `psutil` / `pyperclip` / `screeninfo` | Windows 与 Linux 的进程、剪贴板和显示器适配 |
 
 ### 命令映射表
 
-`mac_helper.py`（660 行）实现了以下命令：
+原生截图 helper 与平台 Python helper 共同实现命令：
 
-| 命令 | Python 实现 | 返回值 |
+| 命令 | 实现 | 返回值 |
 |------|------------|--------|
-| `screenshot` | `mss.grab()` + `PIL.Image` JPEG 编码 | `{base64, width, height, displayWidth, displayHeight}` |
-| `zoom` | `mss.grab(region)` 区域截图 | `{base64, width, height}` |
+| `screenshot` | 原生 `CGDisplayCreateImage` + ImageIO JPEG | `{base64, width, height, displayWidth, displayHeight}` |
+| `zoom` | 原生 `CGWindowListCreateImage` 区域截图 | `{base64, width, height}` |
 | `click` | `pyautogui.moveTo()` + `pyautogui.click()` | `true` |
 | `key` | `pyautogui.hotkey()` / `pyautogui.press()` | `true` |
 | `type` | `pyautogui.write(interval=0.008)` | `true` |
@@ -390,14 +387,14 @@ ensureBootstrapped()
 | `scroll` | `pyautogui.scroll()` / `pyautogui.hscroll()` | `true` |
 | `hold_key` | `pyautogui.keyDown()` + `sleep` + `pyautogui.keyUp()` | `true` |
 | `frontmost_app` | `NSWorkspace.frontmostApplication()` | `{bundleId, displayName}` |
-| `list_displays` | `CGGetActiveDisplayList()` + `CGDisplayBounds()` | `[DisplayGeometry...]` |
+| `list_displays` | 原生 `CGGetActiveDisplayList()` + `CGDisplayBounds()` | `[DisplayGeometry...]` |
 | `find_window_displays` | `CGWindowListCopyWindowInfo()` + 交集计算 | `[{bundleId, displayIds}...]` |
 | `list_installed_apps` | 递归扫描 `/Applications` + `plistlib` | `[InstalledApp...]` |
 | `list_running_apps` | `NSWorkspace.runningApplications()` | `[RunningApp...]` |
 | `open_app` | `NSWorkspace.launchApplicationAtURL_options_` | `void` |
 | `read_clipboard` | `NSPasteboard.stringForType_()` | `string` |
 | `write_clipboard` | `NSPasteboard.setString_forType_()` | `void` |
-| `check_permissions` | `osascript` + `CGDisplayCaptureDisplay` | `{accessibility, screenRecording}` |
+| `check_permissions` | Python Accessibility + 原生 Screen Recording preflight | `{accessibility, screenRecording}` |
 
 ### 错误处理
 
@@ -554,8 +551,10 @@ bindSessionContext 闭包
 
 | 文件 | 行数 | 职责 | 补丁? |
 |------|------|------|-------|
-| `executor.ts` | 231 | ComputerExecutor 的 Python bridge 实现 | ✅ 重写 |
-| `pythonBridge.ts` | 111 | Python 子进程管理、venv 引导、JSON RPC | ✅ 新增 |
+| `executor.ts` | 231 | ComputerExecutor 的混合 bridge 实现 | ✅ 重写 |
+| `runtimeManager.ts` | — | 平台运行组件下载、续传、校验与原子激活 | ✅ 新增 |
+| `pythonBridge.ts` | — | 原生截图 / Python 输入路由与运行组件兼容 | ✅ 新增 |
+| `nativeCapture.ts` | — | macOS / Linux helper 的路径解析、JSON RPC 与回退策略 | ✅ 新增 |
 | `hostAdapter.ts` | 54 | HostAdapter 实现（权限检查、灰度读取） | 部分修改 |
 | `gates.ts` | 51 | GrowthBook 灰度控制（`getChicagoEnabled` 绕过） | ✅ 修改 |
 | `wrapper.tsx` | 300+ | 会话上下文构建、权限对话框、锁管理 | 未修改 |
@@ -569,25 +568,41 @@ bindSessionContext 闭包
 
 | 文件 | 行数 | 职责 | 补丁? |
 |------|------|------|-------|
-| `mac_helper.py` | 660 | 所有系统交互的 Python 实现 | ✅ 新增 |
-| `requirements.txt` | 6 | Python 依赖声明 | ✅ 新增 |
+| `mac_helper.py` | 660 | macOS 输入、应用和窗口交互 | ✅ 新增 |
+| `win_helper.py` | — | Windows 截图、输入、应用和窗口交互 | ✅ 新增 |
+| `linux_helper.py` | — | Linux X11/XWayland 输入与截图兜底 | ✅ 新增 |
+| `requirements*.txt` | — | 各平台 Python 依赖声明 | ✅ 新增 |
+
+### desktop/computer-use-macos/（原生截图 helper）
+
+| 文件 | 职责 |
+|------|------|
+| `main.swift` | 显示器枚举、JPEG/PNG 截图、录屏权限请求 |
+| `Info.plist` | 固定 `com.cybercode.computer-use` Bundle ID |
+
+### desktop/computer-use-linux/（原生截图 helper）
+
+| 文件 | 职责 |
+|------|------|
+| `src/main.rs` | X11 截图后端探测、XDG Desktop Portal 调用、裁剪与编码 |
+| `Cargo.toml` | `ashpd`、`image` 等 Linux 原生依赖 |
 
 ---
 
 ## 八、设计权衡
 
-### 为什么选择 Python Bridge？
+### 为什么选择混合 Bridge？
 
-| 维度 | 原生 Swift (.node) | Python Bridge |
+| 维度 | 私有 Swift NAPI | CyberCode 混合 Bridge |
 |------|-------------------|---------------|
-| **性能** | ~0ms（进程内调用） | ~50-100ms（子进程启动） |
-| **可读性** | 编译后不可读 | 660 行清晰的 Python |
-| **可修改性** | 需要 Swift 编译环境 | 直接编辑 .py 文件 |
-| **依赖** | 特定 Bun 版本的 NAPI | 任意 Python 3.8+ |
-| **跨平台** | 仅 macOS | pyautogui/mss 天然跨平台 |
+| **性能** | ~0ms（进程内调用） | 原生截图约毫秒级；输入子进程约 50-100ms |
+| **可读性** | 私有实现不可维护 | 小型公开 Swift helper + 清晰 Python |
+| **可修改性** | 依赖私有 NAPI ABI | Swift CLI 与 `.py` 都可直接构建 |
+| **依赖** | 特定 Bun 版本的 NAPI | 系统 CoreGraphics + 托管 CPython |
+| **跨平台** | 仅 macOS | macOS / Linux 原生截图，Windows/Python 兼容 |
 | **用户体验** | 无感知 | 无感知（模型思考时间秒级） |
 
-**结论**：50-100ms 的额外延迟在 Computer Use 的场景下完全可以忽略——模型分析截图和决策的时间通常是 2-5 秒，用户不会注意到底层操作多了 100ms。
+**结论**：高频截图走轻量原生 helper，同时让跨平台输入层保持可维护；输入子进程的少量延迟相对模型分析时间可以忽略。
 
 ### 我们尝试过但放弃的方案
 

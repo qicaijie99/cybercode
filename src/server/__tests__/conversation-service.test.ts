@@ -408,6 +408,114 @@ describe('ConversationService', () => {
     expect(Number.isNaN(Date.parse(sent[0].timestamp))).toBe(false)
   })
 
+  test('stopGeneration waits for the interrupted turn result without killing the reusable CLI', async () => {
+    const service = new ConversationService() as any
+    const sent: any[] = []
+    let killCount = 0
+
+    service.sessions.set('stop-gracefully', {
+      proc: { kill: () => { killCount++ } },
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      permissionMode: 'default',
+      isGenerating: true,
+      generationEpoch: 1,
+      sdkToken: 'token',
+      sdkSocket: {
+        send(data: string) {
+          sent.push(JSON.parse(data))
+        },
+      },
+      pendingOutbound: [],
+      stderrLines: [],
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    })
+
+    const stopping = service.stopGeneration('stop-gracefully', 100)
+    expect(sent[0]).toMatchObject({
+      type: 'control_request',
+      request: { subtype: 'interrupt' },
+    })
+
+    service.handleSdkPayload(
+      'stop-gracefully',
+      JSON.stringify({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        result: 'Interrupted by user',
+      }),
+    )
+
+    expect(await stopping).toBe('interrupted')
+    expect(killCount).toBe(0)
+    expect(service.hasSession('stop-gracefully')).toBe(true)
+  })
+
+  test('stopGeneration force-stops an unresponsive turn after its deadline', async () => {
+    const service = new ConversationService() as any
+    let killCount = 0
+
+    service.sessions.set('stop-timeout', {
+      proc: { kill: () => { killCount++ } },
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      permissionMode: 'default',
+      isGenerating: true,
+      generationEpoch: 1,
+      sdkToken: 'token',
+      sdkSocket: { send() {} },
+      pendingOutbound: [],
+      stderrLines: [],
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    })
+
+    expect(await service.stopGeneration('stop-timeout', 5)).toBe('killed')
+    expect(killCount).toBe(1)
+    expect(service.hasSession('stop-timeout')).toBe(false)
+  })
+
+  test('a delayed stop never kills a newer generation in the same session', async () => {
+    const service = new ConversationService() as any
+    let killCount = 0
+
+    service.sessions.set('stop-superseded', {
+      proc: { kill: () => { killCount++ } },
+      outputCallbacks: [],
+      workDir: process.cwd(),
+      permissionMode: 'default',
+      isGenerating: true,
+      generationEpoch: 1,
+      sdkToken: 'token',
+      sdkSocket: { send() {} },
+      pendingOutbound: [],
+      stderrLines: [],
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    })
+
+    const stopping = service.stopGeneration('stop-superseded', 5)
+    expect(service.sendMessage('stop-superseded', 'newer turn')).toBe(true)
+    service.handleSdkPayload(
+      'stop-superseded',
+      JSON.stringify({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        result: 'Older turn interrupted',
+      }),
+    )
+
+    expect(await stopping).toBe('superseded')
+    expect(killCount).toBe(0)
+    expect(service.hasSession('stop-superseded')).toBe(true)
+  })
+
   test('sendMessage materializes inline non-vision images as tool file references', async () => {
     const service = new ConversationService() as any
     const sent: any[] = []
@@ -461,10 +569,14 @@ describe('ConversationService', () => {
     const env = (await service.buildChildEnv(
       '/tmp',
       'ws://127.0.0.1:3456/sdk/test-session?token=test-token',
+      undefined,
+      'session-123',
     )) as Record<string, string>
 
     expect(env.CYBERCODE_DESKTOP_AWAIT_MCP).toBe('1')
     expect(env.CYBERCODE_DESKTOP_AWAIT_MCP_TIMEOUT_MS).toBe('5000')
+    expect(env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS).toBe('1')
+    expect(env.CYBERCODE_AGENT_BROWSER_SESSION_ID).toBe('session-123')
   })
 
   test('buildSessionCliArgs forwards the selected runtime model and effort to the CLI process', () => {

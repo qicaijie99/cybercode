@@ -90,4 +90,19 @@ describe('MarkdownRenderer', () => {
     expect(link).toHaveAttribute('target', '_blank')
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
   })
+
+  it('marks chat markdown for semantic content colors', () => {
+    const { container } = render(
+      <MarkdownRenderer
+        variant="chat"
+        content={'[CyberCode](https://example.com)\n\n> Note\n\n| Name | Status |\n| --- | --- |\n| Build | Ready |'}
+      />,
+    )
+
+    const markdown = container.querySelector('.markdown-prose')
+    expect(markdown).toHaveAttribute('data-markdown-variant', 'chat')
+    expect(markdown?.className).toContain('var(--color-markdown-link)')
+    expect(markdown?.querySelector('.md-table-wrap')).toBeInTheDocument()
+    expect(markdown?.querySelector('blockquote')).toBeInTheDocument()
+  })
 })

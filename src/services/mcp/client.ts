@@ -3178,6 +3178,30 @@ async function callMCPTool({
     }
 
     const elapsed = Date.now() - toolStartTime
+    const wasAborted =
+      signal.aborted || (e instanceof Error && e.name === 'AbortError')
+
+    if (wasAborted) {
+      // agent-browser 0.33 serves MCP requests synchronously. It cannot read
+      // the protocol cancellation notification while a delegated CLI command
+      // is blocked, so recycle only that stdio connection after an abort.
+      // The next browser tool call reconnects on demand to the same isolated
+      // browser session.
+      if (
+        name === 'agent-browser' &&
+        (config.type === 'stdio' || !config.type)
+      ) {
+        try {
+          await clearServerCache(name, config)
+        } catch (cleanupError) {
+          logMCPDebug(
+            name,
+            `Failed to recycle cancelled MCP process: ${cleanupError}`,
+          )
+        }
+      }
+      return { content: undefined }
+    }
 
     if (e instanceof Error && e.name !== 'AbortError') {
       logMCPDebug(
@@ -3226,11 +3250,7 @@ async function callMCPTool({
       }
     }
 
-    // When the users hits esc, avoid logspew
-    if (!(e instanceof Error) || e.name !== 'AbortError') {
-      throw e
-    }
-    return { content: undefined }
+    throw e
   } finally {
     // Always clear intervals
     if (progressInterval !== undefined) {

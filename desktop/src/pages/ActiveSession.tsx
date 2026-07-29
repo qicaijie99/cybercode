@@ -257,7 +257,10 @@ export function ActiveSession({ sessionId: sessionIdProp, projectPath, isActive 
       )}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <section data-chat-layout className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <section
+          data-chat-layout
+          className="relative flex min-w-0 flex-1 flex-col overflow-hidden"
+        >
           {/* MessageList is ALWAYS mounted — never conditionally unmounted.
               Unmounting + remounting it causes a burst of 500+ DOM nodes which
               crashes the WKWebView GPU compositor (white screen).
@@ -324,7 +327,10 @@ export function ActiveSession({ sessionId: sessionIdProp, projectPath, isActive 
               {!isMemberSession && <PendingSteerBar sessionId={sessionId} />}
               <TeamStatusBar />
             </div>
-            <div ref={composerShellRef} className="pointer-events-auto">
+            <div
+              ref={composerShellRef}
+              className="pointer-events-auto"
+            >
               <ChatInput
                 sessionId={sessionId}
                 projectPath={resolvedProjectPath}

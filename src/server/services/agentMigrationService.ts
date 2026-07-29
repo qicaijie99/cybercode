@@ -39,11 +39,15 @@ import { sessionService } from './sessionService.js'
 export type ExternalAgentId =
   | 'cybercode'
   | 'openclaw'
+  | 'workbuddy'
   | 'claude-code'
   | 'codex'
   | 'cursor'
+  | 'trae'
   | 'hermes-agent'
   | 'deepseek-tui'
+  | 'kimi-code'
+  | 'pi'
 
 export type MigrationItemKind = 'skill' | 'memory' | 'instruction'
 export type MigrationItemScope = 'global' | 'project'
@@ -56,6 +60,7 @@ export type MigrationWriteMode =
   | 'markdown-merge'
   | 'agent-skill'
   | 'cursor-mdc'
+  | 'trae-rule'
   | 'hermes-memory'
   | 'codewhale-memory'
 
@@ -160,6 +165,7 @@ type AgentScanContext = {
   roots: string[]
   destinationRoots?: string[]
   workspaces?: string[]
+  installRoots?: string[]
   builtIn?: boolean
 }
 
@@ -327,7 +333,11 @@ export class AgentMigrationService {
     }
     const targetInstalled = targetContext.builtIn
       || targetContext.commands.some(command => Boolean(this.findExecutable(command)))
-      || (await this.existingPaths([...targetContext.roots, ...(targetContext.workspaces ?? [])])).length > 0
+      || (await this.existingPaths([
+        ...targetContext.roots,
+        ...(targetContext.workspaces ?? []),
+        ...(targetContext.installRoots ?? []),
+      ])).length > 0
     if (!targetInstalled) {
       throw new AgentMigrationError('The destination agent was not detected.', 'TARGET_NOT_DETECTED', 404)
     }
@@ -464,9 +474,12 @@ export class AgentMigrationService {
   private async buildScanContexts(): Promise<AgentScanContext[]> {
     const openClawRoot = this.expandHome(this.env.OPENCLAW_STATE_DIR || join(this.homeDir, '.openclaw'))
     const openClawWorkspaces = await this.discoverOpenClawWorkspaces(openClawRoot)
+    const workBuddyRoot = this.expandHome(this.env.WORKBUDDY_HOME || join(this.homeDir, '.workbuddy'))
     const hermesRoots = await this.discoverHermesRoots()
     const claudeRoot = this.expandHome(this.env.CLAUDE_CONFIG_DIR || join(this.homeDir, '.claude'))
     const codexRoot = this.expandHome(this.env.CODEX_HOME || join(this.homeDir, '.codex'))
+    const kimiCodeRoot = this.expandHome(this.env.KIMI_CODE_HOME || join(this.homeDir, '.kimi-code'))
+    const piRoot = this.expandHome(this.env.PI_CODING_AGENT_DIR || join(this.homeDir, '.pi', 'agent'))
     const configuredCodeWhaleRoot = this.env.CODEWHALE_HOME
       ? this.expandHome(this.env.CODEWHALE_HOME)
       : ''
@@ -497,6 +510,21 @@ export class AgentMigrationService {
       '/opt/Cursor',
       '/usr/share/cursor',
     ])
+    const configuredTraeRoot = this.env.TRAE_HOME
+      ? this.expandHome(this.env.TRAE_HOME)
+      : ''
+    const traeRootCandidates = this.uniquePaths([
+      configuredTraeRoot,
+      join(this.homeDir, '.trae-cn'),
+      join(this.homeDir, '.trae'),
+    ])
+    const activeTraeRoot = configuredTraeRoot
+      || await this.firstExistingPath(traeRootCandidates)
+      || join(this.homeDir, '.trae-cn')
+    const traeRoots = this.uniquePaths([activeTraeRoot, ...traeRootCandidates])
+    const traeUsesChinaProfile = basename(activeTraeRoot).toLowerCase() !== '.trae'
+    const traeApplicationRoots = this.traeApplicationRoots(traeUsesChinaProfile)
+    const traeInstallRoots = this.traeInstallRoots()
 
     return [
       {
@@ -512,6 +540,12 @@ export class AgentMigrationService {
         commands: ['openclaw'],
         roots: [openClawRoot],
         workspaces: openClawWorkspaces,
+      },
+      {
+        id: 'workbuddy',
+        name: 'WorkBuddy',
+        commands: ['workbuddy'],
+        roots: [workBuddyRoot],
       },
       {
         id: 'claude-code',
@@ -533,6 +567,14 @@ export class AgentMigrationService {
         roots: cursorRoots,
       },
       {
+        id: 'trae',
+        name: 'Trae',
+        commands: ['trae', 'trae-cn'],
+        roots: traeRoots,
+        workspaces: traeApplicationRoots,
+        installRoots: traeInstallRoots,
+      },
+      {
         id: 'hermes-agent',
         name: 'Hermes Agent',
         commands: ['hermes'],
@@ -543,6 +585,20 @@ export class AgentMigrationService {
         name: 'DeepSeek TUI / CodeWhale',
         commands: ['codewhale', 'codew', 'deepseek', 'deepseek-tui'],
         roots: codeWhaleRoots,
+      },
+      {
+        id: 'kimi-code',
+        name: 'Kimi Code',
+        commands: ['kimi'],
+        roots: [kimiCodeRoot],
+        destinationRoots: [join(this.homeDir, '.agents')],
+      },
+      {
+        id: 'pi',
+        name: 'Pi',
+        commands: ['pi'],
+        roots: [piRoot],
+        destinationRoots: [join(this.homeDir, '.agents')],
       },
     ]
   }
@@ -573,6 +629,7 @@ export class AgentMigrationService {
       .find((candidate): candidate is string => Boolean(candidate)) ?? null
     const existingRoots = await this.existingPaths(context.roots)
     const existingWorkspaces = await this.existingPaths(context.workspaces ?? [])
+    const existingInstallRoots = await this.existingPaths(context.installRoots ?? [])
     const canonicalCyberConfigDir = await this.canonicalPath(this.cyberConfigDir)
     const items = new Map<string, AgentMigrationItem>()
 
@@ -649,6 +706,7 @@ export class AgentMigrationService {
         || executablePath
         || existingRoots.length > 0
         || existingWorkspaces.length > 0
+        || existingInstallRoots.length > 0
         || allItems.length > 0,
       ),
       executablePath,
@@ -709,6 +767,42 @@ export class AgentMigrationService {
         instructionFiles.push(...files.map(path => ({ path, recommended: true })))
         break
       }
+      case 'trae': {
+        for (const root of context.roots) {
+          globalSkillRoots.push(join(root, 'skills'))
+          memoryFiles.push({
+            path: join(root, 'memory', 'user_profile.md'),
+            recommended: true,
+          })
+          instructionFiles.push(
+            { path: join(root, 'user_rules.md'), recommended: true },
+            { path: join(root, 'rules', 'user_rules.md'), recommended: true },
+          )
+          const rootRules = await this.walkFiles(join(root, 'rules'), {
+            extensions: new Set(['.md']),
+            maxDepth: 3,
+            maxFiles: 100,
+          })
+          instructionFiles.push(...rootRules.map(path => ({ path, recommended: true })))
+        }
+        for (const applicationRoot of context.workspaces ?? []) {
+          const settingsRoot = join(applicationRoot, 'User', 'settings')
+          instructionFiles.push({
+            path: join(settingsRoot, 'user_rules.md'),
+            recommended: true,
+          })
+          const settingsRules = await this.walkFiles(settingsRoot, {
+            extensions: new Set(['.md']),
+            maxDepth: 3,
+            maxFiles: 100,
+          })
+          instructionFiles.push(...settingsRules
+            .filter(path => basename(path).toLowerCase().includes('rule')
+              || path.split(sep).some(part => part.toLowerCase() === 'rules'))
+            .map(path => ({ path, recommended: true })))
+        }
+        break
+      }
       case 'openclaw': {
         globalSkillRoots.push(join(context.roots[0]!, 'skills'), join(this.homeDir, '.agents', 'skills'))
         for (const workspace of context.workspaces ?? []) {
@@ -731,6 +825,25 @@ export class AgentMigrationService {
             })
           }
         }
+        break
+      }
+      case 'workbuddy': {
+        const root = context.roots[0]!
+        globalSkillRoots.push(join(root, 'skills'))
+        memoryFiles.push(
+          { path: join(root, 'MEMORY.md'), recommended: true },
+          { path: join(root, 'USER.md'), recommended: true },
+        )
+        const files = await this.walkFiles(join(root, 'memory'), {
+          extensions: new Set(['.md']),
+          maxDepth: 4,
+        })
+        memoryFiles.push(...files.map(path => ({ path, recommended: true })))
+        instructionFiles.push(
+          { path: join(root, 'SOUL.md'), recommended: true },
+          { path: join(root, 'IDENTITY.md') },
+          { path: join(root, 'AGENTS.md'), recommended: true },
+        )
         break
       }
       case 'hermes-agent':
@@ -767,6 +880,24 @@ export class AgentMigrationService {
           )
         }
         break
+      case 'kimi-code': {
+        const root = context.roots[0]!
+        globalSkillRoots.push(join(root, 'skills'), join(this.homeDir, '.agents', 'skills'))
+        instructionFiles.push(
+          { path: join(root, 'AGENTS.md'), recommended: true },
+          { path: join(this.homeDir, '.agents', 'AGENTS.md'), recommended: true },
+        )
+        break
+      }
+      case 'pi': {
+        const root = context.roots[0]!
+        globalSkillRoots.push(join(root, 'skills'), join(this.homeDir, '.agents', 'skills'))
+        instructionFiles.push(
+          { path: join(root, 'AGENTS.md'), recommended: true },
+          { path: join(root, 'APPEND_SYSTEM.md') },
+        )
+        break
+      }
     }
 
     for (const skillRoot of this.uniquePaths(globalSkillRoots)) {
@@ -834,6 +965,9 @@ export class AgentMigrationService {
     }
     if (agentId === 'codex') exactInstructions.push(join(projectPath, 'AGENTS.override.md'))
     if (agentId === 'cursor') exactInstructions.push(join(projectPath, '.cursorrules'))
+    if (agentId === 'trae') {
+      exactInstructions.push(join(projectPath, '.trae', 'rules', 'project_rules.md'))
+    }
     if (agentId === 'hermes-agent') {
       exactInstructions.unshift(join(projectPath, '.hermes.md'), join(projectPath, 'HERMES.md'))
     }
@@ -843,6 +977,14 @@ export class AgentMigrationService {
       exactInstructions.push(join(projectPath, '.codewhale', 'instructions.md'))
       exactInstructions.push(join(projectPath, '.deepseek', 'instructions.md'))
     }
+    if (agentId === 'workbuddy') {
+      exactInstructions.push(
+        join(projectPath, '.workbuddy', 'AGENTS.md'),
+        join(projectPath, '.workbuddy', 'SOUL.md'),
+      )
+    }
+    if (agentId === 'kimi-code') exactInstructions.push(join(projectPath, '.kimi-code', 'AGENTS.md'))
+    if (agentId === 'pi') exactInstructions.push(join(projectPath, '.pi', 'APPEND_SYSTEM.md'))
     for (const sourcePath of exactInstructions) {
       await addItem({
         agentId,
@@ -860,7 +1002,10 @@ export class AgentMigrationService {
       ? new Set(['CLAUDE.md', 'CLAUDE.local.md'])
       : agentId === 'codex'
         ? new Set(['AGENTS.md', 'AGENTS.override.md'])
+        : agentId === 'trae'
+          ? new Set(['AGENTS.md', 'CLAUDE.md', 'CLAUDE.local.md'])
         : agentId === 'cursor' || agentId === 'deepseek-tui'
+          || agentId === 'workbuddy' || agentId === 'kimi-code' || agentId === 'pi'
           ? new Set(['AGENTS.md', 'CLAUDE.md'])
           : agentId === 'hermes-agent'
             ? new Set(['AGENTS.md', 'CLAUDE.md', 'SOUL.md', '.cursorrules'])
@@ -893,10 +1038,18 @@ export class AgentMigrationService {
         ? [join(projectPath, '.agents', 'skills'), join(projectPath, '.codex', 'skills')]
         : agentId === 'cursor'
           ? [join(projectPath, '.cursor', 'skills'), join(projectPath, '.agents', 'skills')]
+        : agentId === 'trae'
+          ? [join(projectPath, '.trae', 'skills'), join(projectPath, '.agents', 'skills')]
         : agentId === 'openclaw'
           ? [join(projectPath, 'skills'), join(projectPath, '.agents', 'skills')]
+          : agentId === 'workbuddy'
+            ? [join(projectPath, '.workbuddy', 'skills')]
           : agentId === 'hermes-agent'
             ? [join(projectPath, '.hermes', 'skills')]
+            : agentId === 'kimi-code'
+              ? [join(projectPath, '.kimi-code', 'skills'), join(projectPath, '.agents', 'skills')]
+              : agentId === 'pi'
+                ? [join(projectPath, '.pi', 'skills'), join(projectPath, '.agents', 'skills')]
             : [
                 join(projectPath, '.codewhale', 'skills'),
                 join(projectPath, '.deepseek', 'skills'),
@@ -925,8 +1078,10 @@ export class AgentMigrationService {
       ? [join(projectPath, '.claude', 'rules')]
       : agentId === 'codex'
         ? [join(projectPath, '.agents', 'rules')]
-        : agentId === 'cursor'
+      : agentId === 'cursor'
           ? [join(projectPath, '.cursor', 'rules')]
+        : agentId === 'trae'
+          ? [join(projectPath, '.trae', 'rules')]
         : agentId === 'deepseek-tui'
           ? [join(projectPath, '.codewhale', 'rules'), join(projectPath, '.deepseek', 'rules')]
           : []
@@ -959,8 +1114,26 @@ export class AgentMigrationService {
         })
       }
     }
+    if (agentId === 'trae') {
+      for (const sourcePath of await this.discoverNestedTraeRuleFiles(projectPath)) {
+        await addItem({
+          agentId,
+          kind: 'instruction',
+          scope: 'project',
+          name: basename(sourcePath),
+          sourcePath,
+          destinationPath: this.projectRuleDestination(agentId, projectPath, sourcePath),
+          projectPath,
+          recommended: true,
+        })
+      }
+    }
 
-    for (const memoryDir of project.sourceMemoryDirs ?? []) {
+    const projectMemoryDirs = this.uniquePaths([
+      ...(project.sourceMemoryDirs ?? []),
+      ...(agentId === 'workbuddy' ? [join(projectPath, '.workbuddy', 'memory')] : []),
+    ])
+    for (const memoryDir of projectMemoryDirs) {
       const files = await this.walkFiles(memoryDir, { extensions: new Set(['.md']), maxDepth: 5 })
       for (const sourcePath of files) {
         await addItem({
@@ -979,12 +1152,17 @@ export class AgentMigrationService {
 
   private async discoverProjects(context: AgentScanContext): Promise<SourceProject[]> {
     const projects = new Map<string, SourceProject>()
+    const projectPathKeys = new Map<string, Set<string>>()
     const canonicalCyberConfigDir = await this.canonicalPath(this.cyberConfigDir)
     const add = async (rawPath: string, lastSeenAt: string | null, sourceMemoryDir?: string) => {
       const expanded = this.expandHome(rawPath.trim())
       if (!expanded || !isAbsolute(expanded)) return
       const normalized = await this.canonicalPath(expanded)
       if (this.isInside(normalized, canonicalCyberConfigDir)) return
+      const pathKeys = projectPathKeys.get(normalized) ?? new Set<string>()
+      pathKeys.add(sanitizePath(expanded).toLowerCase())
+      pathKeys.add(sanitizePath(normalized).toLowerCase())
+      projectPathKeys.set(normalized, pathKeys)
       const existing = projects.get(normalized)
       const next: SourceProject = existing ?? { path: normalized, lastSeenAt }
       if (!next.lastSeenAt || (lastSeenAt && lastSeenAt > next.lastSeenAt)) next.lastSeenAt = lastSeenAt
@@ -1051,8 +1229,11 @@ export class AgentMigrationService {
       return [...projects.values()]
     }
 
-    if (context.id === 'cursor') {
-      for (const root of context.roots) {
+    if (context.id === 'cursor' || context.id === 'trae') {
+      const editorRoots = context.id === 'trae'
+        ? context.workspaces ?? []
+        : context.roots
+      for (const root of editorRoots) {
         const workspaceStore = join(root, 'User', 'workspaceStorage')
         let workspaceEntries: import('fs').Dirent[] = []
         try {
@@ -1086,6 +1267,41 @@ export class AgentMigrationService {
       }
     }
 
+    if (context.id === 'trae') {
+      for (const root of context.roots) {
+        const memoryProjectsRoot = join(root, 'memory', 'projects')
+        let memoryEntries: import('fs').Dirent[] = []
+        try {
+          memoryEntries = await readdir(memoryProjectsRoot, { withFileTypes: true })
+        } catch {
+          continue
+        }
+        for (const entry of memoryEntries
+          .filter(candidate => candidate.isDirectory() && !candidate.isSymbolicLink())
+          .slice(0, MAX_PROJECTS * 2)) {
+          const memoryDir = join(memoryProjectsRoot, entry.name)
+          const memoryFile = join(memoryDir, 'project_memory.md')
+          if (!(await this.safeExistingFile(memoryFile))) continue
+          const knownProject = [...projects.values()].find(project =>
+            projectPathKeys.get(project.path)?.has(entry.name.toLowerCase()))
+          let projectPath = knownProject?.path ?? ''
+          if (!projectPath) {
+            const source = await this.readPrefix(memoryFile)
+            projectPath = this.extractWorkDir(source) ?? ''
+          }
+          if (!projectPath) {
+            const decodedPath = entry.name.replace(/-/g, sep)
+            if (isAbsolute(decodedPath) && await this.isDirectory(decodedPath)) {
+              projectPath = decodedPath
+            }
+          }
+          if (projectPath) {
+            await add(projectPath, await this.pathModifiedAt(memoryFile), memoryDir)
+          }
+        }
+      }
+    }
+
     return [...projects.values()]
   }
 
@@ -1109,6 +1325,37 @@ export class AgentMigrationService {
           files.push(...await this.walkFiles(join(directory, 'rules'), {
             extensions: new Set(['.md', '.mdc']),
             maxDepth: 6,
+            maxFiles: 500 - files.length,
+          }))
+          continue
+        }
+        await walk(directory, depth + 1)
+      }
+    }
+    await walk(projectPath, 0)
+    return this.uniquePaths(files).slice(0, 500)
+  }
+
+  private async discoverNestedTraeRuleFiles(projectPath: string): Promise<string[]> {
+    const files: string[] = []
+    let visitedEntries = 0
+    const walk = async (current: string, depth: number): Promise<void> => {
+      if (depth > 6 || files.length >= 500 || visitedEntries >= MAX_SCAN_ENTRIES) return
+      let entries: import('fs').Dirent[] = []
+      try {
+        entries = await readdir(current, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        visitedEntries += 1
+        if (visitedEntries > MAX_SCAN_ENTRIES) break
+        if (!entry.isDirectory() || entry.isSymbolicLink() || this.shouldSkipDirectory(entry.name)) continue
+        const directory = join(current, entry.name)
+        if (entry.name === '.trae') {
+          files.push(...await this.walkFiles(join(directory, 'rules'), {
+            extensions: new Set(['.md']),
+            maxDepth: 3,
             maxFiles: 500 - files.length,
           }))
           continue
@@ -1200,6 +1447,18 @@ export class AgentMigrationService {
             format: 'Cursor Agent Skill',
           }
         }
+        case 'trae': {
+          const skillRoot = item.scope === 'global'
+            ? join(root, 'skills')
+            : join(projectPath, '.trae', 'skills')
+          return {
+            path: join(skillRoot, this.safeName(item.name)),
+            root: item.scope === 'global' ? root : projectPath,
+            mode: 'skill-copy',
+            adaptation: 'native',
+            format: 'Trae Agent Skill',
+          }
+        }
         case 'openclaw': {
           const workspace = target.workspaces?.[0] ?? join(root, 'workspace')
           const skillRoot = item.scope === 'global' ? join(root, 'skills') : join(workspace, 'skills')
@@ -1232,6 +1491,42 @@ export class AgentMigrationService {
             mode: 'skill-copy',
             adaptation: 'native',
             format: 'CodeWhale Agent Skill',
+          }
+        }
+        case 'workbuddy': {
+          const skillRoot = item.scope === 'global'
+            ? join(root, 'skills')
+            : join(projectPath, '.workbuddy', 'skills')
+          return {
+            path: join(skillRoot, this.safeName(item.name)),
+            root: item.scope === 'global' ? root : projectPath,
+            mode: 'skill-copy',
+            adaptation: 'native',
+            format: 'WorkBuddy Agent Skill',
+          }
+        }
+        case 'kimi-code': {
+          const skillRoot = item.scope === 'global'
+            ? join(root, 'skills')
+            : join(projectPath, '.kimi-code', 'skills')
+          return {
+            path: join(skillRoot, this.safeName(item.name)),
+            root: item.scope === 'global' ? root : projectPath,
+            mode: 'skill-copy',
+            adaptation: 'native',
+            format: 'Kimi Code Agent Skill',
+          }
+        }
+        case 'pi': {
+          const skillRoot = item.scope === 'global'
+            ? join(root, 'skills')
+            : join(projectPath, '.pi', 'skills')
+          return {
+            path: join(skillRoot, this.safeName(item.name)),
+            root: item.scope === 'global' ? root : projectPath,
+            mode: 'skill-copy',
+            adaptation: 'native',
+            format: 'Pi Agent Skill',
           }
         }
       }
@@ -1293,6 +1588,28 @@ export class AgentMigrationService {
             format: 'Cursor project MDC rule (memory conversion)',
           }
         }
+        case 'trae':
+          return item.scope === 'global'
+            ? {
+                path: join(root, 'memory', 'user_profile.md'),
+                root,
+                mode: 'markdown-merge',
+                adaptation: 'native',
+                format: 'Trae global memory (user_profile.md)',
+              }
+            : {
+                path: join(
+                  root,
+                  'memory',
+                  'projects',
+                  sanitizePath(projectPath),
+                  'project_memory.md',
+                ),
+                root,
+                mode: 'markdown-merge',
+                adaptation: 'native',
+                format: 'Trae project memory (project_memory.md)',
+              }
         case 'openclaw': {
           const workspace = target.workspaces?.[0] ?? join(root, 'workspace')
           return item.scope === 'global'
@@ -1356,6 +1673,50 @@ export class AgentMigrationService {
             compatibilityNote: 'CodeWhale must have its memory feature enabled for this file to be injected.',
           }
         }
+        case 'workbuddy':
+          return item.scope === 'global'
+            ? {
+                path: join(root, 'MEMORY.md'),
+                root,
+                mode: 'markdown-merge',
+                adaptation: 'native',
+                format: 'WorkBuddy global memory (MEMORY.md)',
+              }
+            : {
+                path: join(projectPath, '.workbuddy', 'memory', 'MEMORY.md'),
+                root: projectPath,
+                mode: 'markdown-merge',
+                adaptation: 'native',
+                format: 'WorkBuddy workspace memory (MEMORY.md)',
+              }
+        case 'kimi-code': {
+          const skillRoot = item.scope === 'global'
+            ? join(root, 'skills')
+            : join(projectPath, '.kimi-code', 'skills')
+          const skillName = this.safeName(`imported-memory-${sourceName}-${stem}`)
+          return {
+            path: join(skillRoot, skillName, 'SKILL.md'),
+            root: item.scope === 'global' ? root : projectPath,
+            mode: 'agent-skill',
+            adaptation: 'converted',
+            format: 'Kimi Code Agent Skill (memory conversion)',
+            compatibilityNote: 'Kimi Code has no portable long-term memory file; the content is converted to an on-demand Skill.',
+          }
+        }
+        case 'pi': {
+          const skillRoot = item.scope === 'global'
+            ? join(root, 'skills')
+            : join(projectPath, '.pi', 'skills')
+          const skillName = this.safeName(`imported-memory-${sourceName}-${stem}`)
+          return {
+            path: join(skillRoot, skillName, 'SKILL.md'),
+            root: item.scope === 'global' ? root : projectPath,
+            mode: 'agent-skill',
+            adaptation: 'converted',
+            format: 'Pi Agent Skill (memory conversion)',
+            compatibilityNote: 'Pi has no portable long-term memory file; the content is converted to an on-demand Skill.',
+          }
+        }
       }
     }
 
@@ -1404,6 +1765,28 @@ export class AgentMigrationService {
           format: 'Cursor project MDC rule',
         }
       }
+      case 'trae': {
+        if (item.scope === 'global') {
+          const globalRulePath = await this.traeGlobalRulePath(target)
+          return {
+            path: globalRulePath,
+            root: dirname(globalRulePath),
+            mode: 'markdown-merge',
+            adaptation: 'native',
+            format: 'Trae global user rule',
+          }
+        }
+        const ruleFileName = `${this.safeName(`${sourceName}-${stem}`)
+          .replace(/[._]+/g, '-')
+          .replace(/-+/g, '-')}.md`
+        return {
+          path: join(projectPath, '.trae', 'rules', 'imports', sourceName, ruleFileName),
+          root: projectPath,
+          mode: 'trae-rule',
+          adaptation: 'native',
+          format: 'Trae project rule',
+        }
+      }
       case 'openclaw': {
         const workspace = target.workspaces?.[0] ?? join(root, 'workspace')
         return {
@@ -1450,6 +1833,38 @@ export class AgentMigrationService {
               adaptation: 'native',
               format: 'CodeWhale project rule',
             }
+      case 'workbuddy':
+        return item.scope === 'global'
+          ? {
+              path: join(root, 'SOUL.md'),
+              root,
+              mode: 'markdown-merge',
+              adaptation: 'native',
+              format: 'WorkBuddy global guidance (SOUL.md)',
+            }
+          : {
+              path: join(projectPath, '.workbuddy', 'AGENTS.md'),
+              root: projectPath,
+              mode: 'markdown-merge',
+              adaptation: 'native',
+              format: 'WorkBuddy workspace instructions',
+            }
+      case 'kimi-code':
+        return {
+          path: item.scope === 'global' ? join(root, 'AGENTS.md') : join(projectPath, '.kimi-code', 'AGENTS.md'),
+          root: item.scope === 'global' ? root : projectPath,
+          mode: 'markdown-merge',
+          adaptation: 'native',
+          format: 'Kimi Code AGENTS.md instructions',
+        }
+      case 'pi':
+        return {
+          path: item.scope === 'global' ? join(root, 'AGENTS.md') : join(projectPath, 'AGENTS.md'),
+          root: item.scope === 'global' ? root : projectPath,
+          mode: 'markdown-merge',
+          adaptation: 'native',
+          format: 'Pi AGENTS.md instructions',
+        }
     }
   }
 
@@ -1521,6 +1936,36 @@ export class AgentMigrationService {
     return join(codeWhaleRoot, 'memory.md')
   }
 
+  private async traeGlobalRulePath(context: AgentScanContext): Promise<string> {
+    const configured = this.env.TRAE_USER_RULES_PATH
+      ? this.configuredAbsolutePath(this.env.TRAE_USER_RULES_PATH)
+      : null
+    const legacyCandidates = this.uniquePaths([
+      configured ?? '',
+      ...(context.workspaces ?? []).map(root => join(root, 'User', 'settings', 'user_rules.md')),
+      ...context.roots.flatMap(root => [
+        join(root, 'user_rules.md'),
+        join(root, 'rules', 'user_rules.md'),
+      ]),
+    ])
+    for (const candidate of legacyCandidates) {
+      if (await this.safeExistingFile(candidate)) return candidate
+    }
+
+    for (const applicationRoot of context.workspaces ?? []) {
+      const settingsRoot = join(applicationRoot, 'User', 'settings')
+      const rules = (await this.walkFiles(settingsRoot, {
+        extensions: new Set(['.md']),
+        maxDepth: 3,
+        maxFiles: 100,
+      })).filter(path => basename(path).toLowerCase().includes('rule')
+        || path.split(sep).some(part => part.toLowerCase() === 'rules'))
+      if (rules[0]) return join(dirname(rules[0]), 'cybercode-imports.md')
+    }
+
+    return legacyCandidates[0]!
+  }
+
   private async migrateItem(
     item: AgentMigrationItem,
     agentName: string,
@@ -1547,6 +1992,11 @@ export class AgentMigrationService {
       }
       case 'cursor-mdc': {
         const content = this.convertToCursorRule(agentName, item, raw)
+        const changed = await this.writeImportedFile(item.destinationPath, content, backupRoot)
+        return { changed, destinationPath: item.destinationPath, message: item.compatibilityNote }
+      }
+      case 'trae-rule': {
+        const content = this.convertToTraeRule(agentName, item, raw)
         const changed = await this.writeImportedFile(item.destinationPath, content, backupRoot)
         return { changed, destinationPath: item.destinationPath, message: item.compatibilityNote }
       }
@@ -1736,6 +2186,16 @@ export class AgentMigrationService {
       `description: ${JSON.stringify(description)}`,
       'globs:',
       `alwaysApply: ${item.kind === 'instruction' ? 'true' : 'false'}`,
+      '---',
+      '',
+      this.wrapImportedMarkdown(agentName, item, this.stripFrontmatter(raw)),
+    ].join('\n')
+  }
+
+  private convertToTraeRule(agentName: string, item: AgentMigrationItem, raw: string): string {
+    return [
+      '---',
+      'alwaysApply: true',
       '---',
       '',
       this.wrapImportedMarkdown(agentName, item, this.stripFrontmatter(raw)),
@@ -1951,6 +2411,65 @@ export class AgentMigrationService {
       }
     }
     return this.uniquePaths(roots)
+  }
+
+  private traeApplicationRoots(chinaProfile: boolean): string[] {
+    const configured = this.env.TRAE_USER_DATA_DIR
+      ? this.expandHome(this.env.TRAE_USER_DATA_DIR)
+      : ''
+    const productNames = chinaProfile
+      ? ['Trae CN', 'Trae', 'trae-cn', 'trae']
+      : ['Trae', 'Trae CN', 'trae', 'trae-cn']
+    if (this.platform === 'darwin') {
+      const applicationSupport = join(this.homeDir, 'Library', 'Application Support')
+      return this.uniquePaths([
+        configured,
+        ...productNames.map(name => join(applicationSupport, name)),
+      ])
+    }
+    if (this.platform === 'win32') {
+      const applicationData = this.env.APPDATA || join(this.homeDir, 'AppData', 'Roaming')
+      return this.uniquePaths([
+        configured,
+        ...productNames.map(name => join(applicationData, name)),
+      ])
+    }
+    const configHome = this.env.XDG_CONFIG_HOME
+      ? this.expandHome(this.env.XDG_CONFIG_HOME)
+      : join(this.homeDir, '.config')
+    return this.uniquePaths([
+      configured,
+      ...productNames.map(name => join(configHome, name)),
+    ])
+  }
+
+  private traeInstallRoots(): string[] {
+    if (this.platform === 'darwin') {
+      return this.uniquePaths([
+        '/Applications/Trae.app',
+        '/Applications/Trae CN.app',
+        join(this.homeDir, 'Applications', 'Trae.app'),
+        join(this.homeDir, 'Applications', 'Trae CN.app'),
+      ])
+    }
+    if (this.platform === 'win32') {
+      const localPrograms = this.env.LOCALAPPDATA
+        ? join(this.env.LOCALAPPDATA, 'Programs')
+        : ''
+      const programFiles = this.env.ProgramFiles || this.env.PROGRAMFILES || ''
+      return this.uniquePaths([
+        localPrograms ? join(localPrograms, 'Trae') : '',
+        localPrograms ? join(localPrograms, 'Trae CN') : '',
+        programFiles ? join(programFiles, 'Trae') : '',
+        programFiles ? join(programFiles, 'Trae CN') : '',
+      ])
+    }
+    return this.uniquePaths([
+      '/opt/Trae',
+      '/opt/trae',
+      '/usr/share/trae',
+      '/usr/local/share/trae',
+    ])
   }
 
   private async discoverSkillFiles(root: string): Promise<string[]> {

@@ -1,7 +1,7 @@
 # Computer Use Guide
 
 
-> **Implementation Note**: This feature is an independent implementation heavily inspired by the Computer Use design in Claude Code. The underlying operation layer uses a Python bridge to handle all system interactions — `pyautogui` + `mss` + `pyobjc` on macOS, `pyautogui` + `mss` + `win32gui` + `psutil` on Windows — enabling anyone to run Computer Use on macOS and Windows.
+> **Implementation Note**: This feature is an independent implementation inspired by the Computer Use design in Claude Code. On macOS, screenshots are owned by the signed `CyberCode Computer Use` native helper. Linux uses a bundled Rust helper with X11 capture backends or the XDG Desktop Portal. Mouse, keyboard, and app management use the managed Python bridge, while Windows adds Win32 APIs. These components are bundled and configured automatically.
 
 ---
 
@@ -43,16 +43,17 @@ Computer Use allows AI models to **directly control your computer** — taking s
 
 | Platform | Architecture | Status | Notes |
 |----------|-------------|--------|-------|
-| macOS | Apple Silicon (M1/M2/M3/M4) | ✅ Fully supported | Recommended |
-| macOS | Intel x86_64 | ✅ Fully supported | |
-| Windows | Any | ⚠️ Theoretically possible | Core libs (`pyautogui` + `mss`) are cross-platform, but `pyobjc` parts (app management) need to be replaced with `win32com`. Not yet adapted |
-| Linux | Any | ⚠️ Theoretically possible | Same as above — `pyobjc` needs to be replaced with `wmctrl` + `xdotool`. Not yet adapted |
+| macOS | Apple Silicon (M1/M2/M3/M4) | ✅ Fully supported | Bundled signed capture helper |
+| macOS | Intel x86_64 | ✅ Fully supported | Bundled signed capture helper |
+| Windows | x64 | ✅ Fully supported | Uses `win32gui`, `psutil`, `pyperclip`, and `screeninfo` for platform integration |
+| Linux | x86_64 | ✅ Supported | Capture and input on X11/XWayland; native Wayland capture through the system portal, with silent global input restricted by the OS |
 
 ### Requirements
 
-- [Bun](https://bun.sh) >= 1.1.0
-- Python >= 3.8 (venv and dependencies are auto-installed on first use)
+- **Desktop users:** no separate Bun or Python installation. CyberCode prepares its private platform runtime in the background.
+- **Source contributors:** [Bun](https://bun.sh) >= 1.1.0.
 - macOS permissions: Accessibility + Screen Recording
+- Linux: no Python installation; Wayland may show a system confirmation on first capture, and X11/XWayland input requires a valid `DISPLAY`.
 
 ---
 
@@ -80,12 +81,18 @@ Computer Use operates through a **screenshot → analyze → act** feedback loop
 │  - Coordinate transformation                        │
 │  - Tool dispatch → executor                         │
 └───────────────┬────────────────────────────────────┘
-                │ callPythonHelper()
+                │ Hybrid Bridge
                 ▼
 ┌────────────────────────────────────────────────────┐
-│  Python Bridge (runtime/mac_helper.py)              │
-│  pyautogui.click(756, 342)   ← mouse control        │
-│  mss.grab(monitor)           ← screenshot            │
+│  macOS: CyberCode Computer Use.app                  │
+│         CoreGraphics capture + stable TCC identity  │
+│  Linux: cybercode-computer-use                      │
+│         X11 backend / XDG Desktop Portal capture    │
+│                                                    │
+│  Python Bridge: mac / win / linux_helper.py         │
+│  pyautogui.click(756, 342)   ← mouse/keyboard       │
+│  Windows: mss.grab(monitor)  ← screenshot           │
+│  Linux: X11/XWayland         ← mouse/keyboard       │
 │  NSWorkspace.open(bundleId)  ← app management        │
 └────────────────────────────────────────────────────┘
 ```
@@ -96,21 +103,15 @@ Computer Use operates through a **screenshot → analyze → act** feedback loop
 
 ## Quick Start
 
-### 1. Install dependencies
+### 1. Prepare the private runtime automatically
 
-```bash
-bun install
-```
+In the desktop app, open **Settings → Computer Use** and select **Prepare Automatically**. CyberCode downloads the private runtime matching the current operating system and CPU architecture, verifies it, and configures it in the background. No system Python, PATH changes, or administrator access are required.
 
-### 2. Ensure Python 3 is available
+Downloads resume after interruptions and automatically try mirror routes when the primary GitHub route is unavailable. The CLI uses the same preparation flow on its first Computer Use invocation.
 
-```bash
-python3 --version  # >= 3.8 required
-```
+> Contributors running from source still need `bun install`. Existing `.runtime/venv/` installations remain compatible and are not forced to download again.
 
-> Python dependencies are **automatically installed** into `.runtime/venv/` on first Computer Use invocation.
-
-### 3. Grant macOS permissions
+### 2. Grant macOS permissions
 
 **Accessibility:**
 
@@ -118,7 +119,7 @@ python3 --version  # >= 3.8 required
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 ```
 
-Add your **terminal app** (iTerm, Terminal, Ghostty, etc.) to the allow list.
+Desktop users should authorize **CyberCode**. Source and CLI users should authorize their terminal app (iTerm, Terminal, Ghostty, and so on).
 
 **Screen Recording:**
 
@@ -126,7 +127,9 @@ Add your **terminal app** (iTerm, Terminal, Ghostty, etc.) to the allow list.
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 ```
 
-Add your terminal app as well. You may need to **restart your terminal** after granting permission.
+Desktop users should allow **CyberCode Computer Use**. The first screenshot attempt, or the Open Screen Recording Settings button, registers the helper automatically. Retry after granting access. Its fixed bundle identifier lets properly signed releases retain permission across app updates.
+
+Only source or CLI runs without the native helper need to authorize the terminal application.
 
 ### 4. Start
 
@@ -184,13 +187,22 @@ The official Claude Code gates Computer Use behind three layers:
 | Remote config | GrowthBook `tengu_malort_pedway` | Same — no remote dependency |
 | Default-disabled | `isDefaultDisabledBuiltin('computer-use')` | Returns `false` |
 
-### Python Bridge
+### Hybrid Bridge
 
-On first invocation, the bridge automatically:
-1. Creates a Python virtual environment (`.runtime/venv/`)
-2. Installs pip
-3. Installs dependencies (`mss`, `Pillow`, `pyautogui`, `pyobjc-*`)
-4. Validates via SHA256 hash (only reinstalls when `requirements.txt` changes)
+On macOS, display enumeration, full-screen capture, zoom capture, and passive
+Screen Recording checks route through the native helper before Python bootstrap.
+The helper is installed under `~/.cyber/computer-use/` with the fixed bundle ID
+`com.cybercode.computer-use`. Mouse, keyboard, clipboard, and app operations
+continue through the managed Python runtime. Linux routes screen-pixel commands
+through its bundled Rust helper, using X11 tools when available and the XDG
+Desktop Portal on Wayland. Windows keeps the Python capture path.
+
+On first invocation, the bridge automatically selects a platform asset, downloads
+it from the primary or mirror route with resume support, verifies its SHA-256
+checksum, validates Python and required imports, then atomically activates it.
+The runtime already contains CPython and all required packages, so it does not
+touch the system PATH or require administrator access. Existing `.runtime/venv/`
+environments remain compatible.
 
 ---
 
@@ -204,9 +216,18 @@ Extracted `computer-use-swift.node` and `computer-use-input.node` from the insta
 
 Stub packages allowed compilation but provided no actual functionality.
 
-### Approach 3: Python Bridge ✅ (current)
+### Approach 3: Python Bridge
 
-Replaced all native module calls with Python subprocess calls via `callPythonHelper()`. Zero binary dependencies, auto-bootstrapping, full functionality on any macOS.
+Replaced all native module calls with Python subprocess calls via `callPythonHelper()`. The operation layer is readable and portable, while CyberCode distributes a private runtime for macOS ARM64, macOS x64, Windows x64, and Linux x64.
+
+### Approach 4: Signed native capture helper + Python input ✅ (current)
+
+macOS screen pixels now come from the standalone `CyberCode Computer Use.app`.
+Its stable bundle ID and release Team signature keep Screen Recording permission
+attached to the helper rather than a transient Bun or Python process. Browser
+page screenshots still prefer `agent-browser` and do not require desktop Screen
+Recording permission. Linux ships a compact Rust helper for X11 and XDG Desktop
+Portal capture, while input remains on the managed X11/XWayland bridge.
 
 ---
 
@@ -214,10 +235,10 @@ Replaced all native module calls with Python subprocess calls via `callPythonHel
 
 | Limitation | Description |
 |------------|-------------|
-| macOS only | Windows/Linux need `pyobjc` replacements |
+| Native Wayland input is restricted | Wayland does not permit silent global mouse and keyboard injection; portal capture works, while input is available in X11/XWayland sessions |
 | No global Escape abort | Original used CGEventTap; use `Ctrl+C` instead |
 | No auto-hide windows | Original's `prepareDisplay` relied on Swift |
-| Slightly higher latency | ~100ms Python process startup overhead per call |
+| Input subprocess latency | Mouse and keyboard still use Python subprocesses; screenshots use the lightweight native helper |
 
 ---
 
@@ -238,3 +259,5 @@ Replaced all native module calls with Python subprocess calls via `callPythonHel
 | [mss](https://github.com/BoboTiG/python-mss) | Screenshot capture |
 | [Pillow](https://github.com/python-pillow/Pillow) | Image processing and compression |
 | [pyobjc](https://github.com/ronaldoussoren/pyobjc) | macOS Cocoa/Quartz framework bindings |
+| [ashpd](https://github.com/bilelmoussaoui/ashpd) | Rust bindings for the Linux XDG Desktop Portal |
+| [XDG Desktop Portal Screenshot](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Screenshot.html) | Standard Wayland screenshot channel |

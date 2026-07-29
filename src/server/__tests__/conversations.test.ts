@@ -5,7 +5,7 @@
  * WebSocket 集成测试验证消息从客户端经过服务端到达 CLI 的完整流转。
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
+import { describe, it, expect, beforeAll, afterAll, setDefaultTimeout } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
@@ -14,6 +14,8 @@ import { ConversationService, conversationService } from '../services/conversati
 import { SessionService } from '../services/sessionService.js'
 import { ProviderService } from '../services/providerService.js'
 import { PROJECT_MEMORY_CONTEXT_TAG } from '../../sessionSearch/projectMemoryContext.js'
+
+setDefaultTimeout(20_000)
 
 // ============================================================================
 // ConversationService unit tests
@@ -725,7 +727,7 @@ describe('WebSocket Chat Integration', () => {
     server = startServer(port, '127.0.0.1')
     baseUrl = `http://127.0.0.1:${port}`
     wsUrl = `ws://127.0.0.1:${port}`
-  })
+  }, 20_000)
 
   afterAll(async () => {
     server?.stop()
@@ -748,7 +750,7 @@ describe('WebSocket Chat Integration', () => {
       delete process.env.CLAUDE_CONFIG_DIR
     }
     ProviderService.setServerPort(originalProviderServerPort)
-  })
+  }, 20_000)
 
   it('should connect and receive connected event', async () => {
     const messages: any[] = []
@@ -774,6 +776,43 @@ describe('WebSocket Chat Integration', () => {
 
     expect(messages[0].type).toBe('connected')
     expect(messages[0].sessionId).toBe('chat-test-1')
+  })
+
+  it('should reject an unavailable route before changing the session runtime', async () => {
+    const sessionId = `invalid-route-${crypto.randomUUID()}`
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+
+    const error = await new Promise<any>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        ws.close()
+        reject(new Error(`Timed out waiting for invalid route rejection for ${sessionId}`))
+      }, 5000)
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string)
+        if (message.type === 'connected') {
+          ws.send(JSON.stringify({
+            type: 'set_runtime_config',
+            routeId: 'route-that-does-not-exist',
+            modelId: 'spoofed-route-model',
+            contextWindow: 99_000_000,
+          }))
+        }
+        if (message.type === 'error') {
+          clearTimeout(timeout)
+          ws.close()
+          resolve(message)
+        }
+      }
+      ws.onerror = () => {
+        clearTimeout(timeout)
+        ws.close()
+        reject(new Error(`WebSocket error for invalid route ${sessionId}`))
+      }
+    })
+
+    expect(error.code).toBe('RUNTIME_CONFIG_INVALID')
+    expect(error.message).toContain('Route is unavailable')
+    expect(conversationService.hasSession(sessionId)).toBe(false)
   })
 
   it('should handle stop_generation and return idle status', async () => {
@@ -803,6 +842,128 @@ describe('WebSocket Chat Integration', () => {
     })
 
     expect(messages.some((m) => m.type === 'status' && m.state === 'idle')).toBe(true)
+    expect(messages).toContainEqual({
+      type: 'generation_stopped',
+      forced: false,
+    })
+  })
+
+  it('should confirm an active stop and suppress late output from the cancelled turn', async () => {
+    await withMockStreamDelay(750, async () => {
+      const sessionId = `chat-stop-active-${crypto.randomUUID()}`
+      const messages: any[] = []
+      const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+      let stopSent = false
+
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          ws.close()
+          reject(new Error(`Timed out waiting for active stop confirmation for ${sessionId}`))
+        }, 10_000)
+
+        ws.onmessage = (event) => {
+          const message = JSON.parse(event.data as string)
+          messages.push(message)
+          if (message.type === 'connected') {
+            ws.send(JSON.stringify({
+              type: 'user_message',
+              content: 'Start a delayed browser-like task',
+            }))
+          } else if (message.type === 'content_start' && !stopSent) {
+            stopSent = true
+            ws.send(JSON.stringify({ type: 'stop_generation' }))
+          } else if (message.type === 'generation_stopped') {
+            setTimeout(() => {
+              clearTimeout(timeout)
+              ws.close()
+              resolve()
+            }, 1_700)
+          }
+        }
+        ws.onerror = () => {
+          clearTimeout(timeout)
+          ws.close()
+          reject(new Error(`WebSocket error while stopping ${sessionId}`))
+        }
+      })
+
+      expect(messages).toContainEqual({
+        type: 'generation_stopped',
+        forced: false,
+      })
+      expect(messages.filter((message) => message.type === 'message_complete')).toHaveLength(1)
+      expect(messages.some((message) =>
+        message.type === 'content_delta' &&
+        typeof message.text === 'string' &&
+        message.text.includes('Echo:'),
+      )).toBe(false)
+      conversationService.stopSession(sessionId)
+    })
+  })
+
+  it('should not dispatch a turn stopped while the CLI is still starting', async () => {
+    const sessionId = `chat-stop-startup-${crypto.randomUUID()}`
+    const originalStartSession = conversationService.startSession.bind(conversationService)
+    let releaseStartup!: () => void
+    let markStartupReached!: () => void
+    let markStartupFinished!: () => void
+    const startupGate = new Promise<void>((resolve) => {
+      releaseStartup = resolve
+    })
+    const startupReached = new Promise<void>((resolve) => {
+      markStartupReached = resolve
+    })
+    const startupFinished = new Promise<void>((resolve) => {
+      markStartupFinished = resolve
+    })
+    conversationService.startSession = (async function patchedStartSession(
+      ...args: Parameters<typeof conversationService.startSession>
+    ) {
+      markStartupReached()
+      await startupGate
+      await originalStartSession(...args)
+      markStartupFinished()
+    }) as typeof conversationService.startSession
+
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+    const stopConfirmed = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Timed out waiting for startup stop confirmation for ${sessionId}`))
+      }, 10_000)
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string)
+        if (message.type === 'connected') {
+          ws.send(JSON.stringify({
+            type: 'user_message',
+            content: 'This message must never reach the CLI',
+          }))
+        } else if (message.type === 'generation_stopped') {
+          clearTimeout(timeout)
+          resolve()
+        }
+      }
+      ws.onerror = () => {
+        clearTimeout(timeout)
+        reject(new Error(`WebSocket error while stopping startup for ${sessionId}`))
+      }
+    })
+
+    try {
+      await startupReached
+      ws.send(JSON.stringify({ type: 'stop_generation' }))
+      await stopConfirmed
+      releaseStartup()
+      await startupFinished
+      await new Promise((resolve) => setTimeout(resolve, 100))
+
+      const inboundPath = path.join(mockSdkInboundDir, `${sessionId}.jsonl`)
+      expect(await fs.stat(inboundPath).then(() => true).catch(() => false)).toBe(false)
+    } finally {
+      releaseStartup()
+      conversationService.startSession = originalStartSession
+      conversationService.stopSession(sessionId)
+      ws.close()
+    }
   })
 
   it('should send user_message and receive streamed SDK response', async () => {

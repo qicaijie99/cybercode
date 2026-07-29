@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { PointerEventHandler } from 'react'
 import type { UIMessage } from '../../types/chat'
 import { Icon } from '../shared/Icon'
 import { ToolCallBlock } from './ToolCallBlock'
@@ -11,6 +12,8 @@ type Props = {
   resultMap: Map<string, ToolResult>
   childToolCallsByParent?: Map<string, ToolCall[]>
   isActive?: boolean
+  onPointerEnter?: PointerEventHandler<HTMLDivElement>
+  onPointerLeave?: PointerEventHandler<HTMLDivElement>
 }
 
 export function MessageExecutionLog({
@@ -18,11 +21,17 @@ export function MessageExecutionLog({
   resultMap,
   childToolCallsByParent = new Map(),
   isActive = true,
+  onPointerEnter,
+  onPointerLeave,
 }: Props) {
   if (toolCalls.length === 0) return null
 
   return (
-    <div className="mt-2.5 min-w-full max-h-[150px] overflow-y-auto rounded-[10px] bg-[var(--color-surface-container-low)] px-2.5 py-1 mb-3"
+    <div
+      data-message-hover-trigger
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      className="mt-2.5 min-w-full max-h-[150px] overflow-y-auto rounded-[10px] bg-[var(--color-surface-container-low)] px-2.5 py-1 mb-3"
       style={{ scrollbarWidth: 'thin' }}
     >
       {toolCalls.map((tc) => (

@@ -1,15 +1,18 @@
-import { useState, useEffect, useCallback, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { useAdapterStore } from '../stores/adapterStore'
+import { adaptersApi } from '../api/adapters'
+import type { AdapterFileConfig, AdapterLoginState, ImPlatform } from '../types/adapter'
 import { useTranslation } from '../i18n'
 import { Input } from '../components/shared/Input'
 import { Button } from '../components/shared/Button'
 import { DirectoryPicker } from '../components/shared/DirectoryPicker'
 import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import { Modal } from '../components/shared/Modal'
-import { SettingsPage, SettingsSection, SettingsRow, SegmentedControl, Switch } from '../components/settings/SettingsLayout'
+import { SettingsPage, SettingsSection, SettingsRow, Switch } from '../components/settings/SettingsLayout'
+import { ImPlatformIcon } from '../components/adapters/ImPlatformIcon'
 import { Icon } from '../components/shared/Icon'
 
-type ImTab = 'feishu' | 'telegram'
+type ImTab = Exclude<ImPlatform, 'feishu'>
 
 type AdapterGuideStep = {
   title: string
@@ -26,53 +29,101 @@ type AdapterGuide = {
 }
 
 const ADAPTER_GUIDES: Record<ImTab, AdapterGuide> = {
-  feishu: {
-    title: '飞书连接教程',
-    summary: '适合在中国区通过企业自建应用私聊 CyberCode。当前只处理和机器人的私聊，不处理群聊。',
+  weixin: {
+    title: '微信连接教程',
+    summary: '使用腾讯官方 iLink 通道连接个人微信。无需公网地址、反向代理或额外安装服务。',
     steps: [
       {
-        title: '一键创建飞书机器人',
-        body: (
-          <>
-            打开{' '}
-            <a className="font-semibold text-[var(--color-text-accent)] hover:underline" href="https://open.feishu.cn/page/openclaw?form=multiAgent" target="_blank" rel="noreferrer">
-              飞书机器人模板
-            </a>
-            ，给机器人取名并创建。创建完成后复制 App ID 和 App Secret。
-          </>
-        ),
+        title: '在 CyberCode 发起连接',
+        body: '打开 设置 -> IM 接入 -> 微信，点击“扫码连接”。CyberCode 会直接向微信官方服务申请二维码。',
       },
       {
-        title: '配置机器人菜单',
-        body: (
-          <>
-            进入{' '}
-            <a className="font-semibold text-[var(--color-text-accent)] hover:underline" href="https://open.feishu.cn/app?lang=zh-CN" target="_blank" rel="noreferrer">
-              飞书开发者后台
-            </a>
-            ，找到刚创建的应用，在机器人菜单里添加三个命令并发布新版本。
-          </>
-        ),
-        items: ['/projects：切换最近使用的项目', '/new：开启新会话', '/clear：清空上下文'],
+        title: '使用手机微信扫码',
+        body: '用手机微信扫描桌面端显示的二维码，并在手机上确认。若手机显示校验数字，请回到桌面弹窗中输入。',
       },
       {
-        title: '回到桌面端填写配置',
-        body: '在 设置 -> IM 接入 -> 飞书 中填写 App ID 和 App Secret。Encrypt Key、Verification Token 仅在你额外启用对应安全项时填写；默认项目可选。',
+        title: '等待通道自动启动',
+        body: '连接成功后凭据只写入本机配置，桌面端会自动重启 IM sidecar 并建立长轮询，不需要公网回调。',
       },
       {
-        title: '保存并生成配对码',
-        body: '点击保存，再点击生成配对码。配对码有效期 60 分钟，重新生成后旧码立即失效。',
-      },
-      {
-        title: '在飞书私聊中完成配对',
-        body: '给机器人发任意消息，按提示发送 6 位配对码。看到配对成功后，就可以直接在飞书里向 CyberCode 发消息。',
+        title: '在微信中开始对话',
+        body: '直接发送消息即可使用 CyberCode。发送 /projects 选择项目，或发送 /new 新建会话。',
       },
     ],
     checks: [
-      '机器人菜单修改后必须创建新版本并发布。',
-      '请在机器人私聊里配对，不要在群聊里测试。',
-      '桌面发布版会自动拉起 adapter；本地开发时可手动运行：cd adapters && bun run feishu。',
-      '配对成功后可发送 /status 或 状态 验证连接。',
+      '二维码仅用于本次连接，过期后桌面端会自动刷新。',
+      '退出 CyberCode 后不会有云端中转；重新打开桌面端会自动恢复通道。',
+      '连接账号会自动成为首个已配对用户，其他用户仍需使用配对码。',
+    ],
+  },
+  qq: {
+    title: 'QQ 机器人连接教程',
+    summary: '使用 QQ 官方机器人 Agent 通道，通过 WebSocket 主动连接，无需配置公网回调。',
+    steps: [
+      {
+        title: '优先使用扫码绑定',
+        body: '打开 设置 -> IM 接入 -> QQ，点击“扫码连接”，再用手机 QQ 扫描二维码。AppID 与 App Secret 会由官方连接流程自动返回并保存在本机。',
+      },
+      {
+        title: '需要时手动填写凭据',
+        body: (
+          <>
+            如果扫码不可用，可前往{' '}
+            <a className="font-semibold text-[var(--color-text-accent)] hover:underline" href="https://q.qq.com/" target="_blank" rel="noreferrer">
+              QQ 开放平台
+            </a>
+            {' '}创建机器人，然后在本页填写 AppID 和 App Secret。
+          </>
+        ),
+      },
+      {
+        title: '保存并自动连接',
+        body: '保存后 CyberCode 会自动重启 IM sidecar，通过官方 WebSocket Gateway 建立长连接，不需要公网服务器。',
+      },
+      {
+        title: '完成身份配对',
+        body: '扫码用户会自动配对。手动凭据模式下，请在桌面端生成配对码，并在 QQ 私聊中发送给机器人。',
+      },
+    ],
+    checks: [
+      '默认支持私聊；开启群聊后，机器人只处理 QQ 官方推送给它的群消息。',
+      'QQ 机器人需遵守开放平台的审核、消息额度和主动消息规则。',
+      '可发送 /status 检查会话，也可用权限按钮批准或拒绝工具调用。',
+    ],
+  },
+  dingtalk: {
+    title: '钉钉机器人连接教程',
+    summary: '使用钉钉官方 Stream 模式建立出站长连接，不需要公网地址、反向代理或额外服务。',
+    steps: [
+      {
+        title: '创建企业内部应用',
+        body: (
+          <>
+            前往{' '}
+            <a className="font-semibold text-[var(--color-text-accent)] hover:underline" href="https://open-dev.dingtalk.com/" target="_blank" rel="noreferrer">
+              钉钉开放平台
+            </a>
+            {' '}创建企业内部应用，并记下应用凭证中的 Client ID 和 Client Secret。
+          </>
+        ),
+      },
+      {
+        title: '添加机器人能力',
+        body: '进入“应用能力 -> 添加应用能力 -> 机器人”，完善机器人信息，将消息接收模式选为 Stream 模式，然后创建版本并发布。',
+      },
+      {
+        title: '填写凭据并保存',
+        body: '回到 设置 -> IM 接入 -> 钉钉，填写 Client ID 与 Client Secret。保存后 CyberCode 会自动重启本地 IM sidecar 并建立长连接。',
+      },
+      {
+        title: '生成配对码',
+        body: '在本页顶部生成 6 位配对码，然后私聊机器人并发送该配对码。看到“配对成功”后即可开始使用。',
+      },
+    ],
+    checks: [
+      '私聊机器人无需 @；群聊中需要 @机器人 才会触发 CyberCode。',
+      '钉钉凭据只保存在本机配置中，桌面端不会要求公网回调地址。',
+      '可发送 /status 检查会话；工具权限可通过 /allow 和 /deny 处理。',
     ],
   },
   telegram: {
@@ -111,10 +162,17 @@ const ADAPTER_GUIDES: Record<ImTab, AdapterGuide> = {
 
 export function AdapterSettings() {
   const t = useTranslation()
-  const { config, isLoading, fetchConfig, updateConfig, generatePairingCode, removePairedUser } = useAdapterStore()
+  const {
+    config,
+    isLoading,
+    fetchConfig,
+    updateConfig,
+    generatePairingCode,
+    removePairedUser,
+    restartAdapters,
+  } = useAdapterStore()
 
-  // Active IM tab —— Feishu 默认展示，在前
-  const [activeIm, setActiveIm] = useState<ImTab>('feishu')
+  const [activeIm, setActiveIm] = useState<ImTab>('weixin')
   const [guidePlatform, setGuidePlatform] = useState<ImTab | null>(null)
 
   // Server —— serverUrl 不再暴露在 UI 里（见下方 Server URL 注释），
@@ -125,26 +183,48 @@ export function AdapterSettings() {
   const [tgBotToken, setTgBotToken] = useState('')
   const [tgAllowedUsers, setTgAllowedUsers] = useState('')
 
-  // Feishu
-  const [fsAppId, setFsAppId] = useState('')
-  const [fsAppSecret, setFsAppSecret] = useState('')
-  const [fsEncryptKey, setFsEncryptKey] = useState('')
-  const [fsVerificationToken, setFsVerificationToken] = useState('')
-  const [fsAllowedUsers, setFsAllowedUsers] = useState('')
-  const [fsStreamingCard, setFsStreamingCard] = useState(false)
+  // Weixin
+  const [wxEnabled, setWxEnabled] = useState(false)
+  const [wxAllowedUsers, setWxAllowedUsers] = useState('')
+
+  // QQ
+  const [qqEnabled, setQqEnabled] = useState(false)
+  const [qqAppId, setQqAppId] = useState('')
+  const [qqAppSecret, setQqAppSecret] = useState('')
+  const [qqAllowedUsers, setQqAllowedUsers] = useState('')
+  const [qqGroupEnabled, setQqGroupEnabled] = useState(true)
+
+  // DingTalk
+  const [dtClientId, setDtClientId] = useState('')
+  const [dtClientSecret, setDtClientSecret] = useState('')
+  const [dtAllowedUsers, setDtAllowedUsers] = useState('')
 
   const [isSaving, setIsSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState('')
+  const saveResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Pairing
   const [pairingCode, setPairingCode] = useState<string | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
-  const [pendingUnbind, setPendingUnbind] = useState<{ platform: 'telegram' | 'feishu'; userId: string | number } | null>(null)
+  const [pendingUnbind, setPendingUnbind] = useState<{ platform: ImPlatform; userId: string | number } | null>(null)
   const [isUnbinding, setIsUnbinding] = useState(false)
+
+  // Official QR connection flow
+  const [loginState, setLoginState] = useState<AdapterLoginState | null>(null)
+  const [startingPlatform, setStartingPlatform] = useState<'weixin' | 'qq' | null>(null)
+  const [disconnectingPlatform, setDisconnectingPlatform] = useState<'weixin' | 'qq' | null>(null)
+  const [verificationCode, setVerificationCode] = useState('')
+  const [isSubmittingVerification, setIsSubmittingVerification] = useState(false)
+  const completedLoginRef = useRef<string | null>(null)
+  const loginLaunchRef = useRef(0)
 
   useEffect(() => {
     fetchConfig()
+  }, [])
+
+  useEffect(() => () => {
+    if (saveResetTimerRef.current) clearTimeout(saveResetTimerRef.current)
   }, [])
 
   // Sync form state when config is loaded
@@ -152,22 +232,66 @@ export function AdapterSettings() {
     setDefaultProjectDir(config.defaultProjectDir ?? '')
     setTgBotToken(config.telegram?.botToken ?? '')
     setTgAllowedUsers(config.telegram?.allowedUsers?.join(', ') ?? '')
-    setFsAppId(config.feishu?.appId ?? '')
-    setFsAppSecret(config.feishu?.appSecret ?? '')
-    setFsEncryptKey(config.feishu?.encryptKey ?? '')
-    setFsVerificationToken(config.feishu?.verificationToken ?? '')
-    setFsAllowedUsers(config.feishu?.allowedUsers?.join(', ') ?? '')
-    setFsStreamingCard(config.feishu?.streamingCard ?? false)
+    setWxEnabled(config.weixin?.enabled ?? false)
+    setWxAllowedUsers(config.weixin?.allowedUsers?.join(', ') ?? '')
+    setQqEnabled(config.qq?.enabled ?? false)
+    setQqAppId(config.qq?.appId ?? '')
+    setQqAppSecret(config.qq?.appSecret ?? '')
+    setQqAllowedUsers(config.qq?.allowedUsers?.join(', ') ?? '')
+    setQqGroupEnabled(config.qq?.groupEnabled ?? true)
+    setDtClientId(config.dingtalk?.clientId ?? '')
+    setDtClientSecret(config.dingtalk?.clientSecret ?? '')
+    setDtAllowedUsers(config.dingtalk?.allowedUsers?.join(', ') ?? '')
   }, [config])
+
+  useEffect(() => {
+    const sessionId = loginState?.sessionId
+    if (!sessionId) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const poll = async () => {
+      try {
+        const next = await adaptersApi.getLoginStatus(sessionId)
+        if (stopped) return
+        setLoginState(next)
+        if (next.status === 'connected') {
+          if (completedLoginRef.current !== sessionId) {
+            completedLoginRef.current = sessionId
+            await fetchConfig()
+            await restartAdapters()
+          }
+          return
+        }
+        if (['error', 'expired', 'cancelled'].includes(next.status)) return
+      } catch (error) {
+        if (!stopped) {
+          setLoginState((current) => current ? {
+            ...current,
+            status: 'error',
+            message: error instanceof Error ? error.message : '连接状态读取失败',
+          } : current)
+        }
+        return
+      }
+      timer = setTimeout(poll, 1200)
+    }
+
+    timer = setTimeout(poll, 800)
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [loginState?.sessionId, fetchConfig, restartAdapters])
 
   async function handleSave() {
     setIsSaving(true)
     setSaveStatus('idle')
     setSaveError('')
     try {
-      const patch: Record<string, unknown> = {}
+      const patch: Partial<AdapterFileConfig> = {}
 
-      if (defaultProjectDir) patch.defaultProjectDir = defaultProjectDir
+      patch.defaultProjectDir = defaultProjectDir
 
       const tgUsers = tgAllowedUsers
         .split(',')
@@ -181,23 +305,32 @@ export function AdapterSettings() {
         allowedUsers: tgUsers.length ? tgUsers : [],
       }
 
-      const fsUsers = fsAllowedUsers
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
+      patch.weixin = {
+        enabled: wxEnabled,
+        allowedUsers: parseStringList(wxAllowedUsers),
+      }
 
-      patch.feishu = {
-        appId: fsAppId || undefined,
-        appSecret: fsAppSecret || undefined,
-        encryptKey: fsEncryptKey || undefined,
-        verificationToken: fsVerificationToken || undefined,
-        allowedUsers: fsUsers.length ? fsUsers : [],
-        streamingCard: fsStreamingCard,
+      patch.qq = {
+        enabled: qqEnabled || (!isQQConnected && Boolean(qqAppId.trim() && qqAppSecret.trim())),
+        appId: qqAppId || undefined,
+        appSecret: qqAppSecret || undefined,
+        allowedUsers: parseStringList(qqAllowedUsers),
+        groupEnabled: qqGroupEnabled,
+      }
+
+      patch.dingtalk = {
+        clientId: dtClientId.trim() || undefined,
+        clientSecret: dtClientSecret.trim() || undefined,
+        allowedUsers: parseStringList(dtAllowedUsers),
       }
 
       await updateConfig(patch)
       setSaveStatus('saved')
-      setTimeout(() => setSaveStatus('idle'), 2000)
+      if (saveResetTimerRef.current) clearTimeout(saveResetTimerRef.current)
+      saveResetTimerRef.current = setTimeout(() => {
+        saveResetTimerRef.current = null
+        setSaveStatus('idle')
+      }, 2000)
     } catch (err) {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
@@ -218,7 +351,7 @@ export function AdapterSettings() {
     }
   }, [generatePairingCode])
 
-  const handleUnbind = useCallback(async (platform: 'telegram' | 'feishu', userId: string | number) => {
+  const handleUnbind = useCallback(async (platform: ImPlatform, userId: string | number) => {
     setPendingUnbind({ platform, userId })
   }, [])
 
@@ -234,10 +367,104 @@ export function AdapterSettings() {
     }
   }, [pendingUnbind, removePairedUser, fetchConfig])
 
+  const handleStartLogin = useCallback(async (platform: 'weixin' | 'qq') => {
+    const launchId = loginLaunchRef.current + 1
+    loginLaunchRef.current = launchId
+    setActiveIm(platform)
+    setStartingPlatform(platform)
+    setVerificationCode('')
+    completedLoginRef.current = null
+    setLoginState({
+      sessionId: '',
+      platform,
+      status: 'preparing',
+      message: t('settings.adapters.login.preparing'),
+      updatedAt: Date.now(),
+    })
+    try {
+      const next = await adaptersApi.startLogin(platform)
+      if (loginLaunchRef.current !== launchId) {
+        void adaptersApi.cancelLogin(next.sessionId).catch(() => {})
+        return
+      }
+      setLoginState(next)
+    } catch (error) {
+      if (loginLaunchRef.current !== launchId) return
+      setLoginState({
+        sessionId: '',
+        platform,
+        status: 'error',
+        message: error instanceof Error ? error.message : t('settings.adapters.login.startError'),
+        updatedAt: Date.now(),
+      })
+    } finally {
+      if (loginLaunchRef.current === launchId) setStartingPlatform(null)
+    }
+  }, [t])
+
+  const closeLogin = useCallback(() => {
+    const current = loginState
+    loginLaunchRef.current += 1
+    setStartingPlatform(null)
+    setLoginState(null)
+    setVerificationCode('')
+    if (current?.sessionId && !['connected', 'error', 'expired', 'cancelled'].includes(current.status)) {
+      void adaptersApi.cancelLogin(current.sessionId).catch(() => {})
+    }
+  }, [loginState])
+
+  const submitVerification = useCallback(async () => {
+    if (!loginState?.sessionId || !verificationCode.trim()) return
+    setIsSubmittingVerification(true)
+    try {
+      setLoginState(await adaptersApi.submitWeixinVerification(loginState.sessionId, verificationCode))
+      setVerificationCode('')
+    } catch (error) {
+      setLoginState((current) => current ? {
+        ...current,
+        message: error instanceof Error ? error.message : '校验数字提交失败',
+      } : current)
+    } finally {
+      setIsSubmittingVerification(false)
+    }
+  }, [loginState, verificationCode])
+
+  const disconnectPlatform = useCallback(async (platform: 'weixin' | 'qq') => {
+    setDisconnectingPlatform(platform)
+    try {
+      if (platform === 'weixin') {
+        await updateConfig({
+          weixin: {
+            enabled: false,
+            accountId: '',
+            botToken: '',
+            baseUrl: '',
+            userId: '',
+            pairedUsers: [],
+          },
+        })
+      } else {
+        await updateConfig({
+          qq: {
+            enabled: false,
+            appId: '',
+            appSecret: '',
+            pairedUsers: [],
+          },
+        })
+      }
+      await fetchConfig()
+    } finally {
+      setDisconnectingPlatform(null)
+    }
+  }, [fetchConfig, updateConfig])
+
   // Collect all paired users across platforms
   const allPairedUsers = [
     ...(config.telegram?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'telegram' as const })),
-    ...(config.feishu?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'feishu' as const })),
+    ...(config.weixin?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'weixin' as const })),
+    ...(config.qq?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'qq' as const })),
+    ...(config.dingtalk?.pairedUsers ?? []).map((u) => ({ ...u, platform: 'dingtalk' as const })),
   ]
 
   // Check pairing expiry
@@ -245,9 +472,14 @@ export function AdapterSettings() {
   const isPairingActive = pairingExpiry ? Date.now() < pairingExpiry : false
   const minutesLeft = pairingExpiry ? Math.max(0, Math.ceil((pairingExpiry - Date.now()) / 60000)) : 0
   const imTabs: Array<{ value: ImTab; label: string }> = [
-    { value: 'feishu', label: t('settings.adapters.feishu') },
+    { value: 'weixin', label: t('settings.adapters.weixin') },
+    { value: 'qq', label: t('settings.adapters.qq') },
+    { value: 'dingtalk', label: t('settings.adapters.dingtalk') },
     { value: 'telegram', label: t('settings.adapters.telegram') },
   ]
+  const activeImLabel = imTabs.find((tab) => tab.value === activeIm)?.label ?? activeIm
+  const isWeixinConnected = Boolean(config.weixin?.accountId && config.weixin?.botToken)
+  const isQQConnected = Boolean(config.qq?.appId && config.qq?.appSecret)
 
   const openGuide = useCallback((platform: ImTab) => {
     setActiveIm(platform)
@@ -258,7 +490,7 @@ export function AdapterSettings() {
     return (
       <div className="flex items-center justify-center py-12 text-[var(--color-text-tertiary)]">
         <Icon name="progress_activity" size={18} className="animate-spin text-[20px] mr-2" />
-        Loading...
+        {t('common.loading')}
       </div>
     )
   }
@@ -266,27 +498,6 @@ export function AdapterSettings() {
   return (
     <SettingsPage icon="chat" title={t('settings.tab.adapters')} description={t('settings.adapters.description')}>
       <div className="space-y-5">
-        {/* Local guide */}
-        <SettingsSection
-          title={t('settings.adapters.guideTitle')}
-          description={t('settings.adapters.guideDesc')}
-        >
-          <GuideLauncherRow
-            icon="forum"
-            title={t('settings.adapters.feishuGuideTitle')}
-            description={t('settings.adapters.feishuGuideDesc')}
-            onOpen={() => openGuide('feishu')}
-            openLabel={t('settings.adapters.openFullGuide')}
-          />
-          <GuideLauncherRow
-            icon="chat"
-            title={t('settings.adapters.telegramGuideTitle')}
-            description={t('settings.adapters.telegramGuideDesc')}
-            onOpen={() => openGuide('telegram')}
-            openLabel={t('settings.adapters.openFullGuide')}
-          />
-        </SettingsSection>
-
         {/* Pairing */}
         <SettingsSection
           title={t('settings.adapters.pairing')}
@@ -334,7 +545,8 @@ export function AdapterSettings() {
                       className="flex items-center justify-between gap-3 rounded-[12px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] px-3 py-2.5"
                     >
                       <div className="min-w-0 flex items-center gap-2">
-                        <span className="rounded bg-[var(--color-surface-container)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--color-text-secondary)]">
+                        <span className="inline-flex items-center gap-1.5 rounded bg-[var(--color-surface-container)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--color-text-secondary)]">
+                          <ImPlatformIcon platform={user.platform} size={14} />
                           {t(`settings.adapters.platform.${user.platform}`)}
                         </span>
                         <span className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">{user.displayName}</span>
@@ -376,75 +588,172 @@ export function AdapterSettings() {
           </SettingsRow>
         </SettingsSection>
 
-        {/* IM Adapter Tabs —— Feishu 默认展示，在前 */}
-        <SettingsSection
-          title={activeIm === 'feishu' ? t('settings.adapters.feishu') : t('settings.adapters.telegram')}
-          action={<SegmentedControl items={imTabs} value={activeIm} onChange={setActiveIm} />}
-        >
-          {activeIm === 'feishu' && (
+        <SettingsSection title={activeImLabel}>
+          <div className="px-5 pt-4">
+            <div
+              className="grid grid-cols-2 gap-1 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-1 sm:grid-cols-4"
+              role="tablist"
+              aria-label={t('settings.adapters.channelTabs')}
+            >
+              {imTabs.map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeIm === tab.value}
+                  onClick={() => setActiveIm(tab.value)}
+                  className={`flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-[6px] px-1.5 text-[12px] font-semibold transition-colors ${
+                    activeIm === tab.value
+                      ? 'bg-[var(--color-background)] text-[var(--color-text-primary)] shadow-sm'
+                      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+                  }`}
+                >
+                  <ImPlatformIcon platform={tab.value} size={17} />
+                  <span className="min-w-0 truncate">{tab.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {activeIm === 'weixin' && (
             <div className="space-y-4 px-5 py-4">
               <PlatformGuidePrompt
-                icon="forum"
-                title={t('settings.adapters.feishuGuideTitle')}
-                description={t('settings.adapters.feishuGuideDesc')}
+                platform="weixin"
+                title={t('settings.adapters.weixinGuideTitle')}
+                description={t('settings.adapters.weixinGuideDesc')}
                 buttonLabel={t('settings.adapters.openFullGuide')}
-                onOpen={() => openGuide('feishu')}
+                onOpen={() => openGuide('weixin')}
               />
+              <OfficialConnectionRow
+                platform="weixin"
+                connected={isWeixinConnected}
+                enabled={wxEnabled}
+                title={isWeixinConnected ? t('settings.adapters.weixinConnected') : t('settings.adapters.weixinNotConnected')}
+                detail={isWeixinConnected
+                  ? `${t('settings.adapters.account')}: ${config.weixin?.accountId}`
+                  : t('settings.adapters.weixinQrHint')}
+                onToggle={isWeixinConnected ? setWxEnabled : undefined}
+                onConnect={() => handleStartLogin('weixin')}
+                onDisconnect={() => void disconnectPlatform('weixin')}
+                connecting={startingPlatform === 'weixin'}
+                disconnecting={disconnectingPlatform === 'weixin'}
+                connectLabel={t('settings.adapters.scanToConnect')}
+                disconnectLabel={t('settings.adapters.disconnect')}
+              />
+              <Input
+                label={t('settings.adapters.allowedUsers')}
+                value={wxAllowedUsers}
+                onChange={(event) => setWxAllowedUsers(event.target.value)}
+                placeholder={t('settings.adapters.wxAllowedUsersPlaceholder')}
+              />
+              <p className="text-[12px] text-[var(--color-text-tertiary)]">{t('settings.adapters.pairedUsersHint')}</p>
+            </div>
+          )}
+
+          {activeIm === 'qq' && (
+            <div className="space-y-4 px-5 py-4">
+              <PlatformGuidePrompt
+                platform="qq"
+                title={t('settings.adapters.qqGuideTitle')}
+                description={t('settings.adapters.qqGuideDesc')}
+                buttonLabel={t('settings.adapters.openFullGuide')}
+                onOpen={() => openGuide('qq')}
+              />
+              <OfficialConnectionRow
+                platform="qq"
+                connected={isQQConnected}
+                enabled={qqEnabled}
+                title={isQQConnected ? t('settings.adapters.qqConnected') : t('settings.adapters.qqNotConnected')}
+                detail={isQQConnected
+                  ? `${t('settings.adapters.appId')}: ${config.qq?.appId}`
+                  : t('settings.adapters.qqQrHint')}
+                onToggle={isQQConnected ? setQqEnabled : undefined}
+                onConnect={() => handleStartLogin('qq')}
+                onDisconnect={() => void disconnectPlatform('qq')}
+                connecting={startingPlatform === 'qq'}
+                disconnecting={disconnectingPlatform === 'qq'}
+                connectLabel={t('settings.adapters.scanToConnect')}
+                disconnectLabel={t('settings.adapters.disconnect')}
+              />
+              <div className="flex items-center gap-3 pt-1">
+                <div className="h-px flex-1 bg-[var(--color-border-separator)]" />
+                <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">
+                  {t('settings.adapters.manualCredentials')}
+                </span>
+                <div className="h-px flex-1 bg-[var(--color-border-separator)]" />
+              </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Input
                   label={t('settings.adapters.appId')}
-                  value={fsAppId}
-                  onChange={(e) => setFsAppId(e.target.value)}
-                  placeholder={t('settings.adapters.appIdPlaceholder')}
+                  value={qqAppId}
+                  onChange={(event) => setQqAppId(event.target.value)}
+                  placeholder={t('settings.adapters.qqAppIdPlaceholder')}
                 />
                 <Input
                   label={t('settings.adapters.appSecret')}
                   type="password"
-                  value={fsAppSecret}
-                  onChange={(e) => setFsAppSecret(e.target.value)}
-                  placeholder={t('settings.adapters.appSecretPlaceholder')}
-                />
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Input
-                  label={t('settings.adapters.encryptKey')}
-                  type="password"
-                  value={fsEncryptKey}
-                  onChange={(e) => setFsEncryptKey(e.target.value)}
-                  placeholder={t('settings.adapters.encryptKeyPlaceholder')}
-                />
-                <Input
-                  label={t('settings.adapters.verificationToken')}
-                  type="password"
-                  value={fsVerificationToken}
-                  onChange={(e) => setFsVerificationToken(e.target.value)}
-                  placeholder={t('settings.adapters.verificationTokenPlaceholder')}
+                  value={qqAppSecret}
+                  onChange={(event) => setQqAppSecret(event.target.value)}
+                  placeholder={t('settings.adapters.qqAppSecretPlaceholder')}
                 />
               </div>
               <Input
                 label={t('settings.adapters.allowedUsers')}
-                value={fsAllowedUsers}
-                onChange={(e) => setFsAllowedUsers(e.target.value)}
-                placeholder={t('settings.adapters.fsAllowedUsersPlaceholder')}
+                value={qqAllowedUsers}
+                onChange={(event) => setQqAllowedUsers(event.target.value)}
+                placeholder={t('settings.adapters.qqAllowedUsersPlaceholder')}
               />
-              <p className="text-[12px] text-[var(--color-text-tertiary)]">{t('settings.adapters.allowedUsersHint')}</p>
               <SettingsRow
-                label={t('settings.adapters.streamingCard')}
-                hint={t('settings.adapters.streamingCardDesc')}
+                label={t('settings.adapters.qqGroups')}
+                hint={t('settings.adapters.qqGroupsHint')}
               >
                 <Switch
-                  checked={fsStreamingCard}
-                  onChange={setFsStreamingCard}
-                  ariaLabel={t('settings.adapters.streamingCard')}
+                  checked={qqGroupEnabled}
+                  onChange={setQqGroupEnabled}
+                  ariaLabel={t('settings.adapters.qqGroups')}
                 />
               </SettingsRow>
+            </div>
+          )}
+
+          {activeIm === 'dingtalk' && (
+            <div className="space-y-4 px-5 py-4">
+              <PlatformGuidePrompt
+                platform="dingtalk"
+                title={t('settings.adapters.dingtalkGuideTitle')}
+                description={t('settings.adapters.dingtalkGuideDesc')}
+                buttonLabel={t('settings.adapters.openFullGuide')}
+                onOpen={() => openGuide('dingtalk')}
+              />
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Input
+                  label={t('settings.adapters.clientId')}
+                  value={dtClientId}
+                  onChange={(event) => setDtClientId(event.target.value)}
+                  placeholder={t('settings.adapters.dingtalkClientIdPlaceholder')}
+                />
+                <Input
+                  label={t('settings.adapters.clientSecret')}
+                  type="password"
+                  value={dtClientSecret}
+                  onChange={(event) => setDtClientSecret(event.target.value)}
+                  placeholder={t('settings.adapters.dingtalkClientSecretPlaceholder')}
+                />
+              </div>
+              <Input
+                label={t('settings.adapters.allowedUsers')}
+                value={dtAllowedUsers}
+                onChange={(event) => setDtAllowedUsers(event.target.value)}
+                placeholder={t('settings.adapters.dtAllowedUsersPlaceholder')}
+              />
+              <p className="text-[12px] text-[var(--color-text-tertiary)]">{t('settings.adapters.allowedUsersHint')}</p>
             </div>
           )}
 
           {activeIm === 'telegram' && (
             <div className="space-y-4 px-5 py-4">
               <PlatformGuidePrompt
-                icon="chat"
+                platform="telegram"
                 title={t('settings.adapters.telegramGuideTitle')}
                 description={t('settings.adapters.telegramGuideDesc')}
                 buttonLabel={t('settings.adapters.openFullGuide')}
@@ -506,57 +815,239 @@ export function AdapterSettings() {
           onClose={() => setGuidePlatform(null)}
           closeLabel={t('common.close')}
         />
+        <AdapterLoginModal
+          state={loginState}
+          verificationCode={verificationCode}
+          submittingVerification={isSubmittingVerification}
+          onVerificationCodeChange={setVerificationCode}
+          onSubmitVerification={submitVerification}
+          onRetry={() => {
+            if (loginState) void handleStartLogin(loginState.platform)
+          }}
+          onClose={closeLogin}
+        />
       </div>
     </SettingsPage>
   )
 }
 
-function GuideLauncherRow({
-  icon,
+function parseStringList(value: string): string[] {
+  return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function OfficialConnectionRow({
+  platform,
+  connected,
+  enabled,
   title,
-  description,
-  openLabel,
-  onOpen,
+  detail,
+  connecting,
+  disconnecting,
+  connectLabel,
+  disconnectLabel,
+  onToggle,
+  onConnect,
+  onDisconnect,
 }: {
-  icon: 'forum' | 'chat'
+  platform: ImPlatform
+  connected: boolean
+  enabled: boolean
   title: string
-  description: string
-  openLabel: string
-  onOpen: () => void
+  detail: string
+  connecting: boolean
+  disconnecting: boolean
+  connectLabel: string
+  disconnectLabel: string
+  onToggle?: (enabled: boolean) => void
+  onConnect: () => void
+  onDisconnect: () => void
 }) {
   return (
-    <div className="flex min-h-[76px] flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-      <div className="min-w-0 flex items-start gap-3">
-        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-[var(--color-text-secondary)]">
-          <Icon name={icon} size={16} />
-        </span>
+    <div className="flex flex-col gap-3 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-start gap-3">
+        <ImPlatformIcon platform={platform} size={26} className="mt-0.5" />
         <div className="min-w-0">
-          <div className="text-[13px] font-bold text-[var(--color-text-primary)]">{title}</div>
-          <p className="mt-1 text-[12px] leading-5 text-[var(--color-text-tertiary)]">{description}</p>
+          <div className="flex items-center gap-2">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${connected && enabled ? 'bg-[var(--color-success)]' : 'bg-[var(--color-text-tertiary)]'}`} />
+            <span className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{title}</span>
+          </div>
+          <p className="mt-1 truncate text-[12px] text-[var(--color-text-tertiary)]">{detail}</p>
         </div>
       </div>
-      <Button
-        type="button"
-        variant="primary"
-        size="md"
-        onClick={onOpen}
-        icon={<Icon name="article" size={14} />}
-        className="w-full shrink-0 sm:w-auto"
-      >
-        {openLabel}
-      </Button>
+      <div className="flex shrink-0 items-center gap-2">
+        {connected && onToggle && (
+          <Switch checked={enabled} onChange={onToggle} ariaLabel={title} />
+        )}
+        {connected ? (
+          <Button type="button" variant="ghost" size="sm" onClick={onDisconnect} loading={disconnecting}>
+            {disconnectLabel}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            onClick={onConnect}
+            loading={connecting}
+            icon={<Icon name="link" size={14} />}
+          >
+            {connectLabel}
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
 
+function AdapterLoginModal({
+  state,
+  verificationCode,
+  submittingVerification,
+  onVerificationCodeChange,
+  onSubmitVerification,
+  onRetry,
+  onClose,
+}: {
+  state: AdapterLoginState | null
+  verificationCode: string
+  submittingVerification: boolean
+  onVerificationCodeChange: (value: string) => void
+  onSubmitVerification: () => void
+  onRetry: () => void
+  onClose: () => void
+}) {
+  const t = useTranslation()
+  const terminal = state && ['connected', 'error', 'expired', 'cancelled'].includes(state.status)
+  const success = state?.status === 'connected'
+  const isPreparingQr = Boolean(state && !terminal && !state.qrDataUrl)
+  const title = state?.platform === 'qq'
+    ? t('settings.adapters.login.qqTitle')
+    : t('settings.adapters.login.weixinTitle')
+
+  return (
+    <Modal
+      open={Boolean(state)}
+      onClose={onClose}
+      title={title}
+      width={440}
+      footer={(
+        <Button type="button" variant={success ? 'primary' : 'secondary'} onClick={onClose}>
+          {success ? t('settings.adapters.login.done') : t('settings.adapters.login.close')}
+        </Button>
+      )}
+    >
+      {state && (
+        <div className="flex flex-col items-center text-center">
+          {state.qrDataUrl && !success ? (
+            <div className="h-[260px] w-[260px] overflow-hidden rounded-[8px] border border-[var(--color-border-separator)] bg-white p-2">
+              <img
+                src={state.qrDataUrl}
+                alt={`${title}二维码`}
+                className="h-full w-full object-contain"
+                draggable={false}
+              />
+            </div>
+          ) : (
+            <div className={`flex h-[96px] w-[96px] items-center justify-center rounded-full ${
+              success
+                ? 'bg-[var(--color-success)]/12 text-[var(--color-success)]'
+                : state.status === 'error' || state.status === 'expired'
+                  ? 'bg-[var(--color-error)]/10 text-[var(--color-error)]'
+                  : 'bg-[var(--color-surface-container-low)] text-[var(--color-text-secondary)]'
+            }`}>
+              <Icon
+                name={success ? 'check' : state.status === 'error' || state.status === 'expired' ? 'error' : 'progress_activity'}
+                size={success ? 38 : 30}
+                className={!terminal ? 'animate-spin' : undefined}
+              />
+            </div>
+          )}
+
+          <div
+            className="mt-4 flex items-center gap-2 text-[13px] font-semibold text-[var(--color-text-primary)]"
+            role="status"
+            aria-live="polite"
+          >
+            <ImPlatformIcon platform={state.platform} size={18} />
+            {!terminal && <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-text-accent)]" />}
+            {state.message}
+          </div>
+
+          {isPreparingQr && (
+            <div className="mt-5 w-full max-w-[320px]">
+              <div
+                className="h-[5px] overflow-hidden rounded-full bg-[var(--color-surface-container-high)]"
+                role="progressbar"
+                aria-label={t('settings.adapters.login.progressLabel')}
+              >
+                <div className="im-connection-progress h-full w-[36%] rounded-full bg-[var(--color-text-accent)]" />
+              </div>
+              <p className="mt-2 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+                {t('settings.adapters.login.preparingHint')}
+              </p>
+            </div>
+          )}
+
+          {state.status === 'verification_required' && (
+            <div className="mt-4 flex w-full items-end gap-2 text-left">
+              <div className="min-w-0 flex-1">
+                <Input
+                  label={t('settings.adapters.login.verificationLabel')}
+                  value={verificationCode}
+                  onChange={(event) => onVerificationCodeChange(event.target.value.replace(/\D/g, '').slice(0, 8))}
+                  placeholder={t('settings.adapters.login.verificationPlaceholder')}
+                  inputMode="numeric"
+                  autoFocus
+                />
+              </div>
+              <Button
+                type="button"
+                size="md"
+                onClick={onSubmitVerification}
+                loading={submittingVerification}
+                disabled={!verificationCode.trim()}
+              >
+                {t('settings.adapters.login.submit')}
+              </Button>
+            </div>
+          )}
+
+          {state.qrUrl && !terminal && (
+            <a
+              href={state.qrUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-[var(--color-text-accent)] hover:underline"
+            >
+              {t('settings.adapters.login.openLink')}
+              <Icon name="open_in_new" size={12} />
+            </a>
+          )}
+
+          {(state.status === 'error' || state.status === 'expired') && (
+            <Button type="button" className="mt-4" onClick={onRetry} icon={<Icon name="refresh" size={14} />}>
+              {t('settings.adapters.login.retry')}
+            </Button>
+          )}
+
+          {!terminal && (
+            <p className="mt-4 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+              {t('settings.adapters.login.privacy')}
+            </p>
+          )}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
 function PlatformGuidePrompt({
-  icon,
+  platform,
   title,
   description,
   buttonLabel,
   onOpen,
 }: {
-  icon: 'forum' | 'chat'
+  platform: ImPlatform
   title: string
   description: string
   buttonLabel: string
@@ -565,8 +1056,8 @@ function PlatformGuidePrompt({
   return (
     <div className="flex flex-col gap-3 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-3.5 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[var(--color-text-primary)] text-[var(--color-background)]">
-          <Icon name={icon} size={17} />
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-[var(--color-border)] bg-[var(--color-background)] shadow-sm">
+          <ImPlatformIcon platform={platform} size={22} />
         </span>
         <div className="min-w-0">
           <div className="text-[13px] font-bold text-[var(--color-text-primary)]">

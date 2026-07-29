@@ -62,6 +62,7 @@ export type OpenAIChatResponse = {
     message: {
       role: string
       content: string | null
+      reasoning_content?: string
       tool_calls?: OpenAIToolCall[]
     }
     finish_reason: string | null

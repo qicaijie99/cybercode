@@ -23,4 +23,33 @@ describe('buildOpenAICompatibleUrl', () => {
       'chat/completions',
     )).toBe('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions')
   })
+
+  test('supports GitHub Models inference without inventing a /v1 segment', () => {
+    expect(buildOpenAICompatibleUrl(
+      'https://models.github.ai/inference',
+      'chat/completions',
+    )).toBe('https://models.github.ai/inference/chat/completions')
+    expect(buildOpenAICompatibleUrl(
+      'https://models.github.ai/inference',
+      'models',
+    )).toBe('https://models.github.ai/inference/models')
+  })
+
+  test('supports the ChatGPT Codex Responses root without inventing a /v1 segment', () => {
+    expect(buildOpenAICompatibleUrl(
+      'https://chatgpt.com/backend-api/codex',
+      'responses',
+    )).toBe('https://chatgpt.com/backend-api/codex/responses')
+  })
+
+  test('uses Perplexity chat and model discovery paths', () => {
+    expect(buildOpenAICompatibleUrl(
+      'https://api.perplexity.ai',
+      'chat/completions',
+    )).toBe('https://api.perplexity.ai/chat/completions')
+    expect(buildOpenAICompatibleUrl(
+      'https://api.perplexity.ai',
+      'models',
+    )).toBe('https://api.perplexity.ai/v1/models')
+  })
 })

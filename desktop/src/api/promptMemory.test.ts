@@ -6,7 +6,7 @@ describe('promptMemoryApi', () => {
     vi.unstubAllGlobals()
   })
 
-  it('loads the evolution profile and removes a specific entry', async () => {
+  it('loads the evolution profile and mutates individual entries', async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ insights: [], stats: {} }), {
         status: 200,
@@ -16,9 +16,18 @@ describe('promptMemoryApi', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await promptMemoryApi.insights()
-    await promptMemoryApi.removeEntry(
+    await promptMemoryApi.addEntry(
       'user',
       '[communication] User prefers concise replies.',
+    )
+    await promptMemoryApi.replaceEntry(
+      'user',
+      '[communication] User prefers concise replies.',
+      '[communication] User prefers concise Chinese replies.',
+    )
+    await promptMemoryApi.removeEntry(
+      'user',
+      '[communication] User prefers concise Chinese replies.',
     )
     await promptMemoryApi.updateConfig(false)
 
@@ -33,13 +42,36 @@ describe('promptMemoryApi', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
-          action: 'remove',
-          oldText: '[communication] User prefers concise replies.',
+          action: 'add',
+          content: '[communication] User prefers concise replies.',
         }),
       }),
     )
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
+      'http://127.0.0.1:3456/api/prompt-memory/user/entries',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'replace',
+          oldText: '[communication] User prefers concise replies.',
+          content: '[communication] User prefers concise Chinese replies.',
+        }),
+      }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      'http://127.0.0.1:3456/api/prompt-memory/user/entries',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'remove',
+          oldText: '[communication] User prefers concise Chinese replies.',
+        }),
+      }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
       'http://127.0.0.1:3456/api/prompt-memory/config',
       expect.objectContaining({
         method: 'PATCH',

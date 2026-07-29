@@ -149,7 +149,10 @@ describe('KnowledgeSpace', () => {
   it('opens the ready project graph directly', async () => {
     render(<KnowledgeSpace />)
 
-    expect(await screen.findByTestId('code-graph-visualization')).toHaveTextContent('1')
+    expect(screen.getByText('知识来源').closest('aside')).toHaveClass('hidden', 'lg:flex')
+    expect(screen.getByRole('combobox', { name: '知识来源' }).parentElement).toHaveClass('lg:hidden')
+    expect(await screen.findByTestId('code-graph-visualization', {}, { timeout: 3_000 }))
+      .toHaveTextContent('1')
     expect(tokenOptimizationApi.status).toHaveBeenCalledWith(projectPath)
     expect(tokenOptimizationApi.graph).toHaveBeenCalledWith(projectPath, 180)
   })

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MessageBlock, MessageList, buildRenderModel, syncChatScrollbarGutter } from './MessageList'
 import { ApiError } from '../../api/client'
@@ -50,6 +50,10 @@ describe('MessageList nested tool calls', () => {
     useSessionRuntimeStore.setState({ selections: {} })
     useSessionStore.setState({ sessions: [], isLoading: false, error: null })
     useUIStore.setState({ toasts: [] })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('aligns the chat layout to the measured scrollbar gutter', () => {
@@ -167,7 +171,7 @@ describe('MessageList nested tool calls', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('streaming-indicator')).toBeTruthy()
-      expect(screen.getByText('正在生成回复')).toBeTruthy()
+      expect(screen.getByTestId('smooth-streaming-text').textContent).toBe('正在生成回复')
     })
 
     act(() => {
@@ -623,6 +627,47 @@ describe('MessageList nested tool calls', () => {
     )
   })
 
+  it('localizes selected-text actions and copies the exact chat selection', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    useSettingsStore.setState({ locale: 'zh' })
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [{
+            id: 'assistant-selection',
+            type: 'assistant_text',
+            content: '这段文字应该显示中文右键菜单。',
+            timestamp: 1,
+          }],
+        }),
+      },
+    })
+
+    render(<MessageList __testInitialItemCount={100} />)
+
+    const messageText = screen.getByText('这段文字应该显示中文右键菜单。')
+    const range = document.createRange()
+    range.selectNodeContents(messageText)
+    window.getSelection()?.removeAllRanges()
+    window.getSelection()?.addRange(range)
+
+    fireEvent.contextMenu(messageText, { clientX: 40, clientY: 50 })
+
+    expect(screen.getByRole('menu', { name: '选中文字操作' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '复制' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '复制为引用' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '选择整条消息' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '复制' }))
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('这段文字应该显示中文右键菜单。')
+    })
+  })
+
   it('creates a branch from a saved assistant reply and inherits the runtime selection', async () => {
     const projectPath = '-tmp-branch-project'
     const branchSessionId = 'branch-session-id'
@@ -984,7 +1029,7 @@ describe('MessageList nested tool calls', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('streaming new token')).toBeTruthy()
+      expect(screen.getByTestId('smooth-streaming-text').textContent).toBe('streaming new token')
     }, { timeout: 3_000 })
     expect(scrollIntoView).not.toHaveBeenCalled()
   })
@@ -1071,8 +1116,74 @@ describe('MessageList nested tool calls', () => {
     expect(assistantBubble?.className).not.toContain('rounded-tl-[8px]')
     expect(userActions?.getAttribute('data-align')).toBe('end')
     expect(assistantActions?.getAttribute('data-align')).toBe('start')
+    expect(userShell?.parentElement?.hasAttribute('data-message-hover-group')).toBe(true)
+    expect(assistantShell?.parentElement?.hasAttribute('data-message-hover-group')).toBe(true)
+    expect(userBubble?.hasAttribute('data-message-hover-trigger')).toBe(true)
+    expect(assistantBubble?.hasAttribute('data-message-hover-trigger')).toBe(true)
+    expect(userActions?.parentElement?.className).toContain('mr-[16px]')
+    expect(userActions?.parentElement?.className).toContain('message-action-visibility')
     expect(assistantActions?.parentElement?.className).toContain('ml-[16px]')
-    expect(assistantActions?.parentElement?.className).toContain('mt-[8px]')
+    expect(assistantActions?.parentElement?.className).toContain('message-action-visibility')
+    expect(userActions?.className).toContain('pointer-events-none')
+    expect(assistantActions?.className).toContain('pointer-events-none')
+
+    const userActionCluster = userActions?.querySelector('[data-message-action-cluster]')
+    const assistantActionCluster = assistantActions?.querySelector('[data-message-action-cluster]')
+    expect(userActionCluster?.className).toContain('pointer-events-auto')
+    expect(assistantActionCluster?.className).toContain('pointer-events-auto')
+    expect(userActionCluster?.className).toContain('pt-[8px]')
+    expect(assistantActionCluster?.className).toContain('pt-[8px]')
+  })
+
+  it('hides the bottommost assistant actions after leaving downward', async () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'assistant-bottom',
+              type: 'assistant_text',
+              content: '最下方回复的操作按钮不能粘在输入框上方。',
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList __testInitialItemCount={100} />)
+
+    const bubble = screen
+      .getByText('最下方回复的操作按钮不能粘在输入框上方。')
+      .closest('[data-message-bubble="assistant"]')
+    const actionCluster = screen
+      .getByRole('button', { name: 'Copy reply' })
+      .closest('[data-message-action-cluster]')
+    const visibility = actionCluster?.closest('.message-action-visibility')
+
+    expect(bubble).toBeTruthy()
+    expect(actionCluster).toBeTruthy()
+    expect(visibility?.getAttribute('data-actions-visible')).toBe('false')
+
+    fireEvent.pointerEnter(bubble!)
+    expect(visibility?.getAttribute('data-actions-visible')).toBe('true')
+
+    fireEvent.pointerLeave(bubble!)
+    await waitFor(() => {
+      expect(visibility?.getAttribute('data-actions-visible')).toBe('false')
+    })
+
+    fireEvent.pointerEnter(bubble!)
+    fireEvent.pointerLeave(bubble!)
+    fireEvent.pointerEnter(actionCluster!)
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 90))
+    })
+    expect(visibility?.getAttribute('data-actions-visible')).toBe('true')
+
+    fireEvent.pointerLeave(actionCluster!)
+    expect(visibility?.getAttribute('data-actions-visible')).toBe('false')
   })
 
   it('keeps standalone message controls inside the shared chat column', () => {
@@ -1240,7 +1351,12 @@ describe('MessageList nested tool calls', () => {
     )
   })
 
-  it('localizes branch and rewind action hints in Chinese', () => {
+  it('localizes message action hints and copy feedback in Chinese', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
     useSettingsStore.setState({ locale: 'zh' })
     useChatStore.setState({
       sessions: {
@@ -1270,9 +1386,33 @@ describe('MessageList nested tool calls', () => {
 
     const rewindButton = screen.getByRole('button', { name: '回滚到这里' })
     const branchButton = screen.getByRole('button', { name: '从此回复创建分支' })
+    const copyPromptButton = screen.getByRole('button', { name: '复制提问' })
+    const copyReplyButton = screen.getByRole('button', { name: '复制回复' })
     expect(rewindButton.getAttribute('title')).toBe('回滚到这里')
     expect(branchButton.getAttribute('title')).toBe('从此回复创建分支')
+    expect(copyPromptButton.getAttribute('title')).toBe('复制提问')
+    expect(copyReplyButton.getAttribute('title')).toBe('复制回复')
+    for (const button of [
+      rewindButton,
+      branchButton,
+      copyPromptButton,
+      copyReplyButton,
+    ]) {
+      expect(button.className).toContain('message-action-button')
+      expect(button.className).toContain('h-[24px]')
+      expect(button.className).toContain('w-[24px]')
+      expect(button.className).toContain('shrink-0')
+      expect(button.className).toContain('border-0')
+    }
+    expect(rewindButton.parentElement?.className).toContain('gap-[6px]')
+    expect(branchButton.parentElement?.className).toContain('gap-[6px]')
     expect(screen.queryByText('Rewind')).toBeNull()
+
+    fireEvent.click(copyReplyButton)
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('可以从这里创建分支')
+      expect(screen.getByRole('button', { name: '已复制' })).toBeTruthy()
+    })
   })
 
   it('confirms rewind with the selected message id and prompt guard', async () => {

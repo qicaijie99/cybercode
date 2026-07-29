@@ -41,6 +41,7 @@ describe('composerUtils', () => {
         { name: 'help', description: 'Show available desktop and agent commands' },
         { name: 'clear', description: 'Clear conversation history' },
         { name: 'context', description: 'Show current context usage' },
+        { name: 'goal', description: 'Keep working until the objective is fully achieved and verified' },
       ]),
     )
   })

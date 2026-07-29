@@ -1,4 +1,5 @@
 import type { ApiFormat } from './provider'
+import type { SourceCostClass } from './routing'
 
 export type ModelMapping = {
   main: string
@@ -31,4 +32,6 @@ export type ProviderPreset = {
   promoText?: string
   featured?: boolean
   defaultEnv?: Record<string, string>
+  cost?: SourceCostClass
+  costNote?: string
 }

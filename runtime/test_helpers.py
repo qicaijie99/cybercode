@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-platform tests for mac_helper.py and win_helper.py.
+"""Cross-platform tests for the macOS, Windows, and Linux helpers.
 
 Tests the platform-independent parts (JSON protocol, key mapping, capture logic)
 without requiring platform-specific dependencies. Can run on any OS with pytest.
@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -21,10 +22,13 @@ from unittest.mock import patch, MagicMock
 # Determine which helper to test based on current platform
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 
 RUNTIME_DIR = Path(__file__).parent
 MAC_HELPER = RUNTIME_DIR / "mac_helper.py"
 WIN_HELPER = RUNTIME_DIR / "win_helper.py"
+LINUX_HELPER = RUNTIME_DIR / "linux_helper.py"
+PLATFORM_HELPERS = [MAC_HELPER, WIN_HELPER, LINUX_HELPER]
 
 
 class TestKeyMap(unittest.TestCase):
@@ -75,18 +79,20 @@ class TestKeyMap(unittest.TestCase):
         self.assertEqual(km["option"], "alt")
 
     def test_common_keys_present_in_both(self):
-        """Both helpers must have the same set of key names."""
-        if not MAC_HELPER.exists() or not WIN_HELPER.exists():
-            self.skipTest("Both helpers required")
-        mac_km = self._load_key_map(MAC_HELPER)
-        win_km = self._load_key_map(WIN_HELPER)
-        # All keys in mac should be in win and vice versa
-        self.assertEqual(set(mac_km.keys()), set(win_km.keys()),
-                         "KEY_MAP keys must be identical across platforms")
+        """Every helper must expose the same accepted key names."""
+        key_sets = [
+            set(self._load_key_map(helper).keys())
+            for helper in PLATFORM_HELPERS
+            if helper.exists()
+        ]
+        self.assertGreaterEqual(len(key_sets), 3)
+        for key_set in key_sets[1:]:
+            self.assertEqual(key_sets[0], key_set,
+                             "KEY_MAP keys must be identical across platforms")
 
     def test_all_alphabet_keys(self):
         """All a-z keys should map to themselves."""
-        for helper in [MAC_HELPER, WIN_HELPER]:
+        for helper in PLATFORM_HELPERS:
             if not helper.exists():
                 continue
             km = self._load_key_map(helper)
@@ -95,7 +101,7 @@ class TestKeyMap(unittest.TestCase):
 
     def test_all_digit_keys(self):
         """All 0-9 keys should map to themselves."""
-        for helper in [MAC_HELPER, WIN_HELPER]:
+        for helper in PLATFORM_HELPERS:
             if not helper.exists():
                 continue
             km = self._load_key_map(helper)
@@ -104,7 +110,7 @@ class TestKeyMap(unittest.TestCase):
 
     def test_function_keys(self):
         """F1-F12 should map to themselves."""
-        for helper in [MAC_HELPER, WIN_HELPER]:
+        for helper in PLATFORM_HELPERS:
             if not helper.exists():
                 continue
             km = self._load_key_map(helper)
@@ -122,6 +128,8 @@ class TestJSONProtocol(unittest.TestCase):
             return WIN_HELPER
         if IS_MACOS and MAC_HELPER.exists():
             return MAC_HELPER
+        if IS_LINUX and LINUX_HELPER.exists():
+            return LINUX_HELPER
         return MAC_HELPER if MAC_HELPER.exists() else WIN_HELPER
 
     def _parse_main_commands(self, helper_path: Path) -> list[str]:
@@ -130,19 +138,26 @@ class TestJSONProtocol(unittest.TestCase):
         commands = []
         for line in source.splitlines():
             stripped = line.strip()
-            if stripped.startswith('if command == "'):
+            if stripped.startswith(('if command == "', 'elif command == "')):
                 cmd = stripped.split('"')[1]
                 commands.append(cmd)
         return commands
 
-    def test_both_helpers_same_commands(self):
-        """Both helpers must support the exact same set of commands."""
-        if not MAC_HELPER.exists() or not WIN_HELPER.exists():
-            self.skipTest("Both helpers required")
-        mac_cmds = set(self._parse_main_commands(MAC_HELPER))
-        win_cmds = set(self._parse_main_commands(WIN_HELPER))
-        self.assertEqual(mac_cmds, win_cmds,
-                         f"Command sets differ.\nOnly in mac: {mac_cmds - win_cmds}\nOnly in win: {win_cmds - mac_cmds}")
+    def test_all_helpers_same_commands(self):
+        """All helpers must support the exact same command set."""
+        command_sets = {
+            helper.name: set(self._parse_main_commands(helper))
+            for helper in PLATFORM_HELPERS
+            if helper.exists()
+        }
+        self.assertEqual(len(command_sets), 3)
+        baseline_name, baseline = next(iter(command_sets.items()))
+        for name, commands in command_sets.items():
+            self.assertEqual(
+                baseline,
+                commands,
+                f"Command sets differ between {baseline_name} and {name}",
+            )
 
     def test_expected_commands_exist(self):
         """Core commands should be present in each helper."""
@@ -156,7 +171,7 @@ class TestJSONProtocol(unittest.TestCase):
             "list_installed_apps", "list_running_apps", "open_app",
             "read_clipboard", "write_clipboard", "paste_clipboard",
         }
-        for helper in [MAC_HELPER, WIN_HELPER]:
+        for helper in PLATFORM_HELPERS:
             if not helper.exists():
                 continue
             cmds = set(self._parse_main_commands(helper))
@@ -196,7 +211,7 @@ class TestHelperOutputFormat(unittest.TestCase):
 
     def test_json_output_function_exists(self):
         """Both helpers should define json_output and error_output."""
-        for helper in [MAC_HELPER, WIN_HELPER]:
+        for helper in PLATFORM_HELPERS:
             if not helper.exists():
                 continue
             source = helper.read_text()
@@ -207,7 +222,7 @@ class TestHelperOutputFormat(unittest.TestCase):
 
     def test_main_entry_point(self):
         """Both helpers should have the standard main entry point."""
-        for helper in [MAC_HELPER, WIN_HELPER]:
+        for helper in PLATFORM_HELPERS:
             if not helper.exists():
                 continue
             source = helper.read_text()
@@ -245,6 +260,49 @@ class TestWinHelperPermissions(unittest.TestCase):
         func_source = "\n".join(func_lines)
         self.assertIn('"accessibility": True', func_source)
         self.assertIn('"screenRecording": True', func_source)
+
+
+class TestLinuxHelperPermissions(unittest.TestCase):
+    """Linux should expose portal capture without pretending Wayland input works."""
+
+    def test_wayland_capture_is_available_without_x11_input(self):
+        if not LINUX_HELPER.exists():
+            self.skipTest("linux_helper.py not found")
+
+        environment = dict(os.environ)
+        environment.pop("DISPLAY", None)
+        environment["WAYLAND_DISPLAY"] = "wayland-0"
+        result = subprocess.run(
+            [sys.executable, str(LINUX_HELPER), "check_permissions"],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        permissions = json.loads(result.stdout)["result"]
+        self.assertTrue(permissions["accessibility"])
+        self.assertTrue(permissions["screenRecording"])
+        self.assertFalse(permissions["inputAvailable"])
+
+    def test_wayland_input_fails_immediately_with_a_clear_error(self):
+        if not LINUX_HELPER.exists():
+            self.skipTest("linux_helper.py not found")
+
+        environment = dict(os.environ)
+        environment.pop("DISPLAY", None)
+        environment["WAYLAND_DISPLAY"] = "wayland-0"
+        result = subprocess.run(
+            [sys.executable, str(LINUX_HELPER), "cursor_position"],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        response = json.loads(result.stdout)
+        self.assertFalse(response["ok"])
+        self.assertIn("X11/XWayland DISPLAY", response["error"]["message"])
 
 
 class TestMacHelperPermissions(unittest.TestCase):

@@ -1,4 +1,11 @@
-import { appendFile, mkdir, readFile } from 'fs/promises'
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'fs/promises'
 import { randomUUID } from 'crypto'
 import { dirname, join } from 'path'
 import { getSessionId } from '../bootstrap/state.js'
@@ -30,7 +37,10 @@ import {
 } from './store.js'
 
 const DEFAULT_REVIEW_INTERVAL_TURNS = 6
+const DEFAULT_META_REVIEW_INTERVAL = 5
+const MIN_META_REVIEW_ENTRIES = 3
 const LOG_FILENAME = 'AUTO_REVIEW_LOG.jsonl'
+const STATE_FILENAME = 'AUTO_REVIEW_STATE.json'
 export const PROMPT_MEMORY_AUTO_REVIEW_TOOL_USE_ID =
   'prompt_memory_auto_review'
 
@@ -40,7 +50,8 @@ const EXPLICIT_MEMORY_SIGNAL =
 const WORKING_STYLE_SIGNAL =
   /(?:\b(?:always|never|first discuss|plan first|before you|make sure|from now on|workflow|quality bar)\b|先讨论|先计划|先.+再|每次都|总是|不要|不能|应该|必须|起码|按这个方法|做事方式|验收标准|品質基準|まず相談|必ず|しないで|먼저 논의|항상|반드시|하지 마)/i
 
-type ReviewTrigger = 'explicit' | 'interval'
+type ScheduledReviewTrigger = 'explicit' | 'interval'
+type ReviewTrigger = ScheduledReviewTrigger | 'meta'
 
 const MEMORY_LANGUAGE_ALIASES: Array<[RegExp, string]> = [
   [/^(?:zh|zh-cn|zh-hans|chinese|中文|简体中文)$/i, 'Simplified Chinese'],
@@ -64,7 +75,19 @@ export type PromptMemoryAutoReviewLogEntry = {
 
 type PendingReview = {
   context: REPLHookContext
-  trigger: ReviewTrigger
+  trigger: ScheduledReviewTrigger
+}
+
+export type PromptMemoryAutoReviewState = {
+  version: 1
+  periodicReviewsSinceMeta: number
+  lastReviewAt?: string
+  lastMetaReviewAt?: string
+}
+
+const DEFAULT_AUTO_REVIEW_STATE: PromptMemoryAutoReviewState = {
+  version: 1,
+  periodicReviewsSinceMeta: 0,
 }
 
 let lastReviewedMessageUuid: string | undefined
@@ -81,6 +104,15 @@ function getReviewIntervalTurns(): number {
   return Number.isFinite(parsed) && parsed > 0
     ? parsed
     : DEFAULT_REVIEW_INTERVAL_TURNS
+}
+
+function getMetaReviewInterval(): number {
+  const raw = process.env.CYBER_PROMPT_MEMORY_META_REVIEW_INTERVAL
+  if (!raw) return DEFAULT_META_REVIEW_INTERVAL
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_META_REVIEW_INTERVAL
 }
 
 export function normalizePromptMemoryLanguage(
@@ -109,6 +141,106 @@ export function getConfiguredPromptMemoryLanguage(): string {
 
 function getAutoReviewLogPath(): string {
   return join(getPromptMemoryDir(), LOG_FILENAME).normalize('NFC')
+}
+
+function getAutoReviewStatePath(): string {
+  return join(getPromptMemoryDir(), STATE_FILENAME).normalize('NFC')
+}
+
+function normalizeAutoReviewState(value: unknown): PromptMemoryAutoReviewState {
+  if (typeof value !== 'object' || value === null) {
+    return { ...DEFAULT_AUTO_REVIEW_STATE }
+  }
+  const candidate = value as Partial<PromptMemoryAutoReviewState>
+  const periodicReviewsSinceMeta = Number.isFinite(
+    candidate.periodicReviewsSinceMeta,
+  )
+    ? Math.max(0, Math.floor(candidate.periodicReviewsSinceMeta ?? 0))
+    : 0
+  return {
+    version: 1,
+    periodicReviewsSinceMeta,
+    ...(typeof candidate.lastReviewAt === 'string'
+      ? { lastReviewAt: candidate.lastReviewAt }
+      : {}),
+    ...(typeof candidate.lastMetaReviewAt === 'string'
+      ? { lastMetaReviewAt: candidate.lastMetaReviewAt }
+      : {}),
+  }
+}
+
+export async function readPromptMemoryAutoReviewState(
+): Promise<PromptMemoryAutoReviewState> {
+  try {
+    return normalizeAutoReviewState(
+      JSON.parse(await readFile(getAutoReviewStatePath(), 'utf-8')),
+    )
+  } catch {
+    return { ...DEFAULT_AUTO_REVIEW_STATE }
+  }
+}
+
+export async function writePromptMemoryAutoReviewState(
+  state: PromptMemoryAutoReviewState,
+): Promise<void> {
+  const statePath = getAutoReviewStatePath()
+  await mkdir(dirname(statePath), { recursive: true })
+  const tmpPath = `${statePath}.tmp.${process.pid}.${randomUUID()}`
+  await writeFile(
+    tmpPath,
+    `${jsonStringify(normalizeAutoReviewState(state), null, 2)}\n`,
+    'utf-8',
+  )
+  try {
+    await rename(tmpPath, statePath)
+  } catch (error) {
+    await rm(tmpPath, { force: true }).catch(() => {})
+    throw error
+  }
+}
+
+export function planPromptMemoryReview(params: {
+  trigger: ScheduledReviewTrigger
+  state: PromptMemoryAutoReviewState
+  memoryEntryCount: number
+  metaInterval?: number
+  now?: string
+}): {
+  trigger: ReviewTrigger
+  nextState: PromptMemoryAutoReviewState
+} {
+  if (params.trigger === 'explicit') {
+    return {
+      trigger: 'explicit',
+      nextState: normalizeAutoReviewState(params.state),
+    }
+  }
+
+  const state = normalizeAutoReviewState(params.state)
+  const requestedMetaInterval =
+    params.metaInterval ?? DEFAULT_META_REVIEW_INTERVAL
+  const metaInterval =
+    Number.isFinite(requestedMetaInterval) && requestedMetaInterval > 0
+      ? Math.floor(requestedMetaInterval)
+      : DEFAULT_META_REVIEW_INTERVAL
+  const periodicReviewsSinceMeta = Math.min(
+    state.periodicReviewsSinceMeta + 1,
+    metaInterval,
+  )
+  const now = params.now ?? new Date().toISOString()
+  const shouldRunMeta =
+    periodicReviewsSinceMeta >= metaInterval &&
+    params.memoryEntryCount >= MIN_META_REVIEW_ENTRIES
+
+  return {
+    trigger: shouldRunMeta ? 'meta' : 'interval',
+    nextState: {
+      ...state,
+      periodicReviewsSinceMeta: shouldRunMeta ? 0 : periodicReviewsSinceMeta,
+      lastReviewAt: now,
+      ...(shouldRunMeta ? { lastMetaReviewAt: now } : {}),
+    },
+  }
 }
 
 function isVisibleMessage(message: Message): boolean {
@@ -214,7 +346,11 @@ export function shouldRunPromptMemoryAutoReview(params: {
   sinceUuid: string | undefined
   turnsSinceLastReview: number
   intervalTurns?: number
-}): { shouldRun: boolean; trigger: ReviewTrigger | null; nextTurnCount: number } {
+}): {
+  shouldRun: boolean
+  trigger: ScheduledReviewTrigger | null
+  nextTurnCount: number
+} {
   const messagesSince = getMessagesSince(params.messages, params.sinceUuid)
   const newUserMessages = countUserMessages(messagesSince)
   if (newUserMessages === 0) {
@@ -268,7 +404,9 @@ export function buildPromptMemoryAutoReviewPrompt(params: {
   return [
     'You are the automatic Prompt Memory reviewer for CyberCode.',
     '',
-    `Analyze only the most recent ~${params.newMessageCount} visible messages above. Decide whether future conversations would benefit from updating the short prompt-memory files.`,
+    params.trigger === 'meta'
+      ? `This is a low-frequency meta-consolidation review. Use the most recent ~${params.newMessageCount} visible messages as supporting evidence, then review the current prompt-memory entries as one system.`
+      : `Analyze only the most recent ~${params.newMessageCount} visible messages above. Decide whether future conversations would benefit from updating the short prompt-memory files.`,
     '',
     'Current prompt-memory entries:',
     '',
@@ -297,10 +435,25 @@ export function buildPromptMemoryAutoReviewPrompt(params: {
     '- Do not infer personality, motives, emotions, medical state, politics, religion, sexuality, finances, or other sensitive/private traits. Never label the user negatively.',
     '- Do not store secrets, credentials, API keys, private tokens, one-off tasks, transient plans, temporary prices, or details that are only useful inside the current conversation.',
     '- Do not store project-specific facts in BRIEF.md when the project memory directory is the better home.',
+    ...(params.trigger === 'meta'
+      ? [
+          '',
+          'Meta-consolidation rules:',
+          '- Look for several narrow lessons or methods that express the same underlying decision principle.',
+          '- Prefer one concise, actionable [meta-method] over duplicated or overlapping entries.',
+          '- A useful [meta-method] should say when the principle applies, what decision or action improves the work, and how to verify the result when relevant.',
+          '- Merge by replacing the strongest existing entry and removing only entries made redundant by the replacement.',
+          '- Preserve concrete environment constraints and stable user facts; do not generalize them away.',
+          '- Require support from at least two existing entries or repeated evidence. Never invent a higher-order rule merely to produce a change.',
+          '- Remove stale, contradictory, or low-value entries when the evidence is clear.',
+        ]
+      : []),
     '',
     params.trigger === 'explicit'
       ? 'The recent user text contained an explicit memory/preference signal. Prioritize it, but still reject unsafe or temporary content.'
-      : 'This is a periodic review. Be conservative; no tool call is better than low-value memory.',
+      : params.trigger === 'meta'
+        ? 'Consolidate only when the result is more general, more actionable, and shorter than the entries it replaces. No tool call is better than forced abstraction.'
+        : 'This is a periodic review. Be conservative; no tool call is better than low-value memory.',
     '',
     'If no update is warranted, do not call any tool. Reply exactly: No prompt-memory changes.',
   ].join('\n')
@@ -538,14 +691,22 @@ async function runPromptMemoryAutoReview({
 
   inProgress = true
   try {
-    const [brief, user] = await Promise.all([
+    const [brief, user, reviewState] = await Promise.all([
       readPromptMemoryFile('brief'),
       readPromptMemoryFile('user'),
+      readPromptMemoryAutoReviewState(),
     ])
+    const reviewPlan = planPromptMemoryReview({
+      trigger,
+      state: reviewState,
+      memoryEntryCount: brief.entries.length + user.entries.length,
+      metaInterval: getMetaReviewInterval(),
+    })
+    const effectiveTrigger = reviewPlan.trigger
 
     const prompt = buildPromptMemoryAutoReviewPrompt({
       newMessageCount: newVisibleMessages,
-      trigger,
+      trigger: effectiveTrigger,
       briefEntries: brief.entries,
       userEntries: user.entries,
       preferredLanguage: getConfiguredPromptMemoryLanguage(),
@@ -559,15 +720,25 @@ async function runPromptMemoryAutoReview({
       forkLabel: 'prompt_memory_review',
       skipTranscript: true,
       skipCacheWrite: true,
-      maxTurns: 4,
+      maxTurns: effectiveTrigger === 'meta' ? 8 : 4,
     })
 
     const logEntries = extractPromptMemoryAutoReviewLogs({
       messages: result.messages,
       sessionId: getSessionId(),
-      trigger,
+      trigger: effectiveTrigger,
     })
     await appendPromptMemoryAutoReviewLogs(logEntries)
+    if (trigger === 'interval') {
+      try {
+        await writePromptMemoryAutoReviewState(reviewPlan.nextState)
+      } catch (stateError) {
+        logForDebugging(
+          `[prompt-memory-review] failed to persist meta-review state: ${errorMessage(stateError)}`,
+          { level: 'debug' },
+        )
+      }
+    }
     const notice = formatPromptMemoryAutoReviewNotice(logEntries)
     if (notice) {
       context.toolUseContext.appendSystemMessage?.(
@@ -583,7 +754,7 @@ async function runPromptMemoryAutoReview({
     if (lastMessage?.uuid) lastReviewedMessageUuid = lastMessage.uuid
 
     logForDebugging(
-      `[prompt-memory-review] finished (${trigger}${isTrailingRun ? ', trailing' : ''}): ${summarizeLogEntries(logEntries)}`,
+      `[prompt-memory-review] finished (${effectiveTrigger}${isTrailingRun ? ', trailing' : ''}): ${summarizeLogEntries(logEntries)}`,
     )
   } catch (error) {
     logForDebugging(
@@ -667,6 +838,7 @@ export function resetPromptMemoryAutoReviewForTesting(): void {
 
 export const promptMemoryAutoReviewPathsForTesting = {
   getAutoReviewLogPath,
+  getAutoReviewStatePath,
   getBriefPath,
   getUserPromptMemoryPath,
 }

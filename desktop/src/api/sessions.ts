@@ -6,6 +6,27 @@ type MessagesResponse = { messages: MessageEntry[]; hasMore: boolean }
 type CreateSessionResponse = { sessionId: string; session?: SessionListItem }
 type CreateProjectFolderResponse = { path: string; existed: boolean }
 type SessionLocatorParams = { projectPath?: string }
+const pendingSessionListRequests = new Map<string, Promise<SessionsResponse>>()
+
+function listSessions(params?: { project?: string; limit?: number; offset?: number }) {
+  const query = new URLSearchParams()
+  if (params?.project) query.set('project', params.project)
+  if (params?.limit) query.set('limit', String(params.limit))
+  if (params?.offset) query.set('offset', String(params.offset))
+  const qs = query.toString()
+  const path = `/api/sessions${qs ? `?${qs}` : ''}`
+  const pending = pendingSessionListRequests.get(path)
+  if (pending) return pending
+
+  const request = api.get<SessionsResponse>(path)
+  pendingSessionListRequests.set(path, request)
+  void request.then(
+    () => pendingSessionListRequests.delete(path),
+    () => pendingSessionListRequests.delete(path),
+  )
+  return request
+}
+
 export type SessionRewindResponse = {
   target: {
     targetUserMessageId: string
@@ -165,14 +186,7 @@ export type SessionInspectionResponse = {
 }
 
 export const sessionsApi = {
-  list(params?: { project?: string; limit?: number; offset?: number }) {
-    const query = new URLSearchParams()
-    if (params?.project) query.set('project', params.project)
-    if (params?.limit) query.set('limit', String(params.limit))
-    if (params?.offset) query.set('offset', String(params.offset))
-    const qs = query.toString()
-    return api.get<SessionsResponse>(`/api/sessions${qs ? `?${qs}` : ''}`)
-  },
+  list: listSessions,
 
   getMessages(sessionId: string, params?: { limit?: number; before?: string; after?: string } & SessionLocatorParams) {
     const query = new URLSearchParams()

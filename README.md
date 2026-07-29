@@ -9,6 +9,11 @@
 </p>
 
 <p align="center">
+  <strong>官方网站：</strong>
+  <a href="https://wk42worldworld.github.io/cybercode/">https://wk42worldworld.github.io/cybercode/</a>
+</p>
+
+<p align="center">
   <strong>语言：</strong>
   <a href="README.en.md">English</a> ·
   <strong>简体中文</strong> ·
@@ -41,8 +46,18 @@
 </p>
 
 <p align="center">
-  <a href="#安装命令行版本">安装 CLI</a> · <a href="#为什么是-cybercode">为什么</a> · <a href="#快速对比">对比</a> · <a href="#图形界面速览">图形界面</a> · <a href="#功能">功能</a> · <a href="#从源码运行">从源码运行</a> · <a href="#分章节教程">分章节教程</a> · <a href="#功能模块教程">模块教程</a> · <a href="docs/guide/env-vars.md">环境变量</a> · <a href="#社区与传播">社区</a> · <a href="#更多文档">更多文档</a>
+  <a href="https://wk42worldworld.github.io/cybercode/guide/quick-start.html#安装-cli推荐">安装 CLI</a> · <a href="https://wk42worldworld.github.io/cybercode/">为什么</a> · <a href="https://wk42worldworld.github.io/cybercode/desktop/03-features.html">对比</a> · <a href="https://wk42worldworld.github.io/cybercode/desktop/">图形界面</a> · <a href="https://wk42worldworld.github.io/cybercode/desktop/03-features.html">功能</a> · <a href="https://wk42worldworld.github.io/cybercode/guide/quick-start.html#从源码运行">从源码运行</a> · <a href="https://wk42worldworld.github.io/cybercode/guide/quick-start.html">分章节教程</a> · <a href="https://wk42worldworld.github.io/cybercode/desktop/03-features.html">模块教程</a> · <a href="https://wk42worldworld.github.io/cybercode/guide/env-vars.html">环境变量</a> · <a href="https://wk42worldworld.github.io/cybercode/#join-community">社区</a> · <a href="https://wk42worldworld.github.io/cybercode/guide/quick-start.html">更多文档</a>
 </p>
+
+## 加入用户群
+
+<p align="center">
+  <a href="docs/public/images/cybercode-qq-community.png">
+    <img src="docs/public/images/cybercode-qq-community.png" alt="CyberCode AI研究中心 QQ 群二维码，群号 463169230" width="300">
+  </a>
+</p>
+
+<p align="center"><strong>AI研究中心 QQ 群：463169230</strong><br>扫码加入，交流使用心得、反馈问题和关注新功能。</p>
 
 ---
 
@@ -792,18 +807,12 @@ bun run feishu
 
 如果你希望模型通过截图、鼠标和键盘操作桌面应用，就看这一节。
 
-1. 确保 Bun 依赖已经安装。
-2. 确认 Python 3.8 或更新版本可用：
-
-```bash
-python3 --version
-```
-
-3. macOS 上需要给终端或桌面端宿主授权辅助功能和屏幕录制。
-4. 启动 CyberCode。
-5. 先发一个可观察的小任务，例如：`截屏看看现在打开了什么`。
-6. CyberCode 请求应用访问权限时，按需批准。
-7. 让模型按步骤截图、分析、点击、输入并确认结果。
+1. 桌面端打开「设置 → Computer Use」，点击「自动准备」。
+2. CyberCode 会在后台下载当前平台的专用运行组件，无需安装 Python 或修改系统环境。
+3. macOS 上需要给 CyberCode、终端或桌面端宿主授权辅助功能和屏幕录制。
+4. 先发一个可观察的小任务，例如：`截屏看看现在打开了什么`。
+5. CyberCode 请求应用访问权限时，按需批准。
+6. 让模型按步骤截图、分析、点击、输入并确认结果。
 
 验证结果：CyberCode 能截屏、请求应用访问权限，并且只操作已批准的应用。
 

@@ -20,7 +20,7 @@ Usage:
   ./desktop/scripts/build-macos-arm64.sh [extra tauri build args...]
 
 Environment:
-  SKIP_INSTALL=1   Skip `bun install` in the repo root and desktop app.
+  SKIP_INSTALL=1   Skip `bun install` in the repo root, desktop app, and adapters.
   SIGN_BUILD=1     Remove the default `--no-sign` flag and allow signed builds.
   OPEN_OUTPUT=1    Open the canonical artifact output directory in Finder after a successful build.
 
@@ -59,6 +59,9 @@ if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
 
   echo "[build-macos-arm64] Installing desktop dependencies..."
   (cd "${DESKTOP_DIR}" && bun install)
+
+  echo "[build-macos-arm64] Installing adapter dependencies..."
+  (cd "${REPO_ROOT}/adapters" && bun install)
 fi
 
 # ── 清理 + 显式预热前端 / sidecar ────────────────────────────

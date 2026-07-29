@@ -66,4 +66,37 @@ describe('AdapterService', () => {
     expect(written.feishu.appId).toBe('legacy-app')
     expect(written.telegram.botToken).toBe('new-token')
   })
+
+  test('masks and preserves Weixin, QQ, and DingTalk credentials', async () => {
+    await mkdir(join(tmpHome, '.cyber'), { recursive: true })
+    await writeFile(
+      join(tmpHome, '.cyber', 'adapters.json'),
+      JSON.stringify({
+        weixin: { enabled: true, accountId: 'wx-bot', botToken: 'weixin-secret-token' },
+        qq: { enabled: true, appId: 'qq-app', appSecret: 'qq-secret-value' },
+        dingtalk: { clientId: 'ding-app', clientSecret: 'dingtalk-secret-value' },
+      }),
+    )
+
+    const masked = await adapterService.getConfig()
+    expect(masked.weixin?.botToken).toBe('****oken')
+    expect(masked.qq?.appSecret).toBe('****alue')
+    expect(masked.dingtalk?.clientSecret).toBe('****alue')
+
+    await adapterService.updateConfig({
+      weixin: { enabled: false, botToken: masked.weixin?.botToken },
+      qq: { groupEnabled: false, appSecret: masked.qq?.appSecret },
+      dingtalk: {
+        allowedUsers: ['staff-42'],
+        clientSecret: masked.dingtalk?.clientSecret,
+      },
+    })
+    const raw = await adapterService.getRawConfig()
+    expect(raw.weixin?.botToken).toBe('weixin-secret-token')
+    expect(raw.weixin?.enabled).toBe(false)
+    expect(raw.qq?.appSecret).toBe('qq-secret-value')
+    expect(raw.qq?.groupEnabled).toBe(false)
+    expect(raw.dingtalk?.clientSecret).toBe('dingtalk-secret-value')
+    expect(raw.dingtalk?.allowedUsers).toEqual(['staff-42'])
+  })
 })
