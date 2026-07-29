@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import pMap from 'p-map'
 import {
   WEB_SESSION_PROVIDERS,
   getWebSessionPresetId,
@@ -12,6 +13,7 @@ import { ProviderService } from '../services/providerService.js'
 import type { SavedProvider } from '../types/provider.js'
 
 const providerService = new ProviderService()
+const TEST_ALL_CONCURRENCY = 4
 
 const SaveWebSessionProviderSchema = z.object({
   credential: z.string().trim().max(64_000).optional(),
@@ -161,11 +163,14 @@ export async function handleWebSessionProvidersApi(
           ),
         ))
         .map((definition) => definition.id)
-      const results = []
-      for (const providerId of configuredIds) {
-        if (req.signal.aborted) break
-        results.push(await testConfiguredProvider(providerId, req.signal))
-      }
+      const results = await pMap(
+        configuredIds,
+        (providerId) => testConfiguredProvider(providerId, req.signal),
+        {
+          concurrency: TEST_ALL_CONCURRENCY,
+          signal: req.signal,
+        },
+      )
       return Response.json({ results })
     }
 

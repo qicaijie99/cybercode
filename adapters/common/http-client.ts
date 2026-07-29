@@ -44,12 +44,19 @@ export class AdapterHttpClient {
     return { controller, timer }
   }
 
+  private createRequestHeaders(headers: Record<string, string> = {}): Record<string, string> {
+    const token = process.env.SERVER_AUTH_TOKEN?.trim()
+    return token
+      ? { ...headers, Authorization: `Bearer ${token}` }
+      : headers
+  }
+
   async createSession(workDir: string): Promise<string> {
     const { controller, timer } = this.createTimeoutController()
     try {
       const res = await fetch(`${this.httpBaseUrl}/api/sessions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.createRequestHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ workDir }),
         signal: controller.signal,
       })
@@ -68,6 +75,7 @@ export class AdapterHttpClient {
     const { controller, timer } = this.createTimeoutController()
     try {
       const res = await fetch(`${this.httpBaseUrl}/api/sessions/recent-projects`, {
+        headers: this.createRequestHeaders(),
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -114,6 +122,7 @@ export class AdapterHttpClient {
     const { controller, timer } = this.createTimeoutController()
     try {
       const res = await fetch(`${this.httpBaseUrl}/api/sessions/${encodeURIComponent(sessionId)}/git-info`, {
+        headers: this.createRequestHeaders(),
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -130,6 +139,7 @@ export class AdapterHttpClient {
     const { controller, timer } = this.createTimeoutController()
     try {
       const res = await fetch(`${this.httpBaseUrl}/api/tasks/lists/${encodeURIComponent(sessionId)}`, {
+        headers: this.createRequestHeaders(),
         signal: controller.signal,
       })
       if (!res.ok) {

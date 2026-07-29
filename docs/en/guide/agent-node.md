@@ -7,7 +7,7 @@ CyberCode can expose configured models and smart routes to other agents through 
 1. Open **Models & Routing → Node**.
 2. Create a separate node API key for each user or agent. The complete key is shown only once.
 3. Click the key's row in the table, select the models and routes it may access, then choose its default target for `auto`.
-4. Save, then use the **Connection configuration builder** to choose a protocol and search for a model or route. Clicking a result generates a card with the Base URL, full endpoint, public ID, Model, and node key, with per-field and copy-all actions.
+4. Save, then use the **Connection configuration builder** to choose a protocol and target. CyberCode generates a card with the Base URL, full endpoint, Model, and node key, with per-field and copy-all actions.
 
 You can also configure a standalone TUI directly:
 
@@ -22,6 +22,49 @@ You can also configure a standalone TUI directly:
 ::: tip Desktop-managed sessions
 When the TUI was launched by the CyberCode desktop app, the desktop local server owns the node. Manage it in desktop settings so two processes do not modify the same key and port.
 :::
+
+## Complete fill-in example
+
+The following example connects a “CI coding agent.” `node.example.com` is a documentation-only placeholder domain and `cc_REPLACE_WITH_YOUR_NODE_KEY` is an invalid redacted key. Replace them with the address and complete key shown by your own node.
+
+Add an **OpenAI Compatible** provider in the receiving agent and fill only four fields:
+
+| Receiving field | Example value |
+| --- | --- |
+| Protocol | `OpenAI Chat Completions` |
+| Base URL | `https://node.example.com/v1` |
+| API key | `cc_REPLACE_WITH_YOUR_NODE_KEY` |
+| Model | `auto` |
+
+For normal use, keep Model set to `auto`. No other advanced field is required.
+If the receiving agent also asks for a provider **Name**, use any recognizable local label, such as `CyberCode Work Node`. It does not control routing; provider aliases in Model distinguish the same model served by different upstream providers.
+
+Use the same values for a connection test:
+
+```bash
+curl https://node.example.com/v1/chat/completions \
+  -H "Authorization: Bearer cc_REPLACE_WITH_YOUR_NODE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "auto",
+    "messages": [
+      {"role": "user", "content": "Reply only with: node connected"}
+    ]
+  }'
+```
+
+### Node-side policy in CyberCode
+
+Under **Node → Access keys → Target policy**, configure this key using the names shown in the UI:
+
+| Policy | Example |
+| --- | --- |
+| Key name | `CI coding agent` |
+| Allowed access | `Coding route`, `Kimi K2.6` |
+| Default target | `Coding route` |
+| Monthly request limit | `5000` |
+
+CyberCode enforces these settings while the receiving agent continues to use Model=`auto`. Consult the later advanced Model section and copy an exact ID only when you intentionally need to pin one model or route.
 
 ## Manage keys for multiple users
 
@@ -81,15 +124,7 @@ The complete node key is shown once. If the page now shows a masked value such a
 
 ### Model
 
-The Model field accepts three kinds of values:
-
-| Goal | Model value | Result |
-| --- | --- | --- |
-| Use the CyberCode default target | `auto` | Uses the current default model or smart route |
-| Pin a smart route | `route/<route-id>`, for example `route/coding` | Lets that route choose its provider and model |
-| Pin a direct model | `<provider-alias>/<model-id>`, for example `kimi/kimi-k2.6` | Always uses that exact provider model |
-
-Direct models use stable, readable public aliases and never expose internal database UUIDs. Copy the complete target ID; a visible label such as `Coding` or `kimi-k2.6` is not enough. The easiest path is to search and click a target in the **Connection configuration builder**, then copy its generated card. You can also query `GET /v1/models` with the node key.
+Enter `auto`. CyberCode resolves the default model or smart route configured for this key, so normal users do not need another model identifier.
 
 ## Connect with the OpenAI protocol
 
@@ -100,7 +135,7 @@ Add an **OpenAI Compatible**, **Custom OpenAI**, or **Chat Completions** provide
 | API type | OpenAI Chat Completions |
 | Base URL | The URL shown by CyberCode, such as `http://127.0.0.1:3456/v1` |
 | API key | The complete `cc_...` node key shown when CyberCode creates it |
-| Model | `auto`, a complete `route/...` ID, or a public `<provider-alias>/<model-id>` ID |
+| Model | `auto` |
 
 If the receiving agent asks for an **Endpoint** instead of a Base URL, use `http://127.0.0.1:3456/v1/chat/completions`.
 
@@ -113,9 +148,20 @@ Add an **Anthropic**, **Anthropic Compatible**, or **Anthropic Messages** provid
 | API type | Anthropic Messages |
 | Base URL | The Anthropic protocol URL shown by CyberCode, such as `http://127.0.0.1:3456` |
 | API key | The complete `cc_...` node key shown when CyberCode creates it |
-| Model | `auto`, a complete `route/...` ID, or a public `<provider-alias>/<model-id>` ID |
+| Model | `auto` |
 
 Anthropic clients usually append `/v1/messages` to the base URL, so this URL does not include `/v1`. If the receiving agent requires the complete endpoint, use `http://127.0.0.1:3456/v1/messages`.
+
+## Advanced: pin a model or route
+
+Only when you intentionally need to bypass the default target, replace `auto` with an exact target ID:
+
+| Goal | Model value | Result |
+| --- | --- | --- |
+| Pin a smart route | `route/<route-id>`, for example `route/coding` | Lets that route choose its provider and model |
+| Pin a direct model | `<provider-alias>/<model-id>`, for example `kimi/kimi-k2.6` | Always uses that exact provider model |
+
+Expand **Advanced: pin a model or route** in the node guide and copy the complete ID, or query `GET /v1/models` with the node key. Do not guess it from a display label.
 
 ## Verify the connection
 

@@ -8,6 +8,7 @@ import { executeRoutingCommand } from '../../commands/routing/routing.js'
 import {
   stopEmbeddedProviderProxy,
 } from '../proxy/embeddedProxy.js'
+import { gatewayService } from '../gateway/gatewayService.js'
 import { routingService } from '../routing/routingService.js'
 import { ProviderService } from '../services/providerService.js'
 
@@ -147,6 +148,25 @@ describe('standalone TUI provider, routing, and node commands', () => {
     expect(body.data.map(model => model.id)).toContain(
       'lmstudio/local-model',
     )
+
+    const targets = await executeNodeCommand('targets')
+    expect(targets?.message).toContain('lmstudio/local-model')
+
+    await executeNodeCommand('allow none --key=TUI')
+    const allowed = await executeNodeCommand(
+      'allow lmstudio/local-model --key=TUI',
+    )
+    expect(allowed?.message).toContain('1 targets')
+    await executeNodeCommand('default lmstudio/local-model --key=TUI')
+
+    const nodeStatus = await gatewayService.getStatus()
+    const target = nodeStatus.targets.find(
+      (entry) => entry.publicId === 'lmstudio/local-model',
+    )
+    const tuiKey = nodeStatus.keys.find((entry) => entry.name === 'TUI user')
+    expect(target).toBeDefined()
+    expect(tuiKey?.allowedTargets).toEqual([target!.id])
+    expect(tuiKey?.defaultTarget).toBe(target!.id)
 
     const second = await executeNodeCommand('key create Build server')
     expect(second?.apiKey).toStartWith('cc_')

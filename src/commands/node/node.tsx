@@ -8,6 +8,7 @@ import type {
   GatewayKeyStatus,
   GatewayKeyUpdate,
   GatewayStatus,
+  GatewayTarget,
 } from '../../server/gateway/types.js'
 import { ensureEmbeddedRuntimeServer } from '../../server/proxy/embeddedProxy.js'
 import type {
@@ -20,14 +21,15 @@ const NODE_USAGE = [
   'Usage:',
   '/node',
   '/node status',
+  '/node targets',
   '/node start',
   '/node stop',
   '/node key list|create <name>|rename <key> <name>|rotate <key>|revoke <key>',
   '/node rotate [key-id-or-prefix]',
   '/node revoke [key-id-or-prefix]',
   '/node limit <monthly-requests> [--key=<id-or-prefix>]',
-  '/node allow all|none|<target-id[,target-id...]> [--key=<id-or-prefix>]',
-  '/node default <target-id|none> [--key=<id-or-prefix>]',
+  '/node allow all|none|<public-id[,public-id...]> [--key=<id-or-prefix>]',
+  '/node default <public-id|none> [--key=<id-or-prefix>]',
 ].join('\n')
 
 export type NodeCommandResult = {
@@ -78,6 +80,16 @@ function formatStatus(status: GatewayStatus): string {
   ].join('\n')
 }
 
+function formatTargets(status: GatewayStatus): string {
+  const targets = status.targets.map((target) => (
+    `- ${target.publicId} · ${target.kind} · ${target.available ? 'available' : 'unavailable'} · ${target.description}`
+  ))
+  return [
+    `Node targets (${targets.length}):`,
+    ...(targets.length > 0 ? targets : ['- no targets']),
+  ].join('\n')
+}
+
 function resolveKey(status: GatewayStatus, reference?: string): GatewayKeyStatus {
   if (status.keys.length === 0) {
     throw new Error('Create a node API key with /node start or /node key create <name> first.')
@@ -105,6 +117,17 @@ function resolveKey(status: GatewayStatus, reference?: string): GatewayKeyStatus
     throw new Error(`Ambiguous node API key reference: ${reference}`)
   }
   throw new Error(`Unknown node API key: ${reference}`)
+}
+
+function resolveTarget(status: GatewayStatus, reference: string): GatewayTarget {
+  const matches = status.targets.filter((candidate) => (
+    candidate.id === reference || candidate.publicId === reference
+  ))
+  if (matches.length === 1) return matches[0]!
+  if (matches.length > 1) {
+    throw new Error(`Ambiguous node target: ${reference}`)
+  }
+  throw new Error(`Unknown node target: ${reference}`)
 }
 
 function parseKeyOption(parts: string[]): { parts: string[]; keyReference?: string } {
@@ -143,6 +166,10 @@ export async function executeNodeCommand(args: string): Promise<NodeCommandResul
 
   if (action === 'status' || action === 'list') {
     return { message: formatStatus(status) }
+  }
+
+  if (action === 'targets') {
+    return { message: formatTargets(status) }
   }
 
   if (action === 'start') {
@@ -260,10 +287,9 @@ export async function executeNodeCommand(args: string): Promise<NodeCommandResul
       allowedTargets = []
     } else if (requested) {
       const requestedTargets = [...new Set(requested.split(',').map(item => item.trim()).filter(Boolean))]
-      const knownTargets = new Set(status.targets.map(target => target.id))
-      const unknown = requestedTargets.find(target => !knownTargets.has(target))
-      if (unknown) throw new Error(`Unknown node target: ${unknown}`)
-      allowedTargets = requestedTargets
+      allowedTargets = [...new Set(
+        requestedTargets.map((target) => resolveTarget(status, target).id),
+      )]
     } else {
       return { message: NODE_USAGE }
     }
@@ -287,12 +313,11 @@ export async function executeNodeCommand(args: string): Promise<NodeCommandResul
       const next = await updateNodeKey(origin, key.id, { defaultTarget: null })
       return { message: formatStatus(next) }
     }
-    const target = status.targets.find(item => item.id === requested)
-    if (!target) throw new Error(`Unknown node target: ${requested}`)
+    const target = resolveTarget(status, requested)
     if (!target.available) throw new Error(`Node target is unavailable: ${requested}`)
     const next = await updateNodeKey(origin, key.id, {
-      allowedTargets: [...new Set([...key.allowedTargets, requested])],
-      defaultTarget: requested,
+      allowedTargets: [...new Set([...key.allowedTargets, target.id])],
+      defaultTarget: target.id,
     })
     return { message: formatStatus(next) }
   }

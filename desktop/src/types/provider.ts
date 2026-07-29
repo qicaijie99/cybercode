@@ -31,6 +31,7 @@ export type ProviderModelSyncState = {
 export type SavedProvider = {
   id: string
   presetId: string
+  publicAlias?: string
   name: string
   apiKey: string  // masked from server
   oauthProviderId?: string

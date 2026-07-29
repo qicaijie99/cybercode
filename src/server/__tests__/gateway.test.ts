@@ -89,6 +89,60 @@ describe('external agent gateway', () => {
     expect(JSON.stringify(payload)).not.toContain('upstream-secret-must-not-leak')
   })
 
+  test('keeps duplicate-provider public aliases stable after providers are removed or added', async () => {
+    const providers = new ProviderService()
+    const first = await providers.addProvider({
+      presetId: 'custom',
+      name: 'Shared Provider',
+      apiKey: 'first-key',
+      baseUrl: 'https://first.example.com/v1',
+      apiFormat: 'openai_chat',
+      models: { main: 'model-a', haiku: 'model-a', sonnet: 'model-a', opus: 'model-a' },
+    })
+    const second = await providers.addProvider({
+      presetId: 'custom',
+      name: 'Shared Provider',
+      apiKey: 'second-key',
+      baseUrl: 'https://second.example.com/v1',
+      apiFormat: 'openai_chat',
+      models: { main: 'model-b', haiku: 'model-b', sonnet: 'model-b', opus: 'model-b' },
+    })
+
+    const initial = await gatewayService.getStatus()
+    const initialSecondId = initial.targets.find(
+      (target) => target.providerId === second.id && target.modelId === 'model-b',
+    )?.publicId
+    expect(initialSecondId).toMatch(/^shared-provider-[a-f0-9]{6}\/model-b$/)
+
+    await providers.deleteProvider(first.id)
+    const afterDelete = await gatewayService.getStatus()
+    expect(afterDelete.targets.find(
+      (target) => target.providerId === second.id && target.modelId === 'model-b',
+    )?.publicId).toBe(initialSecondId)
+
+    const third = await providers.addProvider({
+      presetId: 'custom',
+      name: 'Shared Provider',
+      apiKey: 'third-key',
+      baseUrl: 'https://third.example.com/v1',
+      apiFormat: 'openai_chat',
+      models: { main: 'model-c', haiku: 'model-c', sonnet: 'model-c', opus: 'model-c' },
+    })
+    const afterAdd = await gatewayService.getStatus()
+    const secondIdAfterAdd = afterAdd.targets.find(
+      (target) => target.providerId === second.id && target.modelId === 'model-b',
+    )?.publicId
+    const thirdId = afterAdd.targets.find(
+      (target) => target.providerId === third.id && target.modelId === 'model-c',
+    )?.publicId
+
+    expect(secondIdAfterAdd).toBe(initialSecondId)
+    expect(thirdId).toBe('shared-provider/model-c')
+    expect((await providers.getProvider(second.id)).publicAlias).toBe(
+      initialSecondId?.split('/')[0],
+    )
+  })
+
   test('exposes complete multi-key lifecycle routes through the local API', async () => {
     const createRequest = new Request('http://127.0.0.1:3456/api/gateway/keys', {
       method: 'POST',

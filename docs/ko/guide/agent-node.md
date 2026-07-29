@@ -7,7 +7,7 @@ CyberCode는 설정된 모델과 스마트 라우트를 OpenAI Chat Completions�
 1. **모델 및 라우팅 → 노드**를 엽니다.
 2. 사용자 또는 Agent마다 별도의 노드 API Key를 만듭니다. 전체 키는 한 번만 표시됩니다.
 3. 표에서 관리할 Key 행을 선택한 뒤 해당 Key에 허용할 모델과 라우트, `auto`의 기본 대상을 지정합니다.
-4. 저장한 뒤 **연결 설정 생성기**에서 프로토콜을 선택하고 모델 또는 라우트를 검색합니다. 결과를 클릭하면 Base URL, 전체 Endpoint, 공개 ID, Model, 노드 Key가 들어 있는 카드가 열리며 항목별 또는 전체 복사가 가능합니다.
+4. 저장한 뒤 **연결 설정 생성기**에서 프로토콜과 대상을 선택합니다. Base URL, 전체 Endpoint, Model, 노드 Key가 들어 있는 카드가 열리며 항목별 또는 전체 복사가 가능합니다.
 
 독립 TUI에서도 바로 설정할 수 있습니다.
 
@@ -22,6 +22,49 @@ CyberCode는 설정된 모델과 스마트 라우트를 OpenAI Chat Completions�
 ::: tip 데스크톱 관리 세션
 CyberCode 데스크톱에서 실행한 TUI에서는 데스크톱 로컬 server가 node를 관리합니다. 두 프로세스가 같은 Key와 port를 수정하지 않도록 데스크톱 설정에서 관리하세요.
 :::
+
+## 그대로 입력할 수 있는 전체 예시
+
+다음은 “CI coding agent”를 연결하는 예시입니다. `node.example.com`은 문서 전용 자리 표시자 도메인이고 `cc_REPLACE_WITH_YOUR_NODE_KEY`는 사용할 수 없는 마스킹 Key입니다. 실제 노드에 표시된 주소와 전체 Key로 바꾸세요.
+
+연결할 Agent에 **OpenAI Compatible** 공급자를 추가하고 네 항목만 입력합니다.
+
+| 연결 대상 필드 | 입력 예시 |
+| --- | --- |
+| Protocol | `OpenAI Chat Completions` |
+| Base URL | `https://node.example.com/v1` |
+| API Key | `cc_REPLACE_WITH_YOUR_NODE_KEY` |
+| Model | `auto` |
+
+일반 사용자는 Model을 `auto`로 유지하면 됩니다. 다른 고급 필드는 입력하지 않아도 됩니다.
+연결할 Agent가 공급자 **Name**도 요구하면 `CyberCode 작업 노드`처럼 알아보기 쉬운 로컬 이름을 입력하세요. 이 이름은 라우팅에 사용되지 않으며, 같은 모델을 제공하는 서로 다른 상위 공급자는 Model의 공급자 별칭으로 구분됩니다.
+
+같은 값으로 연결 테스트를 실행할 수 있습니다.
+
+```bash
+curl https://node.example.com/v1/chat/completions \
+  -H "Authorization: Bearer cc_REPLACE_WITH_YOUR_NODE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "auto",
+    "messages": [
+      {"role": "user", "content": "node connected라고만 답하세요"}
+    ]
+  }'
+```
+
+### CyberCode의 노드 정책
+
+**노드 → 액세스 키 → 대상 정책**에서 화면에 표시되는 이름으로 이 Key를 설정합니다.
+
+| 정책 | 예시 |
+| --- | --- |
+| Key 이름 | `CI coding agent` |
+| 허용 대상 | `Coding 라우트`, `Kimi K2.6` |
+| 기본 대상 | `Coding 라우트` |
+| 월 요청 한도 | `5000` |
+
+이 정책은 CyberCode가 적용하며 연결 대상은 Model=`auto`를 계속 사용합니다. 특정 모델이나 라우트를 고정해야 할 때만 뒤의 고급 Model 설명에서 정확한 ID를 복사하세요.
 
 ## 여러 사용자의 API Key 관리
 
@@ -79,15 +122,7 @@ CyberCode가 노드를 만들 때 표시하는 전체 `cc_...` 노드 키를 입
 
 ### Model
 
-Model에는 다음 세 종류의 값을 입력할 수 있습니다.
-
-| 목적 | Model 값 | 동작 |
-| --- | --- | --- |
-| CyberCode 기본 대상 사용 | `auto` | 현재 기본 모델 또는 스마트 라우트 사용 |
-| 스마트 라우트 고정 | `route/<route-id>`(예: `route/coding`) | 해당 라우트가 공급자와 모델을 선택 |
-| 직접 모델 고정 | `<provider-alias>/<model-id>`(예: `kimi/kimi-k2.6`) | 지정한 공급자 모델을 항상 사용 |
-
-직접 모델에는 읽기 쉽고 안정적인 공개 alias를 사용하며 내부 데이터베이스 UUID는 표시하지 않습니다. `Coding`, `kimi-k2.6` 같은 표시 이름만 입력하면 안 됩니다. 가장 쉬운 방법은 **연결 설정 생성기**에서 대상을 검색하고 카드를 여는 것입니다. 노드 Key로 `GET /v1/models`를 호출해도 확인할 수 있습니다.
+`auto`를 입력합니다. 이 Key에 설정된 기본 모델 또는 스마트 라우트를 CyberCode가 선택하므로 일반 사용자는 다른 모델 식별자를 입력할 필요가 없습니다.
 
 ## OpenAI 프로토콜로 연결
 
@@ -98,7 +133,7 @@ Model에는 다음 세 종류의 값을 입력할 수 있습니다.
 | API | OpenAI Chat Completions |
 | Base URL | CyberCode에 표시된 URL(예: `http://127.0.0.1:3456/v1`) |
 | API Key | CyberCode가 만들 때 표시한 전체 `cc_...` 노드 키 |
-| Model | `auto`, 전체 `route/...` 또는 공개 `<provider-alias>/<model-id>` ID |
+| Model | `auto` |
 
 Base URL이 아니라 전체 **Endpoint**를 요구하면 `http://127.0.0.1:3456/v1/chat/completions`를 입력합니다.
 
@@ -111,9 +146,20 @@ Base URL이 아니라 전체 **Endpoint**를 요구하면 `http://127.0.0.1:3456
 | API | Anthropic Messages |
 | Base URL | CyberCode에 표시된 Anthropic URL(예: `http://127.0.0.1:3456`) |
 | API Key | CyberCode가 만들 때 표시한 전체 `cc_...` 노드 키 |
-| Model | `auto`, 전체 `route/...` 또는 공개 `<provider-alias>/<model-id>` ID |
+| Model | `auto` |
 
 Anthropic 클라이언트는 보통 Base URL 뒤에 `/v1/messages`를 자동으로 추가하므로 URL에 `/v1`을 포함하지 않습니다. 전체 엔드포인트가 필요한 경우 `http://127.0.0.1:3456/v1/messages`를 사용하세요.
+
+## 고급: 모델 또는 라우트 고정
+
+기본 대상을 의도적으로 우회할 때만 `auto`를 정확한 target ID로 바꿉니다.
+
+| 목적 | Model 값 | 동작 |
+| --- | --- | --- |
+| 스마트 라우트 고정 | `route/<route-id>`(예: `route/coding`) | 해당 라우트가 공급자와 모델을 선택 |
+| 직접 모델 고정 | `<provider-alias>/<model-id>`(예: `kimi/kimi-k2.6`) | 지정한 공급자 모델을 항상 사용 |
+
+노드 가이드의 **고급: 모델 또는 라우트 고정**을 펼쳐 전체 ID를 복사하거나 노드 Key로 `GET /v1/models`를 호출하세요. 표시 이름으로 추측하지 마세요.
 
 ## 연결 확인
 

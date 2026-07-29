@@ -8,6 +8,7 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import { createHash } from 'node:crypto'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
@@ -99,6 +100,11 @@ const KIMI_CODE_STABLE_MODEL = 'kimi-for-coding'
 const KIMI_CODE_HIGHSPEED_MODEL = 'kimi-for-coding-highspeed'
 const XIAOMI_MIMO_PRESET_ID = 'xiaomimimo'
 const MASKED_API_KEYS = new Set(['***', '••••••••'])
+const PUBLIC_PROVIDER_ALIASES: Record<string, string> = {
+  official: 'claude',
+  zhipuglm: 'zhipu',
+  xiaomimimo: 'mimo',
+}
 const LEGACY_PRESET_MODEL_IDS: Record<string, Record<string, string>> = {
   deepseek: {
     'deepseek-v4-pro[1m]': 'deepseek-v4-pro',
@@ -362,9 +368,69 @@ function addCapabilityEnv(
   if (value !== undefined) target[key] = value
 }
 
+function publicAliasSlug(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+}
+
+function isValidPublicAlias(value: string | undefined): value is string {
+  return Boolean(
+    value &&
+    value.length <= 64 &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value),
+  )
+}
+
+function providerPublicAliasBase(provider: SavedProvider): string {
+  const presetAlias = PUBLIC_PROVIDER_ALIASES[provider.presetId] ?? provider.presetId
+  const source = provider.presetId === 'custom' ? provider.name : presetAlias
+  return publicAliasSlug(source) || 'custom'
+}
+
+function migrateProviderPublicAliases(
+  providers: SavedProvider[],
+): { providers: SavedProvider[]; changed: boolean } {
+  const reserved = new Set(
+    providers
+      .map((provider) => provider.publicAlias)
+      .filter(isValidPublicAlias),
+  )
+  const claimed = new Set<string>()
+  let changed = false
+
+  const migrated = providers.map((provider) => {
+    if (isValidPublicAlias(provider.publicAlias) && !claimed.has(provider.publicAlias)) {
+      claimed.add(provider.publicAlias)
+      return provider
+    }
+
+    const base = providerPublicAliasBase(provider)
+    let alias = base
+    let attempt = 0
+    while (reserved.has(alias)) {
+      const seed = attempt === 0 ? provider.id : `${provider.id}:${attempt}`
+      const suffix = createHash('sha256').update(seed).digest('hex').slice(0, 6)
+      alias = `${base}-${suffix}`
+      attempt += 1
+    }
+
+    reserved.add(alias)
+    claimed.add(alias)
+    changed = true
+    return { ...provider, publicAlias: alias }
+  })
+
+  return { providers: migrated, changed }
+}
+
 function migrateProviderIndex(index: ProvidersIndex): { index: ProvidersIndex; changed: boolean } {
   let changed = false
-  const providers = index.providers.map((provider) => {
+  const migratedProviders = index.providers.map((provider) => {
     let migrated = provider
 
     const normalizedModels = migrateLegacyPresetModelIds(migrated)
@@ -423,9 +489,11 @@ function migrateProviderIndex(index: ProvidersIndex): { index: ProvidersIndex; c
 
     return migrated
   })
+  const aliasMigration = migrateProviderPublicAliases(migratedProviders)
+  if (aliasMigration.changed) changed = true
 
   return {
-    index: changed ? { ...index, providers } : index,
+    index: changed ? { ...index, providers: aliasMigration.providers } : index,
     changed,
   }
 }
@@ -610,7 +678,7 @@ export class ProviderService {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 })
     await this.securePath(dir, 0o700)
 
-    const tmpFile = `${filePath}.tmp.${Date.now()}`
+    const tmpFile = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID()}`
     try {
       await fs.writeFile(tmpFile, JSON.stringify(index, null, 2) + '\n', {
         encoding: 'utf-8',
@@ -642,7 +710,7 @@ export class ProviderService {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 })
     await this.securePath(dir, 0o700)
 
-    const tmpFile = `${filePath}.tmp.${Date.now()}`
+    const tmpFile = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID()}`
     try {
       await fs.writeFile(tmpFile, JSON.stringify(settings, null, 2) + '\n', {
         encoding: 'utf-8',
@@ -886,6 +954,7 @@ export class ProviderService {
     const provider: SavedProvider = {
       id: existing?.id ?? crypto.randomUUID(),
       presetId: definition.presetId,
+      ...(existing?.publicAlias && { publicAlias: existing.publicAlias }),
       name: existing?.name ?? definition.name,
       apiKey: '',
       oauthProviderId,
@@ -956,6 +1025,7 @@ export class ProviderService {
     const provider: SavedProvider = {
       id: existing?.id ?? crypto.randomUUID(),
       presetId,
+      ...(existing?.publicAlias && { publicAlias: existing.publicAlias }),
       name: existing?.name ?? definition.names.en,
       apiKey: normalizedCredential,
       baseUrl: definition.website,

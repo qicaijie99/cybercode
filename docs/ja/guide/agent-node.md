@@ -7,7 +7,7 @@ CyberCode は、設定済みモデルとスマートルートを、OpenAI Chat C
 1. **モデルとルーティング → ノード**を開きます。
 2. ユーザーまたは Agent ごとに個別のノード API Key を作成します。完全なキーは一度だけ表示されます。
 3. 表で管理する Key の行を選び、その Key に許可するモデルとルート、および `auto` の既定接続先を設定します。
-4. 保存後、**接続設定ジェネレーター**でプロトコルを選び、モデルまたはルートを検索します。結果をクリックすると Base URL、完全な Endpoint、公開 ID、Model、ノード Key を含むカードが開き、各項目または全体をコピーできます。
+4. 保存後、**接続設定ジェネレーター**でプロトコルと対象を選びます。Base URL、完全な Endpoint、Model、ノード Key を含むカードが開き、各項目または全体をコピーできます。
 
 独立 TUI からも設定できます。
 
@@ -22,6 +22,49 @@ CyberCode は、設定済みモデルとスマートルートを、OpenAI Chat C
 ::: tip デスクトップ管理のセッション
 CyberCode デスクトップから起動された TUI では、node はデスクトップのローカル server が管理します。Key と port の二重変更を防ぐため、デスクトップ設定から操作してください。
 :::
+
+## そのまま入力できる完全な例
+
+次は「CI coding agent」を接続する例です。`node.example.com` は文書専用のプレースホルダードメイン、`cc_REPLACE_WITH_YOUR_NODE_KEY` は無効なマスク済み Key です。実際のノードに表示されたアドレスと完全な Key に置き換えてください。
+
+接続先 Agent に **OpenAI Compatible** プロバイダーを追加し、4 項目だけ入力します。
+
+| 接続先の項目 | 入力例 |
+| --- | --- |
+| Protocol | `OpenAI Chat Completions` |
+| Base URL | `https://node.example.com/v1` |
+| API Key | `cc_REPLACE_WITH_YOUR_NODE_KEY` |
+| Model | `auto` |
+
+通常は Model を `auto` のまま使用します。他の高度な項目は入力不要です。
+接続先がプロバイダーの **Name** も要求する場合は、`CyberCode 作業ノード` など識別しやすいローカル名を入力します。この名前はルーティングには使われません。同じモデルを提供する異なる上流は、Model 内のプロバイダー別名で区別されます。
+
+同じ値で接続テストを実行できます。
+
+```bash
+curl https://node.example.com/v1/chat/completions \
+  -H "Authorization: Bearer cc_REPLACE_WITH_YOUR_NODE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "auto",
+    "messages": [
+      {"role": "user", "content": "node connected とだけ返信してください"}
+    ]
+  }'
+```
+
+### CyberCode 側のノードポリシー
+
+**ノード → アクセスキー → 接続先ポリシー**で、画面に表示される名前を使って設定します。
+
+| ポリシー | 例 |
+| --- | --- |
+| Key 名 | `CI coding agent` |
+| 許可する対象 | `Coding ルート`、`Kimi K2.6` |
+| 既定接続先 | `Coding ルート` |
+| 月間リクエスト上限 | `5000` |
+
+これらは CyberCode が適用し、接続先は Model=`auto` のままで利用できます。特定のモデルやルートを固定する必要がある場合だけ、後述の高度な Model 説明で正確な ID をコピーします。
 
 ## 複数ユーザーの API Key を管理する
 
@@ -79,15 +122,7 @@ CyberCode がノード作成時に表示する完全な `cc_...` ノードキー
 
 ### Model
 
-Model には次の 3 種類を入力できます。
-
-| 目的 | Model の値 | 動作 |
-| --- | --- | --- |
-| CyberCode の既定接続先を使う | `auto` | 現在の既定モデルまたはスマートルートを使う |
-| スマートルートを固定 | `route/<route-id>`（例: `route/coding`） | そのルートがプロバイダーとモデルを選ぶ |
-| 直接モデルを固定 | `<provider-alias>/<model-id>`（例: `kimi/kimi-k2.6`） | 指定したプロバイダーモデルを常に使う |
-
-直接モデルには読みやすく安定した公開 alias を使い、内部データベース UUID は表示しません。`Coding` や `kimi-k2.6` などの表示名だけではなく、完全な ID をコピーしてください。最も簡単な方法は **接続設定ジェネレーター**で対象を検索してカードを開くことです。ノード Key 付きの `GET /v1/models` でも確認できます。
+`auto` を入力します。この Key に設定した既定モデルまたはスマートルートを CyberCode が選ぶため、通常は他のモデル識別子は不要です。
 
 ## OpenAI プロトコルで接続
 
@@ -98,7 +133,7 @@ Model には次の 3 種類を入力できます。
 | API | OpenAI Chat Completions |
 | Base URL | CyberCode に表示された URL（例: `http://127.0.0.1:3456/v1`） |
 | API Key | CyberCode が作成時に表示した完全な `cc_...` ノードキー |
-| Model | `auto`、完全な `route/...`、または公開 `<provider-alias>/<model-id>` ID |
+| Model | `auto` |
 
 Base URL ではなく完全な **Endpoint** を要求される場合は `http://127.0.0.1:3456/v1/chat/completions` を入力します。
 
@@ -111,9 +146,20 @@ Base URL ではなく完全な **Endpoint** を要求される場合は `http://
 | API | Anthropic Messages |
 | Base URL | CyberCode に表示された Anthropic URL（例: `http://127.0.0.1:3456`） |
 | API Key | CyberCode が作成時に表示した完全な `cc_...` ノードキー |
-| Model | `auto`、完全な `route/...`、または公開 `<provider-alias>/<model-id>` ID |
+| Model | `auto` |
 
 Anthropic クライアントは通常 Base URL に `/v1/messages` を自動で追加するため、URL に `/v1` は含めません。完全なエンドポイントが必要な場合は `http://127.0.0.1:3456/v1/messages` を使用します。
+
+## 詳細: モデルまたはルートを固定
+
+既定接続先を意図的に使わない場合だけ、`auto` を正確な target ID に変更します。
+
+| 目的 | Model の値 | 動作 |
+| --- | --- | --- |
+| スマートルートを固定 | `route/<route-id>`（例: `route/coding`） | そのルートがプロバイダーとモデルを選ぶ |
+| 直接モデルを固定 | `<provider-alias>/<model-id>`（例: `kimi/kimi-k2.6`） | 指定したプロバイダーモデルを常に使う |
+
+ノードガイドの **詳細: モデルまたはルートを固定**を開いて完全な ID をコピーするか、ノード Key 付きの `GET /v1/models` で確認します。表示名から推測しないでください。
 
 ## 接続確認
 

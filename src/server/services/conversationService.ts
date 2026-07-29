@@ -414,6 +414,18 @@ export class ConversationService {
     if (existing) return existing
 
     const stopPromise = this.performStopGeneration(sessionId, timeoutMs)
+      .then(async (result) => {
+        try {
+          await this.closeBrowserSession(sessionId)
+        } catch (error) {
+          console.warn(
+            `[ConversationService] Failed to close agent-browser session for ${sessionId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+        }
+        return result
+      })
       .finally(() => {
         if (this.generationStopPromises.get(sessionId) === stopPromise) {
           this.generationStopPromises.delete(sessionId)
@@ -421,6 +433,10 @@ export class ConversationService {
       })
     this.generationStopPromises.set(sessionId, stopPromise)
     return stopPromise
+  }
+
+  private closeBrowserSession(sessionId: string): Promise<boolean> {
+    return closeAgentBrowserSession(sessionId)
   }
 
   requestControl(

@@ -86,12 +86,15 @@ function publicProviderAliases(providers: SavedProvider[]): Map<string, string> 
   const used = new Set<string>()
 
   for (const provider of providers) {
-    const presetAlias = PUBLIC_PROVIDER_ALIASES[provider.presetId] ?? provider.presetId
-    const source = provider.presetId === 'custom' ? provider.name : presetAlias
-    const base = publicSlug(source) || 'custom'
-    const alias = used.has(base)
-      ? `${base}-${createHash('sha256').update(provider.id).digest('hex').slice(0, 6)}`
-      : base
+    let alias = provider.publicAlias
+    if (!alias || used.has(alias)) {
+      const presetAlias = PUBLIC_PROVIDER_ALIASES[provider.presetId] ?? provider.presetId
+      const source = provider.presetId === 'custom' ? provider.name : presetAlias
+      const base = publicSlug(source) || 'custom'
+      alias = used.has(base)
+        ? `${base}-${createHash('sha256').update(provider.id).digest('hex').slice(0, 6)}`
+        : base
+    }
     aliases.set(provider.id, alias)
     used.add(alias)
   }

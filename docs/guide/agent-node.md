@@ -7,7 +7,7 @@ CyberCode 可以把已配置的模型和智能路由，通过一个受权限约�
 1. 打开 **大模型与路由配置 → 节点**。
 2. 为每个用户或 Agent 分别创建节点 API Key。完整密钥只显示一次，请立即填入对应的接入方。
 3. 在密钥表格中点击要管理的那一行，再为这把 Key 勾选允许访问的模型或路由，并设置 `auto` 的默认目标。
-4. 保存后，在 **接入配置生成器** 中选择协议，搜索模型或路由并点击结果。CyberCode 会自动生成包含 Base URL、完整接口地址、公开 ID、Model 和节点 Key 的配置卡，可逐项复制或一键复制全部。
+4. 保存后，在 **接入配置生成器** 中选择协议和目标。CyberCode 会自动生成包含 Base URL、完整接口地址、Model 和节点 Key 的配置卡，可逐项复制或一键复制全部。
 
 也可以在独立 TUI 中直接完成：
 
@@ -22,6 +22,49 @@ CyberCode 可以把已配置的模型和智能路由，通过一个受权限约�
 ::: tip 桌面端受管会话
 如果 TUI 是从 CyberCode 桌面端启动的子进程，节点由桌面端本地服务统一持有。请在桌面设置中管理节点，避免两个进程同时修改密钥和端口。
 :::
+
+## 完整填写案例（可直接照着配置）
+
+下面用一个“CI 编程 Agent”演示。`node.example.com` 是文档占位域名，`cc_REPLACE_WITH_YOUR_NODE_KEY` 是无效的脱敏 Key；实际使用时替换成节点页面显示的地址和完整 Key。
+
+在外部 Agent 中新增 **OpenAI Compatible** 提供商，只填写四项：
+
+| 接入方字段 | 示例填写值 |
+| --- | --- |
+| Protocol | `OpenAI Chat Completions` |
+| Base URL | `https://node.example.com/v1` |
+| API Key | `cc_REPLACE_WITH_YOUR_NODE_KEY` |
+| Model | `auto` |
+
+普通用户保持 Model 为 `auto` 即可，不需要填写其他高级字段。
+如果接入方还要求填写“提供商名称”或 “Name”，可填一个便于识别的本地名称，例如 `CyberCode 工作节点`。这个名称不参与模型路由；同名模型的不同上游由 Model 中的供应商别名区分。
+
+用同一组字段测试连接：
+
+```bash
+curl https://node.example.com/v1/chat/completions \
+  -H "Authorization: Bearer cc_REPLACE_WITH_YOUR_NODE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "auto",
+    "messages": [
+      {"role": "user", "content": "请只回复：节点连接成功"}
+    ]
+  }'
+```
+
+### CyberCode 中的节点侧策略
+
+在 **节点 → 访问密钥 → 目标策略** 中，用界面显示的名称设置这把 Key：
+
+| 策略项 | 示例 |
+| --- | --- |
+| Key 名称 | `CI 编程 Agent` |
+| 允许访问 | `编程路由`、`Kimi K2.6` |
+| 默认目标 | `编程路由` |
+| 每月请求上限 | `5000` |
+
+这些策略由 CyberCode 执行，接入方仍只填写 Model=`auto`。只有确实需要固定某个模型或路由时，才查看后文的高级 Model 说明并复制精确 ID。
 
 ## 为多个用户管理 API Key
 
@@ -81,15 +124,7 @@ TUI 中可以使用：
 
 ### Model 填什么
 
-Model 字段接受以下三种值：
-
-| 目的 | Model 填写值 | 效果 |
-| --- | --- | --- |
-| 使用 CyberCode 中设置的默认目标 | `auto` | 自动进入当前默认模型或默认智能路由 |
-| 固定使用一条智能路由 | `route/<路由ID>`，例如 `route/coding` | 由该路由动态选择供应商和模型 |
-| 固定直连一个模型 | `<供应商别名>/<模型ID>`，例如 `kimi/kimi-k2.6` | 始终调用指定供应商下的具体模型 |
-
-直连模型使用稳定、可读的公开别名，不会暴露内部数据库 UUID。必须填写完整目标 ID，不能只填写界面中的 `Coding`、`kimi-k2.6` 等显示名称。最简单的做法是在节点页面的 **接入配置生成器** 中搜索并点击目标，然后直接复制配置卡；也可以使用带节点 Key 的 `GET /v1/models` 查询。
+填写 `auto`。CyberCode 会根据这把 Key 的默认目标选择模型或智能路由，普通用户不需要再填写其他模型标识。
 
 ## 使用 OpenAI 协议接入
 
@@ -100,7 +135,7 @@ Model 字段接受以下三种值：
 | API 类型 | OpenAI Chat Completions |
 | Base URL | CyberCode 页面显示的基础地址，例如 `http://127.0.0.1:3456/v1` |
 | API Key | CyberCode 创建时显示的完整 `cc_...` 节点密钥 |
-| Model | `auto`、`route/...` 或 `<供应商别名>/<模型ID>` 完整公开 ID |
+| Model | `auto` |
 
 如果接入方要求填写 **Endpoint** 或完整接口地址，而不是 Base URL，请填写 `http://127.0.0.1:3456/v1/chat/completions`。
 
@@ -113,9 +148,20 @@ Model 字段接受以下三种值：
 | API 类型 | Anthropic Messages |
 | Base URL | CyberCode 页面显示的 Anthropic 协议地址，例如 `http://127.0.0.1:3456` |
 | API Key | CyberCode 创建时显示的完整 `cc_...` 节点密钥 |
-| Model | `auto`、`route/...` 或 `<供应商别名>/<模型ID>` 完整公开 ID |
+| Model | `auto` |
 
 Anthropic 客户端通常会在 Base URL 后自动追加 `/v1/messages`，因此这里的地址不包含 `/v1`。如果目标 Agent 要求填写完整接口地址，请使用 `http://127.0.0.1:3456/v1/messages`。
+
+## 高级：固定模型或路由
+
+只有确实要绕过默认目标时，才把 Model 从 `auto` 改为精确 target ID：
+
+| 目的 | Model 填写值 | 效果 |
+| --- | --- | --- |
+| 固定使用一条智能路由 | `route/<路由ID>`，例如 `route/coding` | 由该路由动态选择供应商和模型 |
+| 固定直连一个模型 | `<供应商别名>/<模型ID>`，例如 `kimi/kimi-k2.6` | 始终调用指定供应商下的具体模型 |
+
+请在节点页面展开 **高级：固定模型或路由** 后复制完整 ID，或使用带节点 Key 的 `GET /v1/models` 查询。不要凭显示名称手动猜测。
 
 ## 验证连接
 

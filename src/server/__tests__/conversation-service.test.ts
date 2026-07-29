@@ -412,6 +412,16 @@ describe('ConversationService', () => {
     const service = new ConversationService() as any
     const sent: any[] = []
     let killCount = 0
+    let closedBrowserSession = ''
+    let releaseBrowserClose!: () => void
+    const browserCloseGate = new Promise<void>((resolve) => {
+      releaseBrowserClose = resolve
+    })
+    service.closeBrowserSession = async (sessionId: string) => {
+      closedBrowserSession = sessionId
+      await browserCloseGate
+      return true
+    }
 
     service.sessions.set('stop-gracefully', {
       proc: { kill: () => { killCount++ } },
@@ -449,6 +459,16 @@ describe('ConversationService', () => {
       }),
     )
 
+    await Promise.resolve()
+    expect(closedBrowserSession).toBe('stop-gracefully')
+    let stopResolved = false
+    void stopping.then(() => {
+      stopResolved = true
+    })
+    await Promise.resolve()
+    expect(stopResolved).toBe(false)
+
+    releaseBrowserClose()
     expect(await stopping).toBe('interrupted')
     expect(killCount).toBe(0)
     expect(service.hasSession('stop-gracefully')).toBe(true)

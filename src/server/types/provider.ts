@@ -62,6 +62,7 @@ export const ProviderModelSyncStateSchema = z.object({
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
+  publicAlias: z.string().optional(),
   name: z.string().min(1),
   apiKey: z.string(),
   oauthProviderId: z.string().optional(),

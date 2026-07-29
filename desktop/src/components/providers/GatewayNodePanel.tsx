@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import type { Locale } from '../../i18n/localeConfig'
 import { gatewayApi } from '../../api/gateway'
 import type {
   GatewayConfigInput,
@@ -28,6 +29,7 @@ import type {
   GatewayStatus,
   GatewayTarget,
 } from '../../types/gateway'
+import { normalizeGatewayStatus } from '../../types/gateway'
 import { copyTextToClipboard } from '../chat/clipboard'
 import { Button } from '../shared/Button'
 import { ConfirmDialog } from '../shared/ConfirmDialog'
@@ -35,6 +37,7 @@ import { Input } from '../shared/Input'
 import { Modal } from '../shared/Modal'
 import { SettingsSection, Switch } from '../settings/SettingsLayout'
 import { openExternalUrl } from '../../lib/openExternalUrl'
+import { useSettingsStore } from '../../stores/settingsStore'
 import {
   GatewayTargetPicker,
   type GatewayTargetKind,
@@ -43,7 +46,13 @@ import {
 
 type NodeDraft = Omit<GatewayConfigInput, 'publicBaseUrl'> & { publicBaseUrl: string }
 type KeyDraft = GatewayKeyUpdateInput
-const AGENT_NODE_GUIDE_URL = 'https://wk42worldworld.github.io/cybercode/guide/agent-node.html'
+const AGENT_NODE_DOCS_ROOT = 'https://wk42worldworld.github.io/cybercode'
+const EXAMPLE_NODE_KEY = 'cc_REPLACE_WITH_YOUR_NODE_KEY'
+
+export function agentNodeGuideUrl(locale: Locale): string {
+  const localePath = locale === 'zh' ? '' : `/${locale}`
+  return `${AGENT_NODE_DOCS_ROOT}${localePath}/guide/agent-node.html`
+}
 
 function nodeDraftFromStatus(status: GatewayStatus): NodeDraft {
   return {
@@ -310,8 +319,55 @@ type GatewayConnectionOption = {
   kind: 'auto' | GatewayTarget['kind']
   label: string
   description: string
-  providerOrRouteId: string
   target?: GatewayTarget
+}
+
+function GatewayConnectionOptionButton({
+  option,
+  onSelect,
+}: {
+  option: GatewayConnectionOption
+  onSelect: (option: GatewayConnectionOption) => void
+}) {
+  const t = useTranslation()
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(option)}
+      aria-label={t('settings.gateway.openConnectionCard', { target: option.id })}
+      className="group flex min-h-[62px] w-full min-w-0 items-center gap-[11px] px-[16px] py-[10px] text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+    >
+      <span className={`flex size-[34px] shrink-0 items-center justify-center rounded-[8px] ${
+        option.kind === 'route'
+          ? 'bg-[#1473e6]/10 text-[#1473e6] dark:bg-[#68adff]/12 dark:text-[#68adff]'
+          : 'bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]'
+      }`}>
+        {option.kind === 'route'
+          ? <Route size={16} strokeWidth={1.9} />
+          : option.kind === 'auto'
+            ? <Network size={16} strokeWidth={1.9} />
+            : <Server size={16} strokeWidth={1.9} />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-[8px]">
+          <span className="truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+            {option.label}
+          </span>
+          <code className="max-w-[45%] shrink-0 truncate text-[10px] font-semibold text-[var(--color-text-secondary)]">
+            {option.id}
+          </code>
+        </span>
+        <span className="mt-[2px] block truncate text-[10px] text-[var(--color-text-tertiary)]">
+          {option.description}
+        </span>
+      </span>
+      <ChevronRight
+        size={16}
+        strokeWidth={1.8}
+        className="shrink-0 text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-[2px]"
+      />
+    </button>
+  )
 }
 
 function GatewayConnectionBuilder({
@@ -319,16 +375,19 @@ function GatewayConnectionBuilder({
   accessKey,
   revealedKey,
   isSaving,
+  rotationDisabled,
   onRotateKey,
 }: {
   status: GatewayStatus
   accessKey: GatewayKeyStatus
   revealedKey: string | null
   isSaving: boolean
-  onRotateKey: () => Promise<void>
+  rotationDisabled: boolean
+  onRotateKey: () => void
 }) {
   const t = useTranslation()
   const [protocol, setProtocol] = useState<GatewayProtocol>('openai')
+  const [targetKind, setTargetKind] = useState<GatewayTargetKind>('route')
   const [query, setQuery] = useState('')
   const [selectedOption, setSelectedOption] = useState<GatewayConnectionOption | null>(null)
 
@@ -345,7 +404,6 @@ function GatewayConnectionBuilder({
         kind: 'auto',
         label: t('settings.gateway.connectionAuto', { target: defaultTarget.label }),
         description: t('settings.gateway.connectionAutoHint'),
-        providerOrRouteId: defaultTarget.publicId,
         target: defaultTarget,
       })
     }
@@ -356,24 +414,32 @@ function GatewayConnectionBuilder({
         kind: target.kind,
         label: target.label,
         description: target.description,
-        providerOrRouteId: target.kind === 'route'
-          ? target.publicId
-          : target.publicId.split('/')[0] ?? target.publicId,
         target,
       })
     }
     return entries
   }, [accessKey, status.targets, t])
 
+  const autoOption = options.find((option) => option.kind === 'auto')
+  const routeCount = options.filter((option) => option.kind === 'route').length
+  const modelCount = options.filter((option) => option.kind === 'model').length
+  useEffect(() => {
+    if (targetKind === 'route' && routeCount === 0 && modelCount > 0) {
+      setTargetKind('model')
+    } else if (targetKind === 'model' && modelCount === 0 && routeCount > 0) {
+      setTargetKind('route')
+    }
+  }, [modelCount, routeCount, targetKind])
   const filteredOptions = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase()
-    if (!normalized) return options
-    return options.filter((option) => (
-      `${option.label} ${option.description} ${option.id} ${option.providerOrRouteId} ${option.kind}`
+    const kindOptions = options.filter((option) => option.kind === targetKind)
+    if (!normalized) return kindOptions
+    return kindOptions.filter((option) => (
+      `${option.label} ${option.description} ${option.id} ${option.kind}`
         .toLocaleLowerCase()
         .includes(normalized)
     ))
-  }, [options, query])
+  }, [options, query, targetKind])
 
   return (
     <>
@@ -441,51 +507,59 @@ function GatewayConnectionBuilder({
           </div>
         </div>
 
-        <div className="max-h-[238px] overflow-y-auto">
-          {filteredOptions.map((option) => (
-            <button
-              key={`${option.kind}:${option.id}`}
-              type="button"
-              onClick={() => setSelectedOption(option)}
-              aria-label={t('settings.gateway.openConnectionCard', { target: option.id })}
-              className="group flex min-h-[62px] w-full min-w-0 items-center gap-[11px] px-[16px] py-[10px] text-left transition-colors hover:bg-[var(--color-surface-hover)]"
-            >
-              <span className={`flex size-[34px] shrink-0 items-center justify-center rounded-[8px] ${
-                option.kind === 'route'
-                  ? 'bg-[#1473e6]/10 text-[#1473e6] dark:bg-[#68adff]/12 dark:text-[#68adff]'
-                  : 'bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]'
-              }`}>
-                {option.kind === 'route'
-                  ? <Route size={16} strokeWidth={1.9} />
-                  : option.kind === 'auto'
-                    ? <Network size={16} strokeWidth={1.9} />
-                    : <Server size={16} strokeWidth={1.9} />}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex min-w-0 items-center gap-[8px]">
-                  <span className="truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
-                    {option.label}
-                  </span>
-                  <code className="max-w-[45%] shrink-0 truncate text-[10px] font-semibold text-[var(--color-text-secondary)]">
-                    {option.id}
-                  </code>
-                </span>
-                <span className="mt-[2px] block truncate text-[10px] text-[var(--color-text-tertiary)]">
-                  {option.description}
-                </span>
-              </span>
-              <ChevronRight
-                size={16}
-                strokeWidth={1.8}
-                className="shrink-0 text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-[2px]"
-              />
-            </button>
-          ))}
-          {filteredOptions.length === 0 && (
-            <div className="px-[16px] py-[20px] text-center text-[11px] text-[var(--color-text-tertiary)]">
-              {t('settings.gateway.connectionNoResults')}
+        {autoOption && (
+          <div className="border-t border-[var(--color-border-separator)]">
+            <div className="px-[16px] pt-[10px] text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+              {t('settings.gateway.connectionDefaultOption')}
             </div>
-          )}
+            <GatewayConnectionOptionButton option={autoOption} onSelect={setSelectedOption} />
+          </div>
+        )}
+
+        <div className="border-t border-[var(--color-border-separator)]">
+          <div
+            role="tablist"
+            aria-label={t('settings.gateway.connectionTargetKind')}
+            className="grid h-[42px] grid-cols-2 gap-[4px] border-b border-[var(--color-border-separator)] px-[12px] py-[5px]"
+          >
+            {([
+              ['route', t('settings.gateway.routes'), routeCount],
+              ['model', t('settings.gateway.directModels'), modelCount],
+            ] as const).map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={targetKind === value}
+                onClick={() => {
+                  setTargetKind(value)
+                  setQuery('')
+                }}
+                className={`flex items-center justify-center gap-[6px] rounded-[6px] text-[11px] font-semibold transition-colors ${
+                  targetKind === value
+                    ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                <span>{label}</span>
+                <span className="text-[10px] font-medium text-[var(--color-text-tertiary)]">{count}</span>
+              </button>
+            ))}
+          </div>
+          <div className="max-h-[238px] overflow-y-auto">
+            {filteredOptions.map((option) => (
+              <GatewayConnectionOptionButton
+                key={`${option.kind}:${option.id}`}
+                option={option}
+                onSelect={setSelectedOption}
+              />
+            ))}
+            {filteredOptions.length === 0 && (
+              <div className="px-[16px] py-[20px] text-center text-[11px] text-[var(--color-text-tertiary)]">
+                {t('settings.gateway.connectionNoResults')}
+              </div>
+            )}
+          </div>
         </div>
       </SettingsSection>
 
@@ -497,6 +571,7 @@ function GatewayConnectionBuilder({
         option={selectedOption}
         revealedKey={revealedKey}
         isSaving={isSaving}
+        rotationDisabled={rotationDisabled}
         onRotateKey={onRotateKey}
         onClose={() => setSelectedOption(null)}
       />
@@ -512,6 +587,7 @@ function GatewayConnectionDialog({
   option,
   revealedKey,
   isSaving,
+  rotationDisabled,
   onRotateKey,
   onClose,
 }: {
@@ -522,7 +598,8 @@ function GatewayConnectionDialog({
   option: GatewayConnectionOption | null
   revealedKey: string | null
   isSaving: boolean
-  onRotateKey: () => Promise<void>
+  rotationDisabled: boolean
+  onRotateKey: () => void
   onClose: () => void
 }) {
   const t = useTranslation()
@@ -547,8 +624,7 @@ function GatewayConnectionDialog({
     `${t('settings.gateway.baseUrl')}: ${baseUrl}`,
     `${t('settings.gateway.connectionEndpoint')}: ${endpoint}`,
     `${t('settings.gateway.apiKey')}: ${revealedKey ?? ''}`,
-    `${t('settings.gateway.connectionModelId')}: ${option.id}`,
-    `${t('settings.gateway.connectionProviderRouteId')}: ${option.providerOrRouteId}`,
+    `${t('settings.gateway.connectionModel')}: ${option.id}`,
   ].join('\n')
 
   const copyAll = async () => {
@@ -593,8 +669,7 @@ function GatewayConnectionDialog({
           <div className="sm:col-span-2">
             <CopyField value={endpoint} label={t('settings.gateway.connectionEndpoint')} copyLabel={t('settings.gateway.copy')} />
           </div>
-          <CopyField value={option.id} label={t('settings.gateway.connectionModelId')} copyLabel={t('settings.gateway.copy')} />
-          <CopyField value={option.providerOrRouteId} label={t('settings.gateway.connectionProviderRouteId')} copyLabel={t('settings.gateway.copy')} />
+          <CopyField value={option.id} label={t('settings.gateway.connectionModel')} copyLabel={t('settings.gateway.copy')} />
           <div className="sm:col-span-2">
             <CopyField
               value={revealedKey ?? ''}
@@ -618,8 +693,9 @@ function GatewayConnectionDialog({
               size="sm"
               icon={<RefreshCw size={14} />}
               loading={isSaving}
+              disabled={rotationDisabled}
               className="shrink-0"
-              onClick={() => void onRotateKey()}
+              onClick={onRotateKey}
             >
               {t('settings.gateway.connectionRotateKey')}
             </Button>
@@ -661,7 +737,7 @@ function GatewayKeyTable({
   onSelect: (keyId: string) => void
   onCreate: () => void
   onRename: (keyId: string, name: string) => Promise<void>
-  onRotate: (keyId: string) => Promise<void>
+  onRotate: (key: GatewayKeyStatus) => void
   onRevoke: (key: GatewayKeyStatus) => void
 }) {
   const t = useTranslation()
@@ -830,7 +906,7 @@ function GatewayKeyTable({
                     title={t('settings.gateway.rotateKey')}
                     aria-label={`${t('settings.gateway.rotateKey')} ${key.name}`}
                     disabled={disabled}
-                    onClick={() => void onRotate(key.id)}
+                    onClick={() => onRotate(key)}
                     className="flex size-[30px] items-center justify-center rounded-[6px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-35"
                   >
                     <RefreshCw size={14} />
@@ -876,7 +952,8 @@ function GatewayKeyTable({
 
 export function GatewayNodePanel() {
   const t = useTranslation()
-  const cachedStatus = gatewayApi.peekStatus()
+  const peekedStatus = gatewayApi.peekStatus()
+  const cachedStatus = normalizeGatewayStatus(peekedStatus)
   const [status, setStatus] = useState<GatewayStatus | null>(cachedStatus ?? null)
   const [nodeDraft, setNodeDraft] = useState<NodeDraft | null>(
     cachedStatus ? nodeDraftFromStatus(cachedStatus) : null,
@@ -893,6 +970,7 @@ export function GatewayNodePanel() {
   const [showGuide, setShowGuide] = useState(false)
   const [showCreateKey, setShowCreateKey] = useState(false)
   const [newKeyName, setNewKeyName] = useState('')
+  const [rotateCandidate, setRotateCandidate] = useState<GatewayKeyStatus | null>(null)
   const [revokeCandidate, setRevokeCandidate] = useState<GatewayKeyStatus | null>(null)
   const [targetPicker, setTargetPicker] = useState<{
     mode: GatewayTargetPickerMode
@@ -901,10 +979,11 @@ export function GatewayNodePanel() {
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (force = false) => {
-    if (!gatewayApi.peekStatus()) setIsLoading(true)
+    if (!normalizeGatewayStatus(gatewayApi.peekStatus())) setIsLoading(true)
     setError(null)
     try {
-      const next = await gatewayApi.status({ force })
+      const next = normalizeGatewayStatus(await gatewayApi.status({ force }))
+      if (!next) throw new Error(t('settings.gateway.loadFailed'))
       setStatus(next)
       setNodeDraft(nodeDraftFromStatus(next))
     } catch (cause) {
@@ -912,7 +991,7 @@ export function GatewayNodePanel() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load(true)
@@ -971,6 +1050,16 @@ export function GatewayNodePanel() {
     keyDraft && savedKeyDraft && !isKeyDraftEqual(keyDraft, savedKeyDraft),
   )
   const dirty = nodeDirty || keyDirty
+
+  const selectKey = (keyId: string) => {
+    if (keyId === selectedKeyId) return
+    if (keyDirty) {
+      setError(t('settings.gateway.saveBeforeKeyAction'))
+      return
+    }
+    setError(null)
+    setSelectedKeyId(keyId)
+  }
 
   const updateNodeDraft = (next: Partial<NodeDraft>) => {
     setNodeDraft((current) => current ? { ...current, ...next } : current)
@@ -1078,6 +1167,7 @@ export function GatewayNodePanel() {
       setStatus(result.status)
       setSelectedKeyId(keyId)
       setRevealedKeys((current) => ({ ...current, [keyId]: result.apiKey }))
+      setRotateCandidate(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -1201,6 +1291,9 @@ export function GatewayNodePanel() {
               disabled={isSaving}
               onChange={(event) => updateNodeDraft({ publicBaseUrl: event.target.value })}
             />
+            <p className="mt-[6px] text-[10px] leading-[15px] text-[var(--color-text-tertiary)]">
+              {t('settings.gateway.publicBaseUrlHint')}
+            </p>
           </div>
         </div>
       </SettingsSection>
@@ -1209,14 +1302,14 @@ export function GatewayNodePanel() {
         keys={status.keys}
         selectedKeyId={selectedKeyId}
         revealedKeys={revealedKeys}
-        disabled={isSaving}
-        onSelect={setSelectedKeyId}
+        disabled={isSaving || keyDirty}
+        onSelect={selectKey}
         onCreate={() => {
           setNewKeyName(t('settings.gateway.defaultKeyName', { index: status.keys.length + 1 }))
           setShowCreateKey(true)
         }}
         onRename={renameKey}
-        onRotate={rotateKey}
+        onRotate={setRotateCandidate}
         onRevoke={setRevokeCandidate}
       />
 
@@ -1239,7 +1332,8 @@ export function GatewayNodePanel() {
             accessKey={selectedKey}
             revealedKey={revealedKeys[selectedKey.id] ?? null}
             isSaving={isSaving}
-            onRotateKey={() => rotateKey(selectedKey.id)}
+            rotationDisabled={keyDirty}
+            onRotateKey={() => setRotateCandidate(selectedKey)}
           />
         </>
       )}
@@ -1313,6 +1407,18 @@ export function GatewayNodePanel() {
         </div>
       </Modal>
       <ConfirmDialog
+        open={rotateCandidate !== null}
+        onClose={() => setRotateCandidate(null)}
+        onConfirm={() => rotateCandidate ? rotateKey(rotateCandidate.id) : undefined}
+        title={t('settings.gateway.rotateKeyTitle')}
+        body={t('settings.gateway.rotateKeyConfirm', {
+          name: rotateCandidate?.name ?? '',
+        })}
+        confirmLabel={t('settings.gateway.rotateKey')}
+        cancelLabel={t('common.cancel')}
+        loading={isSaving}
+      />
+      <ConfirmDialog
         open={revokeCandidate !== null}
         onClose={() => setRevokeCandidate(null)}
         onConfirm={() => revokeCandidate ? revokeKey(revokeCandidate.id) : undefined}
@@ -1354,7 +1460,10 @@ function GatewayGuideDialog({
   onClose: () => void
 }) {
   const t = useTranslation()
+  const locale = useSettingsStore((state) => state.locale)
   const [mode, setMode] = useState<'openai' | 'anthropic'>('openai')
+  const [showAdvancedTargets, setShowAdvancedTargets] = useState(false)
+  const [showTestRequest, setShowTestRequest] = useState(false)
   const [copiedValue, setCopiedValue] = useState<string | null>(null)
   const openaiBaseUrl = status?.baseUrl ?? 'http://127.0.0.1:3456/v1'
   const resolvedAnthropicBaseUrl = status?.anthropicBaseUrl
@@ -1364,10 +1473,14 @@ function GatewayGuideDialog({
     target.available && accessKey?.allowedTargets.includes(target.id)
   )) ?? []
   const defaultTarget = allowedTargets.find((target) => target.id === accessKey?.defaultTarget)
-  const exampleModel = defaultTarget ? 'auto' : allowedTargets[0]?.publicId ?? 'auto'
+  const exampleModel = 'auto'
+  const exampleBaseUrl = mode === 'openai' ? openaiBaseUrl : resolvedAnthropicBaseUrl
+  const exampleProtocol = mode === 'openai'
+    ? t('settings.gateway.openAIProtocol')
+    : t('settings.gateway.anthropicProtocol')
   const openaiRequest = [
     `curl ${openaiBaseUrl}/chat/completions \\`,
-    '  -H "Authorization: Bearer <CyberCode API Key>" \\',
+    `  -H "Authorization: Bearer ${EXAMPLE_NODE_KEY}" \\`,
     '  -H "Content-Type: application/json" \\',
     `  -d '${JSON.stringify({
       model: exampleModel,
@@ -1376,7 +1489,7 @@ function GatewayGuideDialog({
   ].join('\n')
   const anthropicRequest = [
     `curl ${resolvedAnthropicBaseUrl}/v1/messages \\`,
-    '  -H "x-api-key: <CyberCode API Key>" \\',
+    `  -H "x-api-key: ${EXAMPLE_NODE_KEY}" \\`,
     '  -H "anthropic-version: 2023-06-01" \\',
     '  -H "Content-Type: application/json" \\',
     `  -d '${JSON.stringify({
@@ -1425,90 +1538,119 @@ function GatewayGuideDialog({
           ))}
         </div>
 
-        <GuideSteps
-          steps={[1, 2, 3, 4].map((step) => (
-            t(
-              `settings.gateway.${mode === 'openai' ? 'guideStep' : 'guideAnthropicStep'}${step}` as never,
-              {
-                baseUrl: mode === 'openai' ? openaiBaseUrl : resolvedAnthropicBaseUrl,
-              },
-            )
-          ))}
-        />
+        <div
+          data-testid="gateway-guide-fill-example"
+          className="overflow-hidden rounded-[8px] border border-[var(--color-border)]"
+        >
+          <div className="border-b border-[var(--color-border-separator)] px-[12px] py-[8px] text-[11px] font-semibold text-[var(--color-text-primary)]">
+            {t('settings.gateway.guideExampleTitle')}
+          </div>
+          <dl className="divide-y divide-[var(--color-border-separator)]">
+            {[
+              [t('settings.gateway.connectionProtocol'), exampleProtocol],
+              [t('settings.gateway.baseUrl'), exampleBaseUrl],
+              [t('settings.gateway.apiKey'), EXAMPLE_NODE_KEY],
+              [t('settings.gateway.guideExampleModel'), exampleModel],
+            ].map(([label, value]) => (
+              <div key={label} className="grid min-w-0 grid-cols-[112px_minmax(0,1fr)] items-center gap-[10px] px-[12px] py-[7px]">
+                <dt className="text-[10px] font-medium text-[var(--color-text-tertiary)]">{label}</dt>
+                <dd className="break-all font-mono text-[10px] leading-[15px] text-[var(--color-text-secondary)]">
+                  {value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
 
         <div className="overflow-hidden rounded-[8px] border border-[var(--color-border)]">
-          <div className="border-b border-[var(--color-border-separator)] px-[12px] py-[9px]">
-            <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">
-              {t('settings.gateway.guideModelChoices')}
+          <button
+            type="button"
+            aria-expanded={showAdvancedTargets}
+            onClick={() => setShowAdvancedTargets((current) => !current)}
+            className="flex w-full items-center justify-between gap-[12px] px-[12px] py-[9px] text-left hover:bg-[var(--color-surface-hover)]"
+          >
+            <span>
+              <span className="block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                {t('settings.gateway.guideModelChoices')}
+              </span>
+              <span className="mt-[2px] block text-[10px] leading-[15px] text-[var(--color-text-tertiary)]">
+                {t('settings.gateway.guideModelChoicesHint')}
+              </span>
+            </span>
+            {showAdvancedTargets ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+          {showAdvancedTargets && (
+            <div className="max-h-[190px] divide-y divide-[var(--color-border-separator)] overflow-y-auto border-t border-[var(--color-border-separator)]">
+              {defaultTarget && (
+                <GuideTargetRow
+                  id="auto"
+                  label={t('settings.gateway.guideAutoTarget', { target: defaultTarget.label })}
+                  detail={defaultTarget.publicId}
+                  copied={copiedValue === 'auto'}
+                  onCopy={copyValue}
+                />
+              )}
+              {allowedTargets.map((target) => (
+                <GuideTargetRow
+                  key={target.id}
+                  id={target.publicId}
+                  label={t(
+                    target.kind === 'route'
+                      ? 'settings.gateway.guideRouteTarget'
+                      : 'settings.gateway.guideModelTarget',
+                    { target: target.label },
+                  )}
+                  detail={target.description}
+                  copied={copiedValue === target.publicId}
+                  onCopy={copyValue}
+                />
+              ))}
+              {!defaultTarget && allowedTargets.length === 0 && (
+                <div className="px-[12px] py-[16px] text-[11px] text-[var(--color-text-tertiary)]">
+                  {t('settings.gateway.guideNoTargets')}
+                </div>
+              )}
             </div>
-            <div className="mt-[2px] text-[10px] leading-[15px] text-[var(--color-text-tertiary)]">
-              {t('settings.gateway.guideModelChoicesHint')}
-            </div>
-          </div>
-          <div className="max-h-[190px] divide-y divide-[var(--color-border-separator)] overflow-y-auto">
-            {defaultTarget && (
-              <GuideTargetRow
-                id="auto"
-                label={t('settings.gateway.guideAutoTarget', { target: defaultTarget.label })}
-                detail={defaultTarget.publicId}
-                copied={copiedValue === 'auto'}
-                onCopy={copyValue}
-              />
-            )}
-            {allowedTargets.map((target) => (
-              <GuideTargetRow
-                key={target.id}
-                id={target.publicId}
-                label={t(
-                  target.kind === 'route'
-                    ? 'settings.gateway.guideRouteTarget'
-                    : 'settings.gateway.guideModelTarget',
-                  { target: target.label },
-                )}
-                detail={target.description}
-                copied={copiedValue === target.publicId}
-                onCopy={copyValue}
-              />
-            ))}
-            {!defaultTarget && allowedTargets.length === 0 && (
-              <div className="px-[12px] py-[16px] text-[11px] text-[var(--color-text-tertiary)]">
-                {t('settings.gateway.guideNoTargets')}
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
         <div className="overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-          <div className="flex h-[36px] items-center justify-between border-b border-[var(--color-border-separator)] px-[12px]">
-            <span className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
-              {t('settings.gateway.guideRequestExample')}
-            </span>
+          <div className={`flex h-[36px] items-center ${showTestRequest ? 'border-b border-[var(--color-border-separator)]' : ''}`}>
             <button
               type="button"
-              onClick={() => void copyValue(requestExample)}
-              aria-label={copiedValue === requestExample ? `${t('settings.gateway.copy')} ✓` : t('settings.gateway.copy')}
-              title={copiedValue === requestExample ? `${t('settings.gateway.copy')} ✓` : t('settings.gateway.copy')}
-              className="flex size-[28px] items-center justify-center rounded-[6px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+              aria-expanded={showTestRequest}
+              onClick={() => setShowTestRequest((current) => !current)}
+              className="flex h-full min-w-0 flex-1 items-center justify-between gap-[10px] px-[12px] text-left"
             >
-              {copiedValue === requestExample ? <Check size={14} /> : <Copy size={14} />}
+              <span className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
+                {t('settings.gateway.guideRequestExample')}
+              </span>
+              {showTestRequest ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </button>
+            {showTestRequest && (
+              <button
+                type="button"
+                onClick={() => void copyValue(requestExample)}
+                aria-label={copiedValue === requestExample ? `${t('settings.gateway.copy')} ✓` : t('settings.gateway.copy')}
+                title={copiedValue === requestExample ? `${t('settings.gateway.copy')} ✓` : t('settings.gateway.copy')}
+                className="mr-[6px] flex size-[28px] items-center justify-center rounded-[6px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+              >
+                {copiedValue === requestExample ? <Check size={14} /> : <Copy size={14} />}
+              </button>
+            )}
           </div>
-          <pre className="max-h-[250px] overflow-auto p-[12px] text-[11px] leading-[17px] text-[var(--color-text-secondary)]">
-            <code>{requestExample}</code>
-          </pre>
+          {showTestRequest && (
+            <pre className="max-h-[250px] overflow-auto p-[12px] text-[11px] leading-[17px] text-[var(--color-text-secondary)]">
+              <code>{requestExample}</code>
+            </pre>
+          )}
         </div>
-        <p className="text-[11px] leading-[17px] text-[var(--color-text-tertiary)]">
-          {t(mode === 'openai'
-            ? 'settings.gateway.guideOpenAIHint'
-            : 'settings.gateway.guideAnthropicHint')}
-        </p>
-
         <div className="flex justify-end">
           <Button
             size="sm"
             icon={<BookOpenText size={14} />}
             onClick={() => {
-              void openExternalUrl(AGENT_NODE_GUIDE_URL)
+              void openExternalUrl(agentNodeGuideUrl(locale))
             }}
           >
             {t('settings.gateway.openFullGuide')}
@@ -1550,25 +1692,5 @@ function GuideTargetRow({
         {copied ? <Check size={14} /> : <Copy size={14} />}
       </button>
     </div>
-  )
-}
-
-function GuideSteps({ steps }: { steps: string[] }) {
-  return (
-    <ol className="grid gap-[10px]">
-      {steps.map((step, index) => (
-        <li
-          key={step}
-          className="flex items-start gap-[10px] rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[12px] py-[10px]"
-        >
-          <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-selected)] text-[11px] font-bold text-[var(--color-text-primary)]">
-            {index + 1}
-          </span>
-          <span className="pt-[2px] text-[12px] leading-[18px] text-[var(--color-text-secondary)]">
-            {step}
-          </span>
-        </li>
-      ))}
-    </ol>
   )
 }
