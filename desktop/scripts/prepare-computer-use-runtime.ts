@@ -19,6 +19,9 @@ type RuntimeManifest = {
 const RUNTIME_RELEASE_TAG =
   process.env.CYBERCODE_COMPUTER_USE_RUNTIME_TAG || 'computer-use-runtime-v1'
 const RUNTIME_MANIFEST_FILENAME = 'computer-use-runtime-manifest.json'
+const BUNDLED_RUNTIME_FORMAT = 'opaque-xor-v1'
+const BUNDLED_RUNTIME_ENCODING = 'xor-a5'
+const BUNDLED_RUNTIME_XOR_BYTE = 0xa5
 const GITHUB_RELEASE_ROOT =
   `https://github.com/wk42worldworld/cybercode/releases/download/${RUNTIME_RELEASE_TAG}`
 const DEFAULT_MANIFEST_URLS = [
@@ -69,7 +72,8 @@ async function prepareRuntime() {
 
   const temporaryDir = `${resourceDir}.preparing-${process.pid}-${Date.now()}`
   const backupDir = `${resourceDir}.backup-${process.pid}-${Date.now()}`
-  const archivePath = path.join(temporaryDir, asset.filename)
+  const payloadFilename = bundledPayloadFilename(asset.filename)
+  const payloadPath = path.join(temporaryDir, payloadFilename)
 
   await rm(temporaryDir, { recursive: true, force: true })
   await rm(backupDir, { recursive: true, force: true })
@@ -92,20 +96,26 @@ async function prepareRuntime() {
       )
     }
 
-    await writeFile(archivePath, archive)
+    const payload = encodeBundledRuntime(archive)
+    const payloadSha256 = createHash('sha256').update(payload).digest('hex')
+    await writeFile(payloadPath, payload)
     await writeFile(
       path.join(temporaryDir, 'manifest.json'),
       `${JSON.stringify(
         {
           name: 'computer-use-runtime',
-          format: 'archive-v1',
+          format: BUNDLED_RUNTIME_FORMAT,
+          encoding: BUNDLED_RUNTIME_ENCODING,
           version: manifest.runtimeVersion,
           source: GITHUB_RELEASE_ROOT,
           targetTriple,
           platformKey,
-          asset: asset.filename,
-          sha256: asset.sha256,
-          size: asset.size,
+          payload: payloadFilename,
+          payloadSha256,
+          payloadSize: payload.byteLength,
+          archiveFilename: asset.filename,
+          archiveSha256: asset.sha256,
+          archiveSize: asset.size,
           pythonPath: asset.pythonPath,
           available: true,
         },
@@ -209,6 +219,19 @@ function archiveUrl(manifestUrl: string, filename: string): string {
   return `${manifestUrl.slice(0, separator + 1)}${encodeURIComponent(filename)}`
 }
 
+function bundledPayloadFilename(archiveFilename: string): string {
+  const basename = archiveFilename.replace(/\.(?:tar\.gz|tgz)$/i, '')
+  return `${basename}.cyber-runtime`
+}
+
+function encodeBundledRuntime(archive: Buffer): Buffer {
+  const payload = Buffer.allocUnsafe(archive.length)
+  for (let index = 0; index < archive.length; index += 1) {
+    payload[index] = archive[index]! ^ BUNDLED_RUNTIME_XOR_BYTE
+  }
+  return payload
+}
+
 async function downloadFirstAvailable(urls: string[]): Promise<Buffer> {
   const errors: string[] = []
   for (const url of urls) {
@@ -255,36 +278,47 @@ async function downloadWithCurl(url: string): Promise<Buffer> {
 
 function hasReusableRuntime(version: string, platformKey: string, asset: RuntimeAsset): boolean {
   const manifestPath = path.join(resourceDir, 'manifest.json')
-  const archivePath = path.join(resourceDir, asset.filename)
-  if (!existsSync(manifestPath) || !existsSync(archivePath)) return false
+  const payloadFilename = bundledPayloadFilename(asset.filename)
+  const payloadPath = path.join(resourceDir, payloadFilename)
+  if (!existsSync(manifestPath) || !existsSync(payloadPath)) return false
 
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
       name?: string
       format?: string
+      encoding?: string
       version?: string
       targetTriple?: string
       platformKey?: string
-      asset?: string
-      sha256?: string
-      size?: number
+      payload?: string
+      payloadSha256?: string
+      payloadSize?: number
+      archiveFilename?: string
+      archiveSha256?: string
+      archiveSize?: number
       pythonPath?: string
       available?: boolean
     }
-    const archiveStat = statSync(archivePath)
+    const payload = readFileSync(payloadPath)
+    const payloadStat = statSync(payloadPath)
+    const payloadSha256 = createHash('sha256').update(payload).digest('hex')
     return (
       manifest.name === 'computer-use-runtime' &&
-      manifest.format === 'archive-v1' &&
+      manifest.format === BUNDLED_RUNTIME_FORMAT &&
+      manifest.encoding === BUNDLED_RUNTIME_ENCODING &&
       manifest.available === true &&
       manifest.version === version &&
       manifest.targetTriple === targetTriple &&
       manifest.platformKey === platformKey &&
-      manifest.asset === asset.filename &&
-      manifest.sha256 === asset.sha256 &&
-      manifest.size === asset.size &&
+      manifest.payload === payloadFilename &&
+      manifest.payloadSha256 === payloadSha256 &&
+      manifest.payloadSize === payload.byteLength &&
+      manifest.archiveFilename === asset.filename &&
+      manifest.archiveSha256 === asset.sha256 &&
+      manifest.archiveSize === asset.size &&
       manifest.pythonPath === asset.pythonPath &&
-      archiveStat.isFile() &&
-      archiveStat.size === asset.size
+      payloadStat.isFile() &&
+      payloadStat.size === payload.byteLength
     )
   } catch {
     return false

@@ -114,6 +114,65 @@ describe('UsbMigrationService', () => {
       .toBe('cybercode-portable-v1\n')
   })
 
+  test('skips rebuildable caches and generated project dependencies', async () => {
+    await mkdir(join(configDir, '.runtime', 'python'), { recursive: true })
+    await mkdir(join(configDir, 'indexes'), { recursive: true })
+    await mkdir(join(configDir, 'cache'), { recursive: true })
+    await writeFile(join(configDir, '.runtime', 'python', 'runtime.bin'), 'runtime')
+    await writeFile(join(configDir, 'indexes', 'memory.db'), 'index')
+    await writeFile(join(configDir, 'cache', 'response.json'), 'cache')
+
+    const generatedDirectories = [
+      ['node_modules', 'package', 'index.js'],
+      ['target', 'debug', 'app'],
+      ['.codegraph', 'graph.db'],
+      ['build', 'bundle.js'],
+    ]
+    for (const parts of generatedDirectories) {
+      const target = join(projectDir, ...parts)
+      await mkdir(join(target, '..'), { recursive: true })
+      await writeFile(target, 'generated')
+    }
+
+    const service = createService()
+    const scan = await service.scan()
+
+    expect(scan.configSizeBytes).toBe(
+      Buffer.byteLength('# Review') + Buffer.byteLength('{"name":"demo"}'),
+    )
+    expect(scan.projects[0]?.sizeBytes).toBe(
+      Buffer.byteLength('export const answer = 42\n'),
+    )
+
+    const started = await service.start({
+      destinationPath: destinationDir,
+      includeApplications: false,
+      projectIds: [scan.projects[0]!.id],
+    })
+    const completed = await waitForJob(service, started.id)
+    const portableRoot = join(destinationDir, USB_PORTABLE_DIRECTORY_NAME)
+    const portableProject = join(
+      portableRoot,
+      'projects',
+      `app-${scan.projects[0]!.id.slice(0, 8)}`,
+    )
+
+    expect(completed.status).toBe('completed')
+    await access(join(portableProject, 'src', 'index.ts'))
+    await expect(access(join(portableRoot, 'data', 'config', '.runtime')))
+      .rejects.toThrow()
+    await expect(access(join(portableRoot, 'data', 'config', 'indexes')))
+      .rejects.toThrow()
+    await expect(access(join(portableProject, 'node_modules')))
+      .rejects.toThrow()
+    await expect(access(join(portableProject, 'target')))
+      .rejects.toThrow()
+    await expect(access(join(portableProject, '.codegraph')))
+      .rejects.toThrow()
+    await expect(access(join(portableProject, 'build')))
+      .rejects.toThrow()
+  })
+
   test('downloads and verifies a selected platform package', async () => {
     const packageBytes = new TextEncoder().encode('portable-windows-package')
     const sha256 = createHash('sha256').update(packageBytes).digest('hex')
@@ -155,6 +214,54 @@ describe('UsbMigrationService', () => {
       join(destinationDir, USB_PORTABLE_DIRECTORY_NAME, 'checksums.sha256'),
       'utf8',
     )).toContain(sha256)
+  })
+
+  test('falls back to the next package mirror when a download stalls', async () => {
+    const packageBytes = new TextEncoder().encode('portable-windows-package')
+    const sha256 = createHash('sha256').update(packageBytes).digest('hex')
+    const urls = [
+      'https://slow.example.test/windows.zip',
+      'https://mirror.example.test/windows.zip',
+    ]
+    const requests: string[] = []
+    const manifest = createManifest({
+      filename: 'CyberCode_1.2.0_windows_x64_portable.zip',
+      size: packageBytes.byteLength,
+      sha256,
+      archiveType: 'zip',
+      urls,
+    })
+    const service = createService({
+      resolveRelease: async () => ({
+        manifest,
+        sourceUrl: 'https://example.test/portable.json',
+      }),
+      downloadStallTimeoutMs: 10,
+      fetchImpl: async (input, init) => {
+        const url = String(input)
+        requests.push(url)
+        if (url === urls[0]) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => reject(init.signal?.reason),
+              { once: true },
+            )
+          })
+        }
+        return new Response(packageBytes)
+      },
+    })
+    const scan = await service.scan()
+    const started = await service.start({
+      destinationPath: destinationDir,
+      projectIds: [],
+      platforms: ['windows-x64'],
+    })
+    const completed = await waitForJob(service, started.id)
+
+    expect(completed.status).toBe('completed')
+    expect(requests).toEqual(urls)
   })
 
   test('rejects a destination inside a project being copied', async () => {

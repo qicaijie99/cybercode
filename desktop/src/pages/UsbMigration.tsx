@@ -76,12 +76,16 @@ export function UsbMigration({ embedded = false }: { embedded?: boolean } = {}) 
     try {
       const next = await usbMigrationApi.scan(force)
       setScan(next)
-      setSelectedProjectIds(new Set(next.projects.map(project => project.id)))
+      setSelectedProjectIds(new Set())
       const availablePlatforms = PLATFORM_ORDER.filter(
         platform => next.release?.platforms[platform],
       )
-      setSelectedPlatforms(new Set(availablePlatforms))
-      setIncludeApplications(availablePlatforms.length > 0)
+      const defaultPlatform = next.currentPlatform
+        && availablePlatforms.includes(next.currentPlatform)
+        ? next.currentPlatform
+        : availablePlatforms[0]
+      setSelectedPlatforms(new Set(defaultPlatform ? [defaultPlatform] : []))
+      setIncludeApplications(!!defaultPlatform)
     } catch (error) {
       setLoadError(errorMessage(error, t('usbMigration.scanFailed')))
     } finally {

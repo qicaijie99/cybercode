@@ -95,6 +95,7 @@ export type UsbMigrationStage =
   | 'applications'
   | 'launchers'
   | 'finalizing'
+  | 'cleanup'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -140,6 +141,7 @@ export type UsbMigrationServiceOptions = {
   manifestUrls?: string[]
   resolveRelease?: () => Promise<ResolvedPortableRelease | null>
   availableBytes?: (path: string) => Promise<number | null>
+  downloadStallTimeoutMs?: number
   now?: () => Date
   idFactory?: () => string
 }
@@ -152,6 +154,23 @@ type CopyContext = {
   job: InternalJob
   signal: AbortSignal
   advance: (bytes: number) => void
+  setCurrentItem: (item: string) => void
+}
+
+type TreeCopyScope = 'config' | 'project'
+
+type CopyEntryMetadata = {
+  source: string
+  destination: string
+  mode: number
+  atime: Date
+  mtime: Date
+}
+
+type CopyPlan = {
+  directories: CopyEntryMetadata[]
+  files: Array<CopyEntryMetadata & { size: number }>
+  symlinks: Array<{ source: string; destination: string }>
 }
 
 const DEFAULT_MANIFEST_URLS = [
@@ -160,8 +179,48 @@ const DEFAULT_MANIFEST_URLS = [
   'https://ghfast.top/https://github.com/wk42worldworld/cybercode/releases/latest/download/portable.json',
 ]
 const MANIFEST_TIMEOUT_MS = 8_000
+const DOWNLOAD_STALL_TIMEOUT_MS = 30_000
 const SCAN_CACHE_TTL_MS = 20_000
 const MIN_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024
+const COPY_CONCURRENCY = 4
+const CONFIG_CACHE_DIRECTORIES = new Set([
+  '.runtime',
+  'cache',
+  'indexes',
+  'logs',
+  'shell-snapshots',
+  'telemetry',
+  'tmp',
+])
+const PROJECT_GENERATED_DIRECTORIES = new Set([
+  '.angular',
+  '.cache',
+  '.codegraph',
+  '.gradle',
+  '.mypy_cache',
+  '.next',
+  '.nuxt',
+  '.parcel-cache',
+  '.playwright-cli',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.svelte-kit',
+  '.tox',
+  '.turbo',
+  '.venv',
+  '__pycache__',
+  'build',
+  'cmake-build-debug',
+  'cmake-build-release',
+  'coverage',
+  'deriveddata',
+  'dist',
+  'node_modules',
+  'out',
+  'pods',
+  'target',
+  'venv',
+])
 const VALID_PLATFORMS = new Set<UsbMigrationPlatform>([
   'macos-arm64',
   'macos-x64',
@@ -187,6 +246,7 @@ export class UsbMigrationService {
   private readonly manifestUrls: string[]
   private readonly resolveReleaseImpl?: UsbMigrationServiceOptions['resolveRelease']
   private readonly availableBytesImpl: (path: string) => Promise<number | null>
+  private readonly downloadStallTimeoutMs: number
   private readonly now: () => Date
   private readonly idFactory: () => string
   private readonly jobs = new Map<string, InternalJob>()
@@ -199,6 +259,10 @@ export class UsbMigrationService {
     this.manifestUrls = options.manifestUrls ?? DEFAULT_MANIFEST_URLS
     this.resolveReleaseImpl = options.resolveRelease
     this.availableBytesImpl = options.availableBytes ?? availableBytes
+    this.downloadStallTimeoutMs = Math.max(
+      1,
+      options.downloadStallTimeoutMs ?? DOWNLOAD_STALL_TIMEOUT_MS,
+    )
     this.now = options.now ?? (() => new Date())
     this.idFactory = options.idFactory ?? (() => randomBytes(12).toString('hex'))
   }
@@ -213,7 +277,7 @@ export class UsbMigrationService {
     }
 
     const [configSizeBytes, projects, releaseResult] = await Promise.all([
-      measureTree(this.configDir).catch(() => 0),
+      measureTree(this.configDir, 'config').catch(() => 0),
       this.discoverProjects(),
       this.resolveRelease()
         .then(release => ({ release, error: null as string | null }))
@@ -398,7 +462,7 @@ export class UsbMigrationService {
         id: projectId(project.path),
         name: basename(project.path) || 'project',
         path: project.path,
-        sizeBytes: await measureTree(project.path).catch(() => 0),
+        sizeBytes: await measureTree(project.path, 'project').catch(() => 0),
         modifiedAt: project.modifiedAt,
         sessionCount: project.sessionCount,
       }),
@@ -501,10 +565,17 @@ export class UsbMigrationService {
       portableParent,
       `.${USB_PORTABLE_DIRECTORY_NAME}.backup-${job.id}`,
     )
+    let lastCurrentItemUpdate = 0
     const context: CopyContext = {
       job,
       signal,
       advance: bytes => this.advanceJob(job, bytes),
+      setCurrentItem: item => {
+        const timestamp = Date.now()
+        if (timestamp - lastCurrentItemUpdate < 100) return
+        lastCurrentItemUpdate = timestamp
+        this.updateJob(job, { currentItem: item })
+      },
     }
     let existingMoved = false
 
@@ -524,7 +595,7 @@ export class UsbMigrationService {
       })
       const portableConfigDir = join(stagingPath, 'data', 'config')
       if (await pathExists(this.configDir)) {
-        await copyTree(this.configDir, portableConfigDir, context)
+        await copyTree(this.configDir, portableConfigDir, context, 'config')
       } else {
         await mkdir(portableConfigDir, { recursive: true })
       }
@@ -535,7 +606,12 @@ export class UsbMigrationService {
         signal.throwIfAborted()
         const relativePath = `projects/${projectSlug(project)}`
         this.updateJob(job, { currentItem: project.path })
-        await copyTree(project.path, join(stagingPath, relativePath), context)
+        await copyTree(
+          project.path,
+          join(stagingPath, relativePath),
+          context,
+          'project',
+        )
         registryProjects.push({
           id: project.id,
           name: project.name,
@@ -598,6 +674,10 @@ export class UsbMigrationService {
       }
       await rename(stagingPath, job.portablePath)
       if (existingMoved) {
+        this.updateJob(job, {
+          stage: 'cleanup',
+          currentItem: job.portablePath,
+        })
         await rm(backupPath, { recursive: true, force: true })
         existingMoved = false
       }
@@ -646,9 +726,27 @@ export class UsbMigrationService {
       const partialPath = `${destinationPath}.part`
       await rm(partialPath, { force: true })
       let attemptDownloaded = 0
+      const controller = new AbortController()
+      const onAbort = () => controller.abort(context.signal.reason)
+      context.signal.addEventListener('abort', onAbort, { once: true })
+      let stallTimer: ReturnType<typeof setTimeout> | undefined
+      const resetStallTimer = () => {
+        if (stallTimer) clearTimeout(stallTimer)
+        stallTimer = setTimeout(
+          () => controller.abort(
+            new DOMException('Download stalled', 'TimeoutError'),
+          ),
+          this.downloadStallTimeoutMs,
+        )
+      }
+      const cleanupRequest = () => {
+        if (stallTimer) clearTimeout(stallTimer)
+        context.signal.removeEventListener('abort', onAbort)
+      }
       try {
+        resetStallTimer()
         const response = await this.fetchImpl(url, {
-          signal: context.signal,
+          signal: controller.signal,
           headers: {
             Accept: 'application/octet-stream',
             'Accept-Encoding': 'identity',
@@ -667,6 +765,7 @@ export class UsbMigrationService {
             const { done, value } = await reader.read()
             if (done) break
             context.signal.throwIfAborted()
+            resetStallTimer()
             await handle.write(value)
             hash.update(value)
             downloaded += value.byteLength
@@ -685,8 +784,10 @@ export class UsbMigrationService {
           throw new Error('SHA-256 校验失败')
         }
         await rename(partialPath, destinationPath)
+        cleanupRequest()
         return
       } catch (error) {
+        cleanupRequest()
         this.advanceJob(context.job, -attemptDownloaded)
         await rm(partialPath, { force: true }).catch(() => {})
         if (context.signal.aborted) throw context.signal.reason
@@ -751,10 +852,19 @@ async function discoverSessionProjects(): Promise<Array<{
   return [...projects.values()]
 }
 
-async function measureTree(root: string): Promise<number> {
+async function measureTree(
+  root: string,
+  scope: TreeCopyScope,
+): Promise<number> {
   let total = 0
-  const visit = async (target: string): Promise<void> => {
+  const visit = async (target: string, relativePath: string): Promise<void> => {
     const stats = await lstat(target)
+    if (
+      relativePath
+      && shouldSkipTreeEntry(scope, relativePath, stats.isDirectory())
+    ) {
+      return
+    }
     if (stats.isSymbolicLink()) return
     if (stats.isFile()) {
       total += stats.size
@@ -763,10 +873,13 @@ async function measureTree(root: string): Promise<number> {
     if (!stats.isDirectory()) return
     const entries = await readdir(target, { withFileTypes: true })
     for (const entry of entries) {
-      await visit(join(target, entry.name))
+      await visit(
+        join(target, entry.name),
+        relativePath ? join(relativePath, entry.name) : entry.name,
+      )
     }
   }
-  await visit(root)
+  await visit(root, '')
   return total
 }
 
@@ -774,49 +887,126 @@ async function copyTree(
   source: string,
   destination: string,
   context: CopyContext,
+  scope: TreeCopyScope,
 ): Promise<void> {
-  context.signal.throwIfAborted()
-  const stats = await lstat(source)
+  const plan = await createCopyPlan(source, destination, context, scope)
+  await mapWithConcurrency(
+    plan.directories,
+    COPY_CONCURRENCY,
+    async entry => {
+      context.signal.throwIfAborted()
+      await mkdir(entry.destination, { recursive: true })
+    },
+  )
+  await mapWithConcurrency(
+    [...plan.files, ...plan.symlinks],
+    COPY_CONCURRENCY,
+    async entry => {
+      context.signal.throwIfAborted()
+      context.setCurrentItem(entry.source)
+      if ('size' in entry) {
+        await copyFile(entry.source, entry.destination)
+        await chmod(entry.destination, entry.mode).catch(() => {})
+        await utimes(entry.destination, entry.atime, entry.mtime).catch(() => {})
+        context.advance(entry.size)
+        return
+      }
 
-  if (stats.isSymbolicLink()) {
-    const target = await readlink(source)
-    await mkdir(dirname(destination), { recursive: true })
-    try {
-      await symlink(target, destination)
-    } catch (error) {
-      context.job.warnings.push(
-        `未能复制符号链接 ${source}: ${error instanceof Error ? error.message : String(error)}`,
+      const target = await readlink(entry.source)
+      try {
+        await symlink(target, entry.destination)
+      } catch (error) {
+        context.job.warnings.push(
+          `未能复制符号链接 ${entry.source}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    },
+  )
+  for (const entry of [...plan.directories].reverse()) {
+    context.signal.throwIfAborted()
+    await chmod(entry.destination, entry.mode).catch(() => {})
+    await utimes(entry.destination, entry.atime, entry.mtime).catch(() => {})
+  }
+}
+
+async function createCopyPlan(
+  sourceRoot: string,
+  destinationRoot: string,
+  context: CopyContext,
+  scope: TreeCopyScope,
+): Promise<CopyPlan> {
+  const plan: CopyPlan = {
+    directories: [],
+    files: [],
+    symlinks: [],
+  }
+  const visit = async (
+    source: string,
+    destination: string,
+    relativePath: string,
+  ): Promise<void> => {
+    context.signal.throwIfAborted()
+    context.setCurrentItem(source)
+    const stats = await lstat(source)
+    if (
+      relativePath
+      && shouldSkipTreeEntry(scope, relativePath, stats.isDirectory())
+    ) {
+      return
+    }
+    if (stats.isSymbolicLink()) {
+      plan.symlinks.push({ source, destination })
+      return
+    }
+    if (stats.isFile()) {
+      plan.files.push({
+        source,
+        destination,
+        size: stats.size,
+        mode: stats.mode,
+        atime: stats.atime,
+        mtime: stats.mtime,
+      })
+      return
+    }
+    if (!stats.isDirectory()) {
+      context.job.warnings.push(`已跳过不支持的文件类型：${source}`)
+      return
+    }
+
+    plan.directories.push({
+      source,
+      destination,
+      mode: stats.mode,
+      atime: stats.atime,
+      mtime: stats.mtime,
+    })
+    const entries = await readdir(source, { withFileTypes: true })
+    for (const entry of entries) {
+      await visit(
+        join(source, entry.name),
+        join(destination, entry.name),
+        relativePath ? join(relativePath, entry.name) : entry.name,
       )
     }
-    return
   }
+  await visit(sourceRoot, destinationRoot, '')
+  return plan
+}
 
-  if (stats.isFile()) {
-    await mkdir(dirname(destination), { recursive: true })
-    await copyFile(source, destination)
-    await chmod(destination, stats.mode).catch(() => {})
-    await utimes(destination, stats.atime, stats.mtime).catch(() => {})
-    context.advance(stats.size)
-    return
+function shouldSkipTreeEntry(
+  scope: TreeCopyScope,
+  relativePath: string,
+  isDirectory: boolean,
+): boolean {
+  if (!isDirectory) return false
+  const segments = relativePath
+    .split(/[\\/]+/)
+    .map(segment => segment.toLowerCase())
+  if (scope === 'config') {
+    return segments.length === 1 && CONFIG_CACHE_DIRECTORIES.has(segments[0]!)
   }
-
-  if (!stats.isDirectory()) {
-    context.job.warnings.push(`已跳过不支持的文件类型：${source}`)
-    return
-  }
-
-  await mkdir(destination, { recursive: true })
-  const entries = await readdir(source, { withFileTypes: true })
-  for (const entry of entries) {
-    context.signal.throwIfAborted()
-    await copyTree(
-      join(source, entry.name),
-      join(destination, entry.name),
-      context,
-    )
-  }
-  await chmod(destination, stats.mode).catch(() => {})
-  await utimes(destination, stats.atime, stats.mtime).catch(() => {})
+  return segments.some(segment => PROJECT_GENERATED_DIRECTORIES.has(segment))
 }
 
 function publicJob(job: InternalJob): UsbMigrationJob {
@@ -1173,17 +1363,25 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results = new Array<R>(values.length)
   let cursor = 0
+  let failed = false
+  let failure: unknown
   const workers = Array.from(
     { length: Math.min(Math.max(1, concurrency), values.length) },
     async () => {
-      while (cursor < values.length) {
+      while (cursor < values.length && !failed) {
         const index = cursor
         cursor += 1
-        results[index] = await mapper(values[index]!)
+        try {
+          results[index] = await mapper(values[index]!)
+        } catch (error) {
+          failed = true
+          failure = error
+        }
       }
     },
   )
   await Promise.all(workers)
+  if (failed) throw failure
   return results
 }
 

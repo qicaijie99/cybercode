@@ -44,6 +44,7 @@ export type UsbMigrationJob = {
     | 'applications'
     | 'launchers'
     | 'finalizing'
+    | 'cleanup'
     | 'completed'
     | 'failed'
     | 'cancelled'

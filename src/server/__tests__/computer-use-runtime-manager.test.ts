@@ -35,6 +35,10 @@ function manifestFor(bytes: Uint8Array): ComputerUseRuntimeManifest {
   }
 }
 
+function encodeBundledPayload(archive: Uint8Array): Uint8Array {
+  return Uint8Array.from(archive, byte => byte ^ 0xa5)
+}
+
 async function fakeExtract(_archivePath: string, destination: string): Promise<void> {
   await mkdir(path.join(destination, 'python'), { recursive: true })
   await writeFile(path.join(destination, 'python', 'python.exe'), 'fake python')
@@ -167,21 +171,27 @@ describe('ComputerUseRuntimeManager', () => {
     const runtimeRoot = await makeRoot()
     const bundledRoot = await makeRoot()
     const archive = new TextEncoder().encode('bundled-archive-runtime')
+    const payload = encodeBundledPayload(archive)
     const manifest = manifestFor(archive)
     const asset = manifest.assets['win32-x64']!
-    const archivePath = path.join(bundledRoot, asset.filename)
-    await writeFile(archivePath, archive)
+    const payloadFilename = 'computer-use-runtime-win32-x64.cyber-runtime'
+    const payloadPath = path.join(bundledRoot, payloadFilename)
+    await writeFile(payloadPath, payload)
     await writeFile(
       path.join(bundledRoot, 'manifest.json'),
       `${JSON.stringify(
         {
           name: 'computer-use-runtime',
-          format: 'archive-v1',
+          format: 'opaque-xor-v1',
+          encoding: 'xor-a5',
           version: manifest.runtimeVersion,
           platformKey: 'win32-x64',
-          asset: asset.filename,
-          sha256: asset.sha256,
-          size: asset.size,
+          payload: payloadFilename,
+          payloadSha256: createHash('sha256').update(payload).digest('hex'),
+          payloadSize: payload.byteLength,
+          archiveFilename: asset.filename,
+          archiveSha256: asset.sha256,
+          archiveSize: asset.size,
           pythonPath: asset.pythonPath,
           available: true,
         },
@@ -214,7 +224,7 @@ describe('ComputerUseRuntimeManager', () => {
       version: 'test-v1',
     })
     expect(fetchCalls).toBe(0)
-    await expect(readFile(archivePath)).resolves.toEqual(archive)
+    await expect(readFile(payloadPath)).resolves.toEqual(payload)
     await expect(
       readFile(path.join(runtimeRoot, 'managed', 'active.json'), 'utf8'),
     ).resolves.toContain('"runtimeVersion": "test-v1"')
@@ -227,19 +237,24 @@ describe('ComputerUseRuntimeManager', () => {
     const corrupted = new TextEncoder().encode('corrupted-bundled-runtime')
     const manifest = manifestFor(expected)
     const asset = manifest.assets['win32-x64']!
-    const archivePath = path.join(bundledRoot, asset.filename)
-    await writeFile(archivePath, corrupted)
+    const payloadFilename = 'computer-use-runtime-win32-x64.cyber-runtime'
+    const payloadPath = path.join(bundledRoot, payloadFilename)
+    await writeFile(payloadPath, corrupted)
     await writeFile(
       path.join(bundledRoot, 'manifest.json'),
       `${JSON.stringify(
         {
           name: 'computer-use-runtime',
-          format: 'archive-v1',
+          format: 'opaque-xor-v1',
+          encoding: 'xor-a5',
           version: manifest.runtimeVersion,
           platformKey: 'win32-x64',
-          asset: asset.filename,
-          sha256: asset.sha256,
-          size: corrupted.byteLength,
+          payload: payloadFilename,
+          payloadSha256: createHash('sha256').update(expected).digest('hex'),
+          payloadSize: corrupted.byteLength,
+          archiveFilename: asset.filename,
+          archiveSha256: asset.sha256,
+          archiveSize: asset.size,
           pythonPath: asset.pythonPath,
           available: true,
         },
@@ -260,8 +275,8 @@ describe('ComputerUseRuntimeManager', () => {
       validatePython: async () => 'Python 3.12.0',
     })
 
-    await expect(manager.ensureReady()).rejects.toThrow('运行组件校验失败')
-    await expect(readFile(archivePath)).resolves.toEqual(corrupted)
+    await expect(manager.ensureReady()).rejects.toThrow('内置运行组件校验失败')
+    await expect(readFile(payloadPath)).resolves.toEqual(corrupted)
     expect(manager.snapshot()).toMatchObject({ phase: 'error', ready: false })
   })
 

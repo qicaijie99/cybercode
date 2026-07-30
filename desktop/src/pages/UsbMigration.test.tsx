@@ -105,7 +105,7 @@ describe('UsbMigration', () => {
     }))
   })
 
-  it('starts a complete portable migration with all discovered content selected', async () => {
+  it('starts with projects opt-in and only the current platform app selected', async () => {
     vi.mocked(usbMigrationApi.start).mockResolvedValue(job({
       status: 'running',
       stage: 'config',
@@ -116,8 +116,8 @@ describe('UsbMigration', () => {
     render(<UsbMigration />)
 
     expect(await screen.findByText('cybercode')).toBeInTheDocument()
-    expect(screen.getByRole('switch', { name: '包含四平台应用' })).toBeChecked()
-    expect(screen.getAllByRole('checkbox', { checked: true })).toHaveLength(5)
+    expect(screen.getByRole('switch', { name: '包含桌面应用' })).toBeChecked()
+    expect(screen.getAllByRole('checkbox', { checked: true })).toHaveLength(1)
 
     fireEvent.change(screen.getByRole('textbox', { name: 'U 盘位置' }), {
       target: { value: '/Volumes/USB' },
@@ -130,13 +130,8 @@ describe('UsbMigration', () => {
     await waitFor(() => {
       expect(usbMigrationApi.start).toHaveBeenCalledWith({
         destinationPath: '/Volumes/USB',
-        projectIds: ['a'.repeat(20)],
-        platforms: [
-          'macos-arm64',
-          'macos-x64',
-          'windows-x64',
-          'linux-x64',
-        ],
+        projectIds: [],
+        platforms: ['macos-arm64'],
         includeApplications: true,
         replaceExisting: false,
       })
@@ -156,7 +151,7 @@ describe('UsbMigration', () => {
       '当前 Release 暂无完整便携运行包；仍可只迁移数据。',
     )).toBeInTheDocument()
     expect(screen.queryByText('当前版本尚未发布便携运行包')).not.toBeInTheDocument()
-    expect(screen.getByRole('switch', { name: '包含四平台应用' })).toBeDisabled()
+    expect(screen.getByRole('switch', { name: '包含桌面应用' })).toBeDisabled()
 
     fireEvent.change(screen.getByRole('textbox', { name: 'U 盘位置' }), {
       target: { value: '/Volumes/USB' },
@@ -169,7 +164,7 @@ describe('UsbMigration', () => {
     await waitFor(() => {
       expect(usbMigrationApi.start).toHaveBeenCalledWith({
         destinationPath: '/Volumes/USB',
-        projectIds: ['a'.repeat(20)],
+        projectIds: [],
         platforms: [],
         includeApplications: false,
         replaceExisting: false,

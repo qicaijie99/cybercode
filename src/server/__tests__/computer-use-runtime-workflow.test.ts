@@ -38,7 +38,7 @@ describe('Computer Use runtime workflow', () => {
     ).toBeDefined()
   })
 
-  test('publishes the runtime as a verified opaque archive', async () => {
+  test('publishes the runtime as a verified opaque payload', async () => {
     const workflow = parse(await readFile(releaseWorkflowPath, 'utf8')) as {
       jobs?: {
         build?: {
@@ -50,8 +50,15 @@ describe('Computer Use runtime workflow', () => {
       step => step.name === 'Validate packaged runtime resources',
     )?.run ?? ''
 
-    expect(validation).toContain("computerUseRuntimeManifest.format !== 'archive-v1'")
-    expect(validation).toContain('Packaged Computer Use runtime archive checksum is invalid')
+    expect(validation).toContain(
+      "computerUseRuntimeManifest.format !== 'opaque-xor-v1'",
+    )
+    expect(validation).toContain(
+      'Packaged Computer Use runtime payload checksum is invalid',
+    )
+    expect(validation).toContain(
+      'Packaged Computer Use runtime cannot restore the verified archive',
+    )
     expect(validation).toContain(
       'Packaged Computer Use runtime must remain archived until first use',
     )

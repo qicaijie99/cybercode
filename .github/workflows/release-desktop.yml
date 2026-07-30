@@ -658,39 +658,67 @@ jobs:
           }[process.env.TARGET_TRIPLE]
           if (
             computerUseRuntimeManifest.name !== 'computer-use-runtime' ||
-            computerUseRuntimeManifest.format !== 'archive-v1' ||
+            computerUseRuntimeManifest.format !== 'opaque-xor-v1' ||
+            computerUseRuntimeManifest.encoding !== 'xor-a5' ||
             computerUseRuntimeManifest.targetTriple !== process.env.TARGET_TRIPLE ||
             computerUseRuntimeManifest.platformKey !== expectedRuntimePlatform ||
             computerUseRuntimeManifest.available !== true ||
             !/^[a-zA-Z0-9._-]+$/.test(computerUseRuntimeManifest.version ?? '') ||
-            !/^[0-9a-f]{64}$/.test(computerUseRuntimeManifest.sha256 ?? '') ||
-            !Number.isSafeInteger(computerUseRuntimeManifest.size) ||
-            computerUseRuntimeManifest.size <= 0 ||
-            typeof computerUseRuntimeManifest.asset !== 'string' ||
-            path.basename(computerUseRuntimeManifest.asset) !== computerUseRuntimeManifest.asset ||
+            !/^[0-9a-f]{64}$/.test(computerUseRuntimeManifest.payloadSha256 ?? '') ||
+            !Number.isSafeInteger(computerUseRuntimeManifest.payloadSize) ||
+            computerUseRuntimeManifest.payloadSize <= 0 ||
+            typeof computerUseRuntimeManifest.payload !== 'string' ||
+            path.basename(computerUseRuntimeManifest.payload) !== computerUseRuntimeManifest.payload ||
+            !/^[0-9a-f]{64}$/.test(computerUseRuntimeManifest.archiveSha256 ?? '') ||
+            !Number.isSafeInteger(computerUseRuntimeManifest.archiveSize) ||
+            computerUseRuntimeManifest.archiveSize <= 0 ||
+            typeof computerUseRuntimeManifest.archiveFilename !== 'string' ||
+            path.basename(computerUseRuntimeManifest.archiveFilename) !== computerUseRuntimeManifest.archiveFilename ||
             typeof computerUseRuntimeManifest.pythonPath !== 'string' ||
             path.isAbsolute(computerUseRuntimeManifest.pythonPath) ||
             computerUseRuntimeManifest.pythonPath.split(/[\\/]+/).includes('..')
           ) {
             throw new Error('Packaged Computer Use runtime manifest is invalid')
           }
-          const computerUseRuntimeArchive = path.join(
+          const computerUseRuntimePayload = path.join(
             process.env.COMPUTER_USE_RUNTIME_RESOURCE_DIR,
-            computerUseRuntimeManifest.asset,
+            computerUseRuntimeManifest.payload,
           )
           if (
-            !fs.existsSync(computerUseRuntimeArchive) ||
-            !fs.statSync(computerUseRuntimeArchive).isFile() ||
-            fs.statSync(computerUseRuntimeArchive).size !== computerUseRuntimeManifest.size
+            !fs.existsSync(computerUseRuntimePayload) ||
+            !fs.statSync(computerUseRuntimePayload).isFile() ||
+            fs.statSync(computerUseRuntimePayload).size !== computerUseRuntimeManifest.payloadSize
           ) {
-            throw new Error('Packaged Computer Use runtime archive is missing or incomplete')
+            throw new Error('Packaged Computer Use runtime payload is missing or incomplete')
           }
-          const computerUseRuntimeSha256 = crypto
+          const computerUseRuntimePayloadBuffer = fs.readFileSync(computerUseRuntimePayload)
+          const computerUseRuntimePayloadSha256 = crypto
             .createHash('sha256')
-            .update(fs.readFileSync(computerUseRuntimeArchive))
+            .update(computerUseRuntimePayloadBuffer)
             .digest('hex')
-          if (computerUseRuntimeSha256 !== computerUseRuntimeManifest.sha256) {
-            throw new Error('Packaged Computer Use runtime archive checksum is invalid')
+          if (computerUseRuntimePayloadSha256 !== computerUseRuntimeManifest.payloadSha256) {
+            throw new Error('Packaged Computer Use runtime payload checksum is invalid')
+          }
+          const archiveHash = crypto.createHash('sha256')
+          const chunkSize = 1024 * 1024
+          for (
+            let offset = 0;
+            offset < computerUseRuntimePayloadBuffer.length;
+            offset += chunkSize
+          ) {
+            const decoded = Buffer.from(
+              computerUseRuntimePayloadBuffer.subarray(offset, offset + chunkSize),
+            )
+            for (let index = 0; index < decoded.length; index += 1) {
+              decoded[index] ^= 0xa5
+            }
+            archiveHash.update(decoded)
+          }
+          if (
+            computerUseRuntimePayloadBuffer.length !== computerUseRuntimeManifest.archiveSize ||
+            archiveHash.digest('hex') !== computerUseRuntimeManifest.archiveSha256
+          ) {
+            throw new Error('Packaged Computer Use runtime cannot restore the verified archive')
           }
           if (
             fs.existsSync(
