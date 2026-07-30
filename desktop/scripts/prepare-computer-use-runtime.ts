@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
-import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 type RuntimeAsset = {
@@ -14,14 +14,6 @@ type RuntimeManifest = {
   schemaVersion: 1
   runtimeVersion: string
   assets: Record<string, RuntimeAsset>
-}
-
-type ActiveRuntimePointer = {
-  runtimeVersion: string
-  platformKey: string
-  pythonPath: string
-  sha256: string
-  installedAt: string
 }
 
 const RUNTIME_RELEASE_TAG =
@@ -78,12 +70,10 @@ async function prepareRuntime() {
   const temporaryDir = `${resourceDir}.preparing-${process.pid}-${Date.now()}`
   const backupDir = `${resourceDir}.backup-${process.pid}-${Date.now()}`
   const archivePath = path.join(temporaryDir, asset.filename)
-  const managedRoot = path.join(temporaryDir, 'managed')
-  const finalRoot = path.join(managedRoot, manifest.runtimeVersion, platformKey)
 
   await rm(temporaryDir, { recursive: true, force: true })
   await rm(backupDir, { recursive: true, force: true })
-  await mkdir(finalRoot, { recursive: true })
+  await mkdir(temporaryDir, { recursive: true })
 
   try {
     await writeFile(path.join(temporaryDir, '.gitignore'), '*\n!.gitignore\n')
@@ -103,40 +93,20 @@ async function prepareRuntime() {
     }
 
     await writeFile(archivePath, archive)
-    await extractTarGz(archivePath, finalRoot)
-    await rm(archivePath, { force: true })
-
-    const pythonPath = path.join(finalRoot, ...asset.pythonPath.split(/[\\/]+/))
-    if (!existsSync(pythonPath)) {
-      throw new Error(
-        `[prepare-computer-use-runtime] extracted runtime is missing ${asset.pythonPath}`,
-      )
-    }
-    if (!targetTriple.includes('windows')) await chmod(pythonPath, 0o755).catch(() => {})
-
-    const pointer: ActiveRuntimePointer = {
-      runtimeVersion: manifest.runtimeVersion,
-      platformKey,
-      pythonPath: asset.pythonPath,
-      sha256: asset.sha256,
-      installedAt: new Date().toISOString(),
-    }
-    await writeFile(
-      path.join(managedRoot, 'active.json'),
-      `${JSON.stringify(pointer, null, 2)}\n`,
-      'utf8',
-    )
     await writeFile(
       path.join(temporaryDir, 'manifest.json'),
       `${JSON.stringify(
         {
           name: 'computer-use-runtime',
+          format: 'archive-v1',
           version: manifest.runtimeVersion,
           source: GITHUB_RELEASE_ROOT,
           targetTriple,
           platformKey,
           asset: asset.filename,
           sha256: asset.sha256,
+          size: asset.size,
+          pythonPath: asset.pythonPath,
           available: true,
         },
         null,
@@ -283,73 +253,38 @@ async function downloadWithCurl(url: string): Promise<Buffer> {
   return Buffer.from(body)
 }
 
-async function extractTarGz(archivePath: string, destination: string): Promise<void> {
-  const listing = await run(['tar', '-tzf', archivePath])
-  if (!safeArchiveEntries(listing)) {
-    throw new Error('[prepare-computer-use-runtime] archive contains unsafe paths')
-  }
-  await run(['tar', '-xzf', archivePath, '-C', destination])
-}
-
-async function run(command: string[]): Promise<string> {
-  const process = Bun.spawn(command, { stdout: 'pipe', stderr: 'pipe' })
-  const stdoutPromise = new Response(process.stdout).text()
-  const stderrPromise = new Response(process.stderr).text()
-  const exitCode = await process.exited
-  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
-  if (exitCode !== 0) {
-    throw new Error(`${command.join(' ')} failed with exit ${exitCode}: ${stderr || stdout}`)
-  }
-  return stdout
-}
-
-function safeArchiveEntries(listing: string): boolean {
-  return listing
-    .split(/\r?\n/)
-    .map(value => value.trim())
-    .filter(Boolean)
-    .every(entry => {
-      const normalized = entry.replace(/\\/g, '/')
-      return (
-        !normalized.startsWith('/') &&
-        !/^[a-zA-Z]:\//.test(normalized) &&
-        !normalized.split('/').includes('..')
-      )
-    })
-}
-
 function hasReusableRuntime(version: string, platformKey: string, asset: RuntimeAsset): boolean {
   const manifestPath = path.join(resourceDir, 'manifest.json')
-  const activePointerPath = path.join(resourceDir, 'managed', 'active.json')
-  if (!existsSync(manifestPath) || !existsSync(activePointerPath)) return false
+  const archivePath = path.join(resourceDir, asset.filename)
+  if (!existsSync(manifestPath) || !existsSync(archivePath)) return false
 
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
       name?: string
+      format?: string
       version?: string
+      targetTriple?: string
       platformKey?: string
+      asset?: string
       sha256?: string
+      size?: number
+      pythonPath?: string
       available?: boolean
     }
-    const pointer = JSON.parse(readFileSync(activePointerPath, 'utf8')) as ActiveRuntimePointer
-    const pythonPath = path.join(
-      resourceDir,
-      'managed',
-      pointer.runtimeVersion,
-      pointer.platformKey,
-      ...pointer.pythonPath.split(/[\\/]+/),
-    )
+    const archiveStat = statSync(archivePath)
     return (
       manifest.name === 'computer-use-runtime' &&
+      manifest.format === 'archive-v1' &&
       manifest.available === true &&
       manifest.version === version &&
+      manifest.targetTriple === targetTriple &&
       manifest.platformKey === platformKey &&
+      manifest.asset === asset.filename &&
       manifest.sha256 === asset.sha256 &&
-      pointer.runtimeVersion === version &&
-      pointer.platformKey === platformKey &&
-      pointer.sha256 === asset.sha256 &&
-      pointer.pythonPath === asset.pythonPath &&
-      existsSync(pythonPath)
+      manifest.size === asset.size &&
+      manifest.pythonPath === asset.pythonPath &&
+      archiveStat.isFile() &&
+      archiveStat.size === asset.size
     )
   } catch {
     return false

@@ -163,6 +163,108 @@ describe('ComputerUseRuntimeManager', () => {
     expect(fetchCalls).toBe(0)
   })
 
+  test('installs an archived bundled runtime without network access', async () => {
+    const runtimeRoot = await makeRoot()
+    const bundledRoot = await makeRoot()
+    const archive = new TextEncoder().encode('bundled-archive-runtime')
+    const manifest = manifestFor(archive)
+    const asset = manifest.assets['win32-x64']!
+    const archivePath = path.join(bundledRoot, asset.filename)
+    await writeFile(archivePath, archive)
+    await writeFile(
+      path.join(bundledRoot, 'manifest.json'),
+      `${JSON.stringify(
+        {
+          name: 'computer-use-runtime',
+          format: 'archive-v1',
+          version: manifest.runtimeVersion,
+          platformKey: 'win32-x64',
+          asset: asset.filename,
+          sha256: asset.sha256,
+          size: asset.size,
+          pythonPath: asset.pythonPath,
+          available: true,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    let fetchCalls = 0
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot,
+      bundledRuntimeRoot: bundledRoot,
+      platform: 'win32',
+      arch: 'x64',
+      fetchImpl: (async () => {
+        fetchCalls += 1
+        throw new Error('network should not be used for bundled runtime')
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    await expect(manager.ensureReady()).resolves.toBe(
+      path.join(runtimeRoot, 'managed', 'test-v1', 'win32-x64', 'python', 'python.exe'),
+    )
+    expect(manager.snapshot()).toMatchObject({
+      phase: 'ready',
+      ready: true,
+      source: 'bundled',
+      version: 'test-v1',
+    })
+    expect(fetchCalls).toBe(0)
+    await expect(readFile(archivePath)).resolves.toEqual(archive)
+    await expect(
+      readFile(path.join(runtimeRoot, 'managed', 'active.json'), 'utf8'),
+    ).resolves.toContain('"runtimeVersion": "test-v1"')
+  })
+
+  test('rejects a corrupted archived bundled runtime without deleting it', async () => {
+    const runtimeRoot = await makeRoot()
+    const bundledRoot = await makeRoot()
+    const expected = new TextEncoder().encode('expected-bundled-runtime')
+    const corrupted = new TextEncoder().encode('corrupted-bundled-runtime')
+    const manifest = manifestFor(expected)
+    const asset = manifest.assets['win32-x64']!
+    const archivePath = path.join(bundledRoot, asset.filename)
+    await writeFile(archivePath, corrupted)
+    await writeFile(
+      path.join(bundledRoot, 'manifest.json'),
+      `${JSON.stringify(
+        {
+          name: 'computer-use-runtime',
+          format: 'archive-v1',
+          version: manifest.runtimeVersion,
+          platformKey: 'win32-x64',
+          asset: asset.filename,
+          sha256: asset.sha256,
+          size: corrupted.byteLength,
+          pythonPath: asset.pythonPath,
+          available: true,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot,
+      bundledRuntimeRoot: bundledRoot,
+      platform: 'win32',
+      arch: 'x64',
+      fetchImpl: (async () => {
+        throw new Error('network should not be used for a bundled runtime')
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    await expect(manager.ensureReady()).rejects.toThrow('运行组件校验失败')
+    await expect(readFile(archivePath)).resolves.toEqual(corrupted)
+    expect(manager.snapshot()).toMatchObject({ phase: 'error', ready: false })
+  })
+
   test('prefers an installed managed runtime over the bundled runtime', async () => {
     const runtimeRoot = await makeRoot()
     const bundledRoot = await makeRoot()

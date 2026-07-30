@@ -37,4 +37,26 @@ describe('Computer Use runtime workflow', () => {
       buildJob?.steps?.find(step => step.name === 'Build Tauri app with Apple notarization'),
     ).toBeDefined()
   })
+
+  test('publishes the runtime as a verified opaque archive', async () => {
+    const workflow = parse(await readFile(releaseWorkflowPath, 'utf8')) as {
+      jobs?: {
+        build?: {
+          steps?: Array<{ name?: string; run?: string }>
+        }
+      }
+    }
+    const validation = workflow.jobs?.build?.steps?.find(
+      step => step.name === 'Validate packaged runtime resources',
+    )?.run ?? ''
+
+    expect(validation).toContain("computerUseRuntimeManifest.format !== 'archive-v1'")
+    expect(validation).toContain('Packaged Computer Use runtime archive checksum is invalid')
+    expect(validation).toContain(
+      'Packaged Computer Use runtime must remain archived until first use',
+    )
+    expect(validation).not.toContain(
+      "path.join(process.env.COMPUTER_USE_RUNTIME_RESOURCE_DIR, 'managed', 'active.json')",
+    )
+  })
 })

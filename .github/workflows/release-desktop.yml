@@ -548,8 +548,8 @@ jobs:
             find "$COMPUTER_USE_RESOURCE_DIR" -maxdepth 6 -type f | sort
             exit 1
           fi
-          if [ ! -s "$COMPUTER_USE_RUNTIME_RESOURCE_DIR/manifest.json" ] || [ ! -s "$COMPUTER_USE_RUNTIME_RESOURCE_DIR/managed/active.json" ]; then
-            echo "::error::Packaged Computer Use runtime is missing manifest or active pointer"
+          if [ ! -s "$COMPUTER_USE_RUNTIME_RESOURCE_DIR/manifest.json" ]; then
+            echo "::error::Packaged Computer Use runtime manifest is missing or empty"
             find "$COMPUTER_USE_RUNTIME_RESOURCE_DIR" -maxdepth 8 -type f | sort
             exit 1
           fi
@@ -650,29 +650,56 @@ jobs:
               'utf8',
             ),
           )
+          const expectedRuntimePlatform = {
+            'aarch64-apple-darwin': 'darwin-arm64',
+            'x86_64-apple-darwin': 'darwin-x64',
+            'x86_64-pc-windows-msvc': 'win32-x64',
+            'x86_64-unknown-linux-gnu': 'linux-x64',
+          }[process.env.TARGET_TRIPLE]
           if (
             computerUseRuntimeManifest.name !== 'computer-use-runtime' ||
+            computerUseRuntimeManifest.format !== 'archive-v1' ||
             computerUseRuntimeManifest.targetTriple !== process.env.TARGET_TRIPLE ||
+            computerUseRuntimeManifest.platformKey !== expectedRuntimePlatform ||
             computerUseRuntimeManifest.available !== true ||
-            !/^[0-9a-f]{64}$/.test(computerUseRuntimeManifest.sha256 ?? '')
+            !/^[a-zA-Z0-9._-]+$/.test(computerUseRuntimeManifest.version ?? '') ||
+            !/^[0-9a-f]{64}$/.test(computerUseRuntimeManifest.sha256 ?? '') ||
+            !Number.isSafeInteger(computerUseRuntimeManifest.size) ||
+            computerUseRuntimeManifest.size <= 0 ||
+            typeof computerUseRuntimeManifest.asset !== 'string' ||
+            path.basename(computerUseRuntimeManifest.asset) !== computerUseRuntimeManifest.asset ||
+            typeof computerUseRuntimeManifest.pythonPath !== 'string' ||
+            path.isAbsolute(computerUseRuntimeManifest.pythonPath) ||
+            computerUseRuntimeManifest.pythonPath.split(/[\\/]+/).includes('..')
           ) {
             throw new Error('Packaged Computer Use runtime manifest is invalid')
           }
-          const computerUseRuntimePointer = JSON.parse(
-            fs.readFileSync(
-              path.join(process.env.COMPUTER_USE_RUNTIME_RESOURCE_DIR, 'managed', 'active.json'),
-              'utf8',
-            ),
-          )
-          const pythonPath = path.join(
+          const computerUseRuntimeArchive = path.join(
             process.env.COMPUTER_USE_RUNTIME_RESOURCE_DIR,
-            'managed',
-            computerUseRuntimePointer.runtimeVersion,
-            computerUseRuntimePointer.platformKey,
-            ...String(computerUseRuntimePointer.pythonPath).split(/[\\/]+/),
+            computerUseRuntimeManifest.asset,
           )
-          if (!fs.existsSync(pythonPath) || !fs.statSync(pythonPath).isFile()) {
-            throw new Error('Packaged Computer Use runtime Python is missing')
+          if (
+            !fs.existsSync(computerUseRuntimeArchive) ||
+            !fs.statSync(computerUseRuntimeArchive).isFile() ||
+            fs.statSync(computerUseRuntimeArchive).size !== computerUseRuntimeManifest.size
+          ) {
+            throw new Error('Packaged Computer Use runtime archive is missing or incomplete')
+          }
+          const computerUseRuntimeSha256 = crypto
+            .createHash('sha256')
+            .update(fs.readFileSync(computerUseRuntimeArchive))
+            .digest('hex')
+          if (computerUseRuntimeSha256 !== computerUseRuntimeManifest.sha256) {
+            throw new Error('Packaged Computer Use runtime archive checksum is invalid')
+          }
+          if (
+            fs.existsSync(
+              path.join(process.env.COMPUTER_USE_RUNTIME_RESOURCE_DIR, 'managed'),
+            )
+          ) {
+            throw new Error(
+              'Packaged Computer Use runtime must remain archived until first use',
+            )
           }
           NODE
 
