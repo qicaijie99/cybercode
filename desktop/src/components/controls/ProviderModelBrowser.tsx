@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, Search, Server } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { ProviderLogo } from '../providers/ProviderLogo'
 
 export type ProviderModelBrowserModel = {
@@ -171,9 +171,15 @@ export function ProviderModelBrowser({
                                 : 'hover:bg-[var(--color-surface-hover)] disabled:opacity-55 disabled:hover:bg-transparent'
                             }`}
                           >
-                            <span className="flex size-[26px] shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
-                              <Server size={15} strokeWidth={1.8} />
-                            </span>
+                            <ProviderLogo
+                              name={group.name}
+                              providerId={group.logoId}
+                              baseUrl={group.baseUrl}
+                              modelId={model.id}
+                              identityPriority="model"
+                              size="xs"
+                              decorative
+                            />
                             <span className="min-w-0 flex-1">
                               <span className={`block truncate text-[12px] ${
                                 selected

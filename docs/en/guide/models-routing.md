@@ -1,17 +1,18 @@
 # Models, Sync, and Smart Routing
 
-CyberCode organizes model access into clear provider groups while sharing the same local configuration between the desktop app and terminal TUI. Official API-key providers and major aggregators appear first, followed by OAuth, web sessions, image/video/audio providers, and local or custom endpoints.
+CyberCode organizes model access into clear provider groups while sharing the same local configuration between the desktop app and terminal TUI. Custom providers appear in their own group first, followed by official API-key providers, major aggregators, OAuth, web sessions, image/video/audio providers, and local models. Custom compatible endpoints are no longer mixed with LM Studio or Ollama.
 
 ## Choose a connection type
 
 | Type | Best for | Notes |
 | --- | --- | --- |
+| Custom provider | An existing compatible endpoint or self-hosted gateway | Configure the base URL, protocol, custom model IDs, and an optional API key. |
 | Official API key | Stable production access and explicit billing | Keys stay on the local machine. Distinct products such as Kimi Code and Kimi remain separate entries. |
 | Aggregator | Accessing many models with one account | OpenAI- and Anthropic-compatible endpoints are supported. |
 | OAuth | Providers with a browser authorization flow | CyberCode stores the authorization locally and refreshes tokens when the provider supports it. |
 | Web session | Reusing an existing website login | Uses cookies, JWTs, or web tokens and carries more stability, rate-limit, and account-policy risk than an official API. |
 | Image/video/audio | Managing media catalogs and credentials | China-focused providers are shown first. Connection tests do not submit paid generation jobs, and media models do not become chat defaults. |
-| Local/custom | LM Studio, Ollama, or a self-hosted compatible service | Configure the base URL, protocol, and custom model IDs. |
+| Local model | Local inference through LM Studio, Ollama, or similar software | Connects directly to the local service; CyberCode does not replace the inference application. |
 
 Open **Settings → Models & Routing → Model Providers** in the desktop app. Provider names follow the selected CyberCode UI language.
 
@@ -24,6 +25,27 @@ The provider still controls authorization scopes and account terms. Disconnectin
 ## Web-session providers
 
 Each web-session card tells you which cookie or web token is required. CyberCode normalizes cookie input, adds browser-compatible request headers, and keeps session continuity when an upstream response supplies a rotated token. It does not read browser data, solve CAPTCHAs, bypass account restrictions, or bypass region restrictions.
+
+### Fastest setup
+
+1. Open the provider card, choose **Open website**, sign in to your own account, and confirm that the website can send a message.
+2. Press `F12` to open browser developer tools. The dialog identifies the exact field and whether it is under **Application / Storage → Cookies**, **Local Storage**, or **Network**.
+3. Copy the field value. For cookies, copy `name=value` pairs separated by semicolons, or copy the full value from **Network → Request Headers → Cookie**.
+4. Return to CyberCode, choose **Import from clipboard**, then **Save session** and **Test**. Set it as the default only after the test succeeds.
+
+The dialog always shows the exact field and paste format for the selected provider. Common examples:
+
+| Provider | Browser location | Copy |
+| --- | --- | --- |
+| Kimi Web | Application / Storage → Cookies | `kimi-auth`, or the full Cookie value |
+| Claude Web | Application / Storage → Cookies | `sessionKey`, or the full Cookie value |
+| ChatGPT Web | Application / Storage → Cookies | `__Secure-next-auth.session-token`, or the full Cookie value |
+| Gemini Web | Application / Storage → Cookies | `__Secure-1PSID` and `__Secure-1PSIDTS` |
+| DeepSeek Web | Application / Storage → Local Storage | The value of `userToken` |
+| Microsoft Copilot Web | A chat request in Network | `access_token` |
+| Microsoft 365 Copilot | The WebSocket request URL in Network | `access_token` and `chathubPath` |
+
+Browsers protect HttpOnly cookies, so a desktop app cannot read them silently without broader browser access. CyberCode uses an explicit copy followed by one-click clipboard import instead: it does not scan browser profiles or retain background clipboard permission.
 
 ::: warning Check the provider terms
 Website interfaces can change without notice and may trigger rate limits or account controls. Use only accounts and credentials you are authorized to use. Prefer an official API for production reliability.

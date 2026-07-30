@@ -236,8 +236,11 @@ export function IconRail({ __testTopRailHeight }: IconRailProps = {}) {
           onClick={() => void installUpdate()}
         />
         <RailButton
-          active={isPanelActive('agentMigration')}
-          label={t('agentMigration.title')}
+          active={settingsOpen && (
+            settingsPanelView === 'agentMigration'
+            || settingsPanelView === 'usbMigration'
+          )}
+          label={t('dataMigration.title')}
           onClick={() => handlePanelView('agentMigration')}
           icon={ArrowRightLeft}
         />

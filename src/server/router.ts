@@ -28,6 +28,7 @@ import { handleRoutingApi } from './api/routing.js'
 import { handleWebSessionProvidersApi } from './api/web-session-providers.js'
 import { handleMediaProvidersApi } from './api/media-providers.js'
 import { handleGatewayApi } from './api/gateway.js'
+import { handleUsbMigrationApi } from './api/usb-migration.js'
 
 export async function handleApiRequest(req: Request, url: URL): Promise<Response> {
   const path = url.pathname
@@ -107,6 +108,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
     case 'agent-migration':
       return handleAgentMigrationApi(req, url, segments)
+
+    case 'usb-migration':
+      return handleUsbMigrationApi(req, url, segments)
 
     case 'knowledge':
       return handleKnowledgeApi(req, url, segments)

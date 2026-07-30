@@ -32,6 +32,23 @@ if (computerUseHelperPrepareExit !== 0) {
   )
 }
 
+console.log('[build-sidecars] preparing embedded Computer Use runtime...')
+const computerUseRuntimePrepareProc = Bun.spawn(
+  ['bun', 'run', path.join(desktopRoot, 'scripts/prepare-computer-use-runtime.ts')],
+  {
+    cwd: repoRoot,
+    env: { ...process.env, TAURI_ENV_TARGET_TRIPLE: targetTriple },
+    stdout: 'inherit',
+    stderr: 'inherit',
+  },
+)
+const computerUseRuntimePrepareExit = await computerUseRuntimePrepareProc.exited
+if (computerUseRuntimePrepareExit !== 0) {
+  throw new Error(
+    `[build-sidecars] prepare-computer-use-runtime failed (exit ${computerUseRuntimePrepareExit})`,
+  )
+}
+
 console.log('[build-sidecars] preparing embedded RTK runtime...')
 const rtkPrepareProc = Bun.spawn(
   ['bun', 'run', path.join(desktopRoot, 'scripts/prepare-rtk.ts')],

@@ -134,7 +134,7 @@ export function MediaProviderCatalog({
         data-provider-catalog="media"
         data-provider-catalog-kind={activeKind}
         data-provider-catalog-layout="comfortable"
-        className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+        className="provider-catalog-grid grid gap-[9px]"
       >
         {providers.map((provider) => {
           const key = getMediaProviderKey(provider.kind, provider.id)

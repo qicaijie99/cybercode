@@ -162,7 +162,7 @@ CyberCode 会从长期协作中提炼稳定的沟通偏好、项目知识和跨�
 
 ### 一个面板串起模型接入、同步、路由和 Agent 节点
 
-大模型与路由配置现在按真实使用顺序组织：官方 API Key 和大型聚合站排在前面，之后是 OAuth、网页会话、图像/视频/音频以及本地或自定义提供商。卡片名称跟随界面语言显示；同一套已保存 Key 可以聚合管理，但 Kimi Code 与 Kimi 这类不同产品仍保留独立入口。
+大模型与路由配置现在把“自定义提供商”作为独立入口放在最前面，方便直接接入任意兼容端点；随后依次是官方 API Key、大型聚合站、OAuth、网页会话、图像/视频/音频与本地模型。自定义端点和本地推理服务不再混在同一组。卡片名称跟随界面语言显示；同一套已保存 Key 可以聚合管理，但 Kimi Code 与 Kimi 这类不同产品仍保留独立入口。
 
 支持兼容 `/models` 接口的提供商可以一键导入最新模型，也可以开启约每 24 小时运行一次的自动同步；同步会保留用户手动填写的模型。智能路由会把多个可用目标组成带健康检查、失败冷却和自动切换的模型链。Agent 节点则把这些模型和路由安全地暴露为 OpenAI Chat Completions 与 Anthropic Messages 接口，外部 Agent 只拿独立的 `cc_...` 节点密钥，不会接触原始供应商 Key。
 
@@ -182,7 +182,7 @@ Telegram 和飞书适配器可以在用户离开电脑后继续传递会话与�
 
 ### 保持可检查、可编辑和可迁移
 
-CyberCode 将客户端、服务端、桌面壳、适配器、记忆、搜索、供应商桥接和优化逻辑全部开放。Agent 数据迁移工具会在导入前检查其他本地 Agent 中兼容的 Skills、记忆、规则与项目资料，降低更换工具时丢失长期积累的成本。
+CyberCode 将客户端、服务端、桌面壳、适配器、记忆、搜索、供应商桥接和优化逻辑全部开放。统一的数据迁移页可以检查其他本地 Agent 中兼容的 Skills、记忆、规则与项目资料，也能把配置、凭据、项目和四个平台的便携应用制作到 U 盘。便携项目路径会在不同系统和盘符之间自动映射，降低换工具、换电脑或临时离线工作时丢失积累的成本。[查看数据迁移与 U 盘教程](https://wk42worldworld.github.io/cybercode/guide/data-migration)。
 
 ## 能力全景
 
@@ -195,7 +195,7 @@ CyberCode 将客户端、服务端、桌面壳、适配器、记忆、搜索、�
 | 联网与工具 | 与供应商无关的 WebSearch 兜底、WebFetch、MCP、插件、Computer Use 与环境感知工具可用性 |
 | 使用界面 | 跨平台桌面端、终端 TUI、`--print` 无头模式、Telegram 与飞书 |
 | 自动化 | 一次性和周期性定时任务、远程授权、后台 Agent 与机器可读 JSON 输出 |
-| 可迁移性 | Agent 数据迁移、可编辑本地记忆、开放适配器与开源本地服务端 |
+| 可迁移性 | Agent 数据迁移、四平台 U 盘便携迁移、跨系统项目路径映射、可编辑本地记忆与开放适配器 |
 
 ## 快速对比
 
@@ -248,6 +248,7 @@ CyberCode 桌面端把核心编码工作流放在一个界面里：选择项目�
 - **文件上传更灵活**：遇到模型不直接支持的音频、二进制或其他文件类型时，会按文件路径传递，避免请求被卡住。
 - **命令执行状态更清晰**：正在运行的命令块会在父级命令行和子级工具行同时展示 GPT 风格的文字高光横扫效果。
 - **模型接入与路由闭环**：官方 Key、聚合站、OAuth、网页会话和媒体目录统一管理；支持模型同步、健康感知路由，以及可供其他 Agent 使用的 OpenAI/Anthropic 双协议节点。
+- **统一数据迁移与 U 盘便携模式**：在同一页面迁移 Agent 的 Skills、记忆和规则，或制作包含配置、项目与四平台应用的便携工作盘；Windows、macOS 与 Linux 之间会自动映射已迁移项目路径。
 
 ---
 
@@ -267,6 +268,7 @@ CyberCode 桌面端把核心编码工作流放在一个界面里：选择项目�
 - **Skills 系统**（可扩展能力插件、自定义工作流）— [使用指南](docs/skills/01-usage-guide.md) | [实现原理](docs/skills/02-implementation.md)
 - **Channel 系统**（通过 Telegram/飞书/Discord 等 IM 远程控制 Agent）— [架构解析](docs/channel/01-channel-system.md)
 - **Computer Use 桌面控制** — [功能指南](docs/features/computer-use.md) | [架构解析](docs/features/computer-use-architecture.md)
+- **数据迁移与 U 盘便携模式** — [使用教程](docs/guide/data-migration.md)
 - **桌面端**（Tauri 2 + React 图形化客户端，多标签多会话）— [文档](docs/desktop/)
 - 降级 Recovery CLI 模式（`CYBERCODE_FORCE_RECOVERY_CLI=1 ./bin/cybercode`）
 
@@ -538,6 +540,7 @@ cybercode -p "当前目录有哪些文件？"
 | 使用多个 Agent 协作 | [多 Agent 系统](docs/agent/01-usage-guide.md) |
 | 接入 Telegram 或飞书 | [Channel 系统](docs/channel/01-channel-system.md) |
 | 控制桌面应用 | [Computer Use](docs/features/computer-use.md) |
+| 迁移 Agent 数据或制作便携工作盘 | [数据迁移与 U 盘便携模式](docs/guide/data-migration.md) |
 
 完成结果：你可以从第一个可用会话，自然进入自己真正需要的功能模块。
 
@@ -869,6 +872,7 @@ bun run feishu
 | [环境变量](docs/guide/env-vars.md) | 完整环境变量参考和配置方式 |
 | [第三方模型](docs/guide/third-party-models.md) | 接入 OpenAI / DeepSeek / Ollama 等非 Anthropic 模型 |
 | [知识空间与代码图谱](docs/guide/code-graph.md) | 自动图谱上下文、可视化与本地文件 / 文件夹知识来源 |
+| [数据迁移与 U 盘便携模式](docs/guide/data-migration.md) | 迁移 Agent 的 Skills / 记忆 / 规则，或制作可跨系统启动的便携工作盘 |
 | [记忆系统](docs/memory/01-usage-guide.md) | 跨会话持久化记忆的使用与实现 |
 | [多 Agent 系统](docs/agent/01-usage-guide.md) | 多代理编排、并行任务执行与 Teams 协作 |
 | [Skills 系统](docs/skills/01-usage-guide.md) | 可扩展能力插件、自定义工作流与条件激活 |

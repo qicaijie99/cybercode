@@ -70,6 +70,7 @@ export type SettingsPanelView =
   | 'codeGraph'
   | 'git'
   | 'agentMigration'
+  | 'usbMigration'
 
 type ActiveView = 'code' | 'scheduled' | 'terminal' | 'history' | 'settings'
 
@@ -154,6 +155,7 @@ export const useUIStore = create<UIStore>((set) => ({
       && view !== 'codeGraph'
       && view !== 'git'
       && view !== 'agentMigration'
+      && view !== 'usbMigration'
         ? view
         : null,
     railSettingsView: null,

@@ -9,6 +9,10 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as crypto from 'crypto'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import {
+  resolvePortableProjectPath,
+  toPortableProjectReference,
+} from '../../utils/portablePaths.js'
 import { ApiError } from '../middleware/errorHandler.js'
 
 export type TaskNotificationConfig = {
@@ -127,7 +131,14 @@ export class CronService {
       if (!Array.isArray(parsed.tasks)) {
         return { tasks: [] }
       }
-      return parsed
+      return {
+        tasks: parsed.tasks.map(task => ({
+          ...task,
+          folderPath: task.folderPath
+            ? resolvePortableProjectPath(task.folderPath)
+            : undefined,
+        })),
+      }
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return { tasks: [] }
@@ -142,7 +153,15 @@ export class CronService {
   private async writeTasksFile(data: TasksFile): Promise<void> {
     const filePath = this.getTasksFilePath()
     const dir = path.dirname(filePath)
-    const contents = JSON.stringify(data, null, 2) + '\n'
+    const portableData: TasksFile = {
+      tasks: data.tasks.map(task => ({
+        ...task,
+        folderPath: task.folderPath
+          ? toPortableProjectReference(task.folderPath)
+          : undefined,
+      })),
+    }
+    const contents = JSON.stringify(portableData, null, 2) + '\n'
     let lastError: Error | undefined
 
     for (let attempt = 0; attempt < TASKS_FILE_WRITE_ATTEMPTS; attempt++) {

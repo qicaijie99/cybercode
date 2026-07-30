@@ -26,7 +26,7 @@ export type ComputerUseRuntimePhase =
   | 'paused'
   | 'error'
 
-export type ComputerUseRuntimeSource = 'managed' | 'legacy' | null
+export type ComputerUseRuntimeSource = 'bundled' | 'managed' | 'legacy' | null
 
 export type ComputerUseRuntimeStatus = {
   phase: ComputerUseRuntimePhase
@@ -64,6 +64,7 @@ type ActiveRuntimePointer = {
 
 type RuntimeManagerOptions = {
   runtimeRoot?: string
+  bundledRuntimeRoot?: string | null
   platform?: NodeJS.Platform
   arch?: string
   manifestUrls?: string[]
@@ -255,6 +256,9 @@ export class ComputerUseRuntimeManager {
   private readonly managedRoot: string
   private readonly downloadsRoot: string
   private readonly activePointerPath: string
+  private readonly bundledRuntimeRoot: string | null
+  private readonly bundledManagedRoot: string | null
+  private readonly bundledActivePointerPath: string | null
   private readonly platform: NodeJS.Platform
   private readonly arch: string
   private readonly platformKey: string | null
@@ -272,6 +276,17 @@ export class ComputerUseRuntimeManager {
     this.managedRoot = path.join(this.runtimeRoot, 'managed')
     this.downloadsRoot = path.join(this.runtimeRoot, 'downloads')
     this.activePointerPath = path.join(this.managedRoot, 'active.json')
+    const bundledRuntimeRoot =
+      options.bundledRuntimeRoot === undefined
+        ? process.env.CYBER_COMPUTER_USE_RUNTIME_ROOT
+        : options.bundledRuntimeRoot
+    this.bundledRuntimeRoot = bundledRuntimeRoot || null
+    this.bundledManagedRoot = this.bundledRuntimeRoot
+      ? path.join(this.bundledRuntimeRoot, 'managed')
+      : null
+    this.bundledActivePointerPath = this.bundledManagedRoot
+      ? path.join(this.bundledManagedRoot, 'active.json')
+      : null
     this.platform = options.platform ?? process.platform
     this.arch = options.arch ?? process.arch
     this.platformKey = runtimePlatformKey(this.platform, this.arch)
@@ -301,11 +316,13 @@ export class ComputerUseRuntimeManager {
     this.status = { ...this.status, ...patch }
   }
 
-  async refreshFromDisk(): Promise<ComputerUseRuntimeStatus> {
-    if (isBusyPhase(this.status.phase)) return this.snapshot()
-
+  private async resolveActivePointer(
+    activePointerPath: string,
+    managedRoot: string,
+    source: Exclude<ComputerUseRuntimeSource, 'legacy' | null>,
+  ): Promise<string | null> {
     try {
-      const pointer = JSON.parse(await readFile(this.activePointerPath, 'utf8')) as ActiveRuntimePointer
+      const pointer = JSON.parse(await readFile(activePointerPath, 'utf8')) as ActiveRuntimePointer
       if (
         pointer.platformKey === this.platformKey &&
         /^[a-zA-Z0-9._-]+$/.test(pointer.runtimeVersion) &&
@@ -315,7 +332,7 @@ export class ComputerUseRuntimeManager {
         !pointer.pythonPath.split(/[\\/]+/).includes('..')
       ) {
         const pythonPath = path.join(
-          this.managedRoot,
+          managedRoot,
           pointer.runtimeVersion,
           pointer.platformKey,
           ...pointer.pythonPath.split(/[\\/]+/),
@@ -326,15 +343,34 @@ export class ComputerUseRuntimeManager {
             phase: 'ready',
             ready: true,
             version: pointer.runtimeVersion,
-            source: 'managed',
+            source,
             progressPercent: 100,
             error: null,
             canPause: false,
           })
-          return this.snapshot()
+          return pythonPath
         }
       }
     } catch {}
+    return null
+  }
+
+  async refreshFromDisk(): Promise<ComputerUseRuntimeStatus> {
+    if (isBusyPhase(this.status.phase)) return this.snapshot()
+
+    if (await this.resolveActivePointer(this.activePointerPath, this.managedRoot, 'managed')) {
+      return this.snapshot()
+    }
+
+    if (this.bundledActivePointerPath && this.bundledManagedRoot) {
+      if (await this.resolveActivePointer(
+        this.bundledActivePointerPath,
+        this.bundledManagedRoot,
+        'bundled',
+      )) {
+        return this.snapshot()
+      }
+    }
 
     this.activePythonPath = null
     if (this.status.phase !== 'paused' && this.status.phase !== 'error') {

@@ -155,7 +155,7 @@ function TokenUsageButton({
       title={detailsLabel}
       data-testid="token-usage-indicator"
       style={{ contain: 'layout paint' }}
-      className="group flex h-[34px] w-[200px] shrink-0 items-center justify-between gap-[3px] overflow-hidden whitespace-nowrap rounded-full border border-[var(--color-border-separator)] bg-[var(--color-surface-container-high)] px-[6px] py-0 text-[11px] font-semibold text-[var(--color-text-secondary)] transition-colors duration-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+      className="group flex h-[34px] w-[200px] shrink-0 items-center justify-between gap-[3px] overflow-hidden whitespace-nowrap rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-high)] px-[6px] py-0 text-[11px] font-semibold text-[var(--color-text-secondary)] transition-colors duration-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
     >
       <span data-testid="token-turn-summary" className="flex w-[58px] shrink-0 items-baseline gap-[3px] overflow-hidden">
         <span className="min-w-0 truncate text-[10px] text-[var(--color-text-tertiary)]">{translate('chat.tokenUsage.turn')}</span>

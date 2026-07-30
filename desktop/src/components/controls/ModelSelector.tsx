@@ -454,6 +454,9 @@ export function ModelSelector({
   const buttonProviderChoice = isRuntimeScoped
     ? activeRouteId ? null : selectedProviderChoice ?? defaultProviderChoice
     : defaultProviderChoice
+  const buttonModelId = isRuntimeScoped
+    ? activeRouteId ? undefined : selectedRuntimeModel?.id
+    : selectedModel?.id
   const selectedModelGroupId = selectedProviderChoice
     ? selectedProviderChoice.providerId ?? 'official'
     : null
@@ -539,7 +542,8 @@ export function ModelSelector({
             name={buttonProviderChoice.providerName}
             providerId={buttonProviderChoice.providerLogoId}
             baseUrl={buttonProviderChoice.providerBaseUrl}
-            modelId={buttonProviderChoice.providerModelHint}
+            modelId={buttonModelId ?? buttonProviderChoice.providerModelHint}
+            identityPriority="model"
             size={compact ? 'xs' : 'sm'}
             active={open}
             decorative

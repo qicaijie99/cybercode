@@ -86,6 +86,9 @@ class UsageAnalyticsTest(unittest.TestCase):
         self.assertEqual(result["trend"][-1]["new"], result["newToday"])
         self.assertEqual(result["trend"][-1]["cumulative"], result["totalUsers"])
         self.assertEqual(result["trend"][-2]["cumulative"], 1)
+        for row in result["trend"]:
+            self.assertLessEqual(row["new"], row["active"])
+            self.assertLessEqual(row["active"], row["cumulative"])
 
     def test_growth_periods_and_retention_use_mature_cohorts(self):
         now = datetime(2026, 7, 18, 8, 0, tzinfo=timezone.utc)
@@ -532,15 +535,26 @@ class UsageAnalyticsTest(unittest.TestCase):
         self.assertIn("name: '新增用户'", dashboard)
         self.assertIn("name: '累计用户'", dashboard)
         self.assertIn("position: 'left'", dashboard)
-        self.assertIn("position: 'right'", dashboard)
-        self.assertIn("name: compact ? '' : '活跃 / 新增'", dashboard)
-        self.assertIn("name: compact ? '' : '累计'", dashboard)
-        self.assertGreaterEqual(dashboard.count("yAxisIndex: 0"), 2)
-        self.assertIn("yAxisIndex: 1", dashboard)
+        self.assertNotIn("日活用户（左轴）", dashboard)
+        self.assertNotIn("新增用户（左轴）", dashboard)
+        self.assertNotIn("累计用户（右轴）", dashboard)
+        self.assertIn("function trendSeries(rows, field)", dashboard)
+        self.assertIn("function niceAxisMax(value)", dashboard)
+        self.assertIn("const activeSeries = trendSeries(rows, 'active')", dashboard)
+        self.assertIn("const newSeries = trendSeries(rows, 'new')", dashboard)
+        self.assertIn("const cumulativeSeries = trendSeries(rows, 'cumulative')", dashboard)
+        self.assertIn(
+            "const axisMax = niceAxisMax(Math.max(...cumulativeSeries, ...activeSeries, ...newSeries, 1))",
+            dashboard,
+        )
+        self.assertIn("max: axisMax", dashboard)
+        self.assertIn("name: compact ? '' : '用户数'", dashboard)
+        self.assertIn("tooltipPointValue(point)", dashboard)
+        self.assertGreaterEqual(dashboard.count("yAxisIndex: 0"), 3)
+        self.assertNotIn("yAxisIndex: 1", dashboard)
         self.assertGreaterEqual(dashboard.count("smooth: false"), 3)
         self.assertIn("validateSummary(await response.json())", dashboard)
-        self.assertIn("`${point.seriesName}（左轴）`", dashboard)
-        self.assertIn("累计用户（右轴）", dashboard)
+        self.assertIn("escapeHtml(point.seriesName)", dashboard)
         self.assertIn("setTrend(previousSummary.trend || [], false)", dashboard)
         self.assertIn(
             "setChinaGeoMap(previousSummary.chinaProvinces || [])",

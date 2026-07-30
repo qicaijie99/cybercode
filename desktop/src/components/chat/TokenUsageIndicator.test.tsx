@@ -108,6 +108,8 @@ describe('TokenUsageIndicator', () => {
     expect(screen.getByTestId('token-turn-summary').className).toContain('w-[58px]')
     expect(screen.getByTestId('token-session-summary').className).toContain('w-[58px]')
     expect(button.className).toContain('w-[200px]')
+    expect(button.className).toContain('rounded-[8px]')
+    expect(button.className).not.toContain('rounded-full')
     expect(button).toHaveStyle({ contain: 'layout paint' })
     expect(button).toHaveAccessibleName(/\u8f93\u5165\u603b\u8ba1 130/)
     expect(button).toHaveAccessibleName(/\u666e\u901a\u8f93\u5165 100/)

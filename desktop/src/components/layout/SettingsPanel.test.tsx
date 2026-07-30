@@ -53,6 +53,12 @@ vi.mock('../../pages/GitWorkspace', () => ({
   GitWorkspace: () => <div data-testid="git-workspace-panel" />,
 }))
 
+vi.mock('../../pages/DataMigration', () => ({
+  DataMigration: ({ initialTab = 'agent' }: { initialTab?: string }) => (
+    <div data-initial-tab={initialTab} data-testid="data-migration-panel" />
+  ),
+}))
+
 describe('SettingsPanel content routing', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'zh' })
@@ -184,6 +190,23 @@ describe('SettingsPanel content routing', () => {
     expect(screen.getByTestId('token-optimization-panel')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '关闭' }).closest('header')).toHaveClass('h-[52px]')
     expect(screen.getByTestId('token-optimization-panel').parentElement).toHaveClass('pt-[18px]')
+  })
+
+  it('routes both migration views into the unified migration page', () => {
+    useUIStore.setState({ settingsPanelView: 'agentMigration' })
+
+    const { rerender } = render(<SettingsPanel visible />)
+
+    expect(screen.getByTestId('settings-panel')).toHaveAttribute('aria-label', '数据迁移')
+    expect(screen.getByTestId('data-migration-panel')).toHaveAttribute('data-initial-tab', 'agent')
+
+    act(() => {
+      useUIStore.setState({ settingsPanelView: 'usbMigration' })
+    })
+    rerender(<SettingsPanel visible />)
+
+    expect(screen.getByTestId('settings-panel')).toHaveAttribute('aria-label', '数据迁移')
+    expect(screen.getByTestId('data-migration-panel')).toHaveAttribute('data-initial-tab', 'usb')
   })
 
   it('routes the Code Graph rail entry directly into graph view', () => {

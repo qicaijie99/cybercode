@@ -3,6 +3,10 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import {
+  resolvePortableProjectPath,
+  toPortableProjectReference,
+} from '../../utils/portablePaths.js'
+import {
   getCodeGraphVisualization,
   type CodeGraphVisualization as CodeGraphVisualizationData,
 } from './codeGraphAnalysis.js'
@@ -811,7 +815,7 @@ export class CodeGraphService {
         version: CONFIG_VERSION,
         enabled,
         projects: Object.fromEntries(Object.entries(rawProjects).map(([projectPath, project]) => [
-          projectPath,
+          resolvePortableProjectPath(projectPath),
           { updatedAt: Number(project?.updatedAt || 0) },
         ])),
       }
@@ -824,7 +828,16 @@ export class CodeGraphService {
     const configPath = this.getConfigPath()
     fs.mkdirSync(path.dirname(configPath), { recursive: true })
     const temporaryPath = `${configPath}.${process.pid}.tmp`
-    fs.writeFileSync(temporaryPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 })
+    const portableConfig: StoredConfig = {
+      ...config,
+      projects: Object.fromEntries(
+        Object.entries(config.projects).map(([projectPath, project]) => [
+          toPortableProjectReference(projectPath),
+          project,
+        ]),
+      ),
+    }
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(portableConfig, null, 2)}\n`, { mode: 0o600 })
     fs.renameSync(temporaryPath, configPath)
   }
 

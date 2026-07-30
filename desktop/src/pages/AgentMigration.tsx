@@ -50,7 +50,7 @@ const AGENT_VISUALS: Record<ExternalAgentId, { src: string; imageClass?: string 
   pi: { src: '/agent-icons/pi.svg' },
 }
 
-export function AgentMigration() {
+export function AgentMigration({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useTranslation()
   const addToast = useUIStore(state => state.addToast)
   const [agents, setAgents] = useState<DetectedExternalAgent[]>([])
@@ -252,11 +252,8 @@ export function AgentMigration() {
     }
   }
 
-  return (
-    <SettingsPage
-      title={t('agentMigration.title')}
-      description={t('agentMigration.description')}
-    >
+  const content = (
+    <>
       <section className="overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
         <MigrationRoute
           agents={agents}
@@ -414,6 +411,17 @@ export function AgentMigration() {
           </div>
         )}
       </Modal>
+    </>
+  )
+
+  if (embedded) return content
+
+  return (
+    <SettingsPage
+      title={t('agentMigration.title')}
+      description={t('agentMigration.description')}
+    >
+      {content}
     </SettingsPage>
   )
 }

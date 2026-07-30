@@ -1276,6 +1276,30 @@
         return numeric
       }
 
+      function trendCount(value) {
+        const numeric = Number(value)
+        if (!Number.isFinite(numeric) || numeric <= 0) return 0
+        return Math.round(numeric)
+      }
+
+      function trendSeries(rows, field) {
+        return rows.map(item => trendCount(item?.[field]))
+      }
+
+      function niceAxisMax(value) {
+        const numeric = Math.max(1, trendCount(value))
+        const exponent = Math.floor(Math.log10(numeric))
+        const base = 10 ** exponent
+        const normalized = numeric / base
+        const nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10
+        return nice * base
+      }
+
+      function tooltipPointValue(point) {
+        const rawValue = Array.isArray(point?.value) ? point.value[1] : point?.value
+        return trendCount(rawValue)
+      }
+
       function validateSummary(data) {
         if (!data || typeof data !== 'object' || !Array.isArray(data.trend)) {
           throw new Error('Invalid summary')
@@ -1919,6 +1943,10 @@
           trendChart = window.echarts.init(document.getElementById('chart'), null, { renderer: 'canvas' })
         }
         const compact = document.getElementById('chart').clientWidth < 620
+        const activeSeries = trendSeries(rows, 'active')
+        const newSeries = trendSeries(rows, 'new')
+        const cumulativeSeries = trendSeries(rows, 'cumulative')
+        const axisMax = niceAxisMax(Math.max(...cumulativeSeries, ...activeSeries, ...newSeries, 1))
         trendChart.setOption({
           animationDuration: animate && !reducedMotion ? 520 : 0,
           animationDurationUpdate: animate && !reducedMotion ? 420 : 0,
@@ -1927,7 +1955,7 @@
           textStyle: { fontFamily: 'Satoshi, Microsoft YaHei, sans-serif' },
           grid: {
             left: compact ? 38 : 48,
-            right: compact ? 40 : 52,
+            right: compact ? 16 : 24,
             top: 24,
             bottom: compact ? 34 : 38,
           },
@@ -1944,12 +1972,9 @@
               const date = entries[0]?.axisValue || ''
               return [
                 `<strong>${escapeHtml(date)}</strong>`,
-                ...entries.map(point => {
-                  const seriesName = point.seriesName === '累计用户'
-                    ? '累计用户（右轴）'
-                    : `${point.seriesName}（左轴）`
-                  return `${point.marker}${escapeHtml(seriesName)}　<strong>${formatter.format(point.value || 0)}</strong>`
-                }),
+                ...entries.map(point =>
+                  `${point.marker}${escapeHtml(point.seriesName)}　<strong>${formatter.format(tooltipPointValue(point))}</strong>`
+                ),
               ].join('<br>')
             },
           },
@@ -1966,34 +1991,24 @@
               formatter: value => String(value).slice(5),
             },
           },
-          yAxis: [
-            {
-              type: 'value',
-              position: 'left',
-              min: 0,
-              minInterval: 1,
-              name: compact ? '' : '活跃 / 新增',
-              nameGap: 10,
-              nameTextStyle: { color: '#6f7b80', fontSize: 9 },
-              axisLine: { show: false },
-              axisTick: { show: false },
-              axisLabel: { color: '#6f7b80', fontSize: 9 },
-              splitLine: { lineStyle: { color: 'rgba(57, 67, 72, .42)' } },
+          yAxis: {
+            type: 'value',
+            position: 'left',
+            min: 0,
+            max: axisMax,
+            minInterval: 1,
+            name: compact ? '' : '用户数',
+            nameGap: 10,
+            nameTextStyle: { color: '#8d989d', fontSize: 9 },
+            axisLine: { show: true, lineStyle: { color: '#657177' } },
+            axisTick: { show: false },
+            axisLabel: {
+              color: '#8d989d',
+              fontSize: 9,
+              formatter: value => formatter.format(trendCount(value)),
             },
-            {
-              type: 'value',
-              position: 'right',
-              min: 0,
-              minInterval: 1,
-              name: compact ? '' : '累计',
-              nameGap: 10,
-              nameTextStyle: { color: '#8d8064', fontSize: 9 },
-              axisLine: { show: false },
-              axisTick: { show: false },
-              axisLabel: { color: '#8d8064', fontSize: 9 },
-              splitLine: { show: false },
-            },
-          ],
+            splitLine: { lineStyle: { color: 'rgba(57, 67, 72, .42)' } },
+          },
           series: [
             {
               name: '日活用户',
@@ -2006,7 +2021,7 @@
               itemStyle: { color: '#5bc7eb' },
               areaStyle: { color: 'rgba(91, 199, 235, .08)' },
               yAxisIndex: 0,
-              data: rows.map(item => Number(item.active || 0)),
+              data: activeSeries,
             },
             {
               name: '新增用户',
@@ -2019,19 +2034,19 @@
               itemStyle: { color: '#70eea5' },
               areaStyle: { color: 'rgba(112, 238, 165, .055)' },
               yAxisIndex: 0,
-              data: rows.map(item => Number(item.new || 0)),
+              data: newSeries,
             },
             {
               name: '累计用户',
               type: 'line',
-              yAxisIndex: 1,
+              yAxisIndex: 0,
               smooth: false,
               showSymbol: !compact,
               symbol: 'diamond',
               symbolSize: 6,
               lineStyle: { width: 2, color: '#f2bd64' },
               itemStyle: { color: '#f2bd64' },
-              data: rows.map(item => Number(item.cumulative || 0)),
+              data: cumulativeSeries,
             },
           ],
         }, true)

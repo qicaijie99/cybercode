@@ -222,7 +222,9 @@ export function ComputerUseSettings() {
       case 'ready':
         return runtime.source === 'legacy'
           ? t('settings.computerUse.runtimeLegacyReady')
-          : t('settings.computerUse.runtimeReady', { version: runtime.version ?? '' })
+          : runtime.source === 'bundled'
+            ? t('settings.computerUse.runtimeBundledReady', { version: runtime.version ?? '' })
+            : t('settings.computerUse.runtimeReady', { version: runtime.version ?? '' })
       case 'paused':
         return t('settings.computerUse.runtimePaused')
       case 'error':

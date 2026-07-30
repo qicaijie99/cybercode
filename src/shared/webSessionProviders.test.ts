@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   WEB_SESSION_PROVIDERS,
+  getWebSessionCredentialSource,
   getWebSessionPresetId,
   getWebSessionProvider,
   getWebSessionProviderIdFromPreset,
@@ -77,6 +78,22 @@ describe('Web Cookie provider catalog', () => {
       expect(provider.credentialName.trim()).not.toBe('')
       expect(provider.credentialPlaceholder.trim()).not.toBe('')
       expect(provider.website).toMatch(/^https:\/\//)
+      expect(['cookies', 'local-storage', 'network']).toContain(
+        getWebSessionCredentialSource(provider),
+      )
     }
+  })
+
+  test('points token providers to their actual browser credential source', () => {
+    expect(getWebSessionCredentialSource(getWebSessionProvider('deepseek-web')!))
+      .toBe('local-storage')
+    expect(getWebSessionCredentialSource(getWebSessionProvider('copilot-web')!))
+      .toBe('network')
+    expect(getWebSessionCredentialSource(getWebSessionProvider('copilot-m365-web')!))
+      .toBe('network')
+    expect(getWebSessionCredentialSource(getWebSessionProvider('inner-ai')!))
+      .toBe('cookies')
+    expect(getWebSessionCredentialSource(getWebSessionProvider('kimi-web')!))
+      .toBe('cookies')
   })
 })

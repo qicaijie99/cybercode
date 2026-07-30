@@ -443,6 +443,8 @@ export function RouteBuilderDialog({
                   <ProviderLogo
                     name={source?.name ?? target.providerId}
                     providerId={source?.presetId}
+                    modelId={target.modelId}
+                    identityPriority="model"
                     size="xs"
                     decorative
                   />
@@ -529,6 +531,8 @@ function RouteTargetRow({
       <ProviderLogo
         name={source?.name ?? target.providerId}
         providerId={source?.presetId}
+        modelId={target.modelId}
+        identityPriority="model"
         size="xs"
         decorative
       />

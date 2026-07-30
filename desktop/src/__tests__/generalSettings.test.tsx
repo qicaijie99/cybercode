@@ -361,7 +361,8 @@ describe('Settings > Providers tab', () => {
     expect(screen.getByRole('heading', { name: 'Official API providers' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Model aggregators' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Image, video & audio providers' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Local & custom' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Custom providers' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Local models' })).toBeInTheDocument()
     expect(screen.queryByText('Free does not mean keyless')).not.toBeInTheDocument()
     expect(screen.queryByRole('navigation', { name: 'Model source categories' })).not.toBeInTheDocument()
     expect(
@@ -369,11 +370,12 @@ describe('Settings > Providers tab', () => {
         (catalog) => catalog.getAttribute('data-provider-catalog'),
       ),
     ).toEqual([
+      'custom',
       'api-key',
       'aggregators-gateways',
       'oauth',
       'no-auth',
-      'local-custom',
+      'local',
       'web-session',
       'media',
     ])
@@ -384,10 +386,8 @@ describe('Settings > Providers tab', () => {
       screen.getByText('OpenAI').closest('[data-provider-card-layout="catalog"]'),
       screen.getByText('Anthropic API').closest('[data-provider-card-layout="catalog"]'),
       screen.getByText('Perplexity').closest('[data-provider-card-layout="catalog"]'),
-      screen
-        .getAllByText('Legacy Gateway')[0]!
-        .closest('[data-provider-card-layout="catalog"]'),
     ])
+    expect(within(apiCatalog as HTMLElement).queryByText('Legacy Gateway')).not.toBeInTheDocument()
     expect(within(apiCatalog as HTMLElement).queryByText('SiliconFlow')).not.toBeInTheDocument()
     expect(within(apiCatalog as HTMLElement).queryByText('Volcengine Ark')).not.toBeInTheDocument()
     expect(within(apiCatalog as HTMLElement).queryByText('火山')).not.toBeInTheDocument()
@@ -408,10 +408,15 @@ describe('Settings > Providers tab', () => {
       /^1\/\d+$/,
     )).toBeInTheDocument()
 
-    const localCatalog = container.querySelector('[data-provider-catalog="local-custom"]')
+    const customCatalog = container.querySelector('[data-provider-catalog="custom"]')
+    expect(customCatalog).toHaveAttribute('data-provider-catalog-layout', 'comfortable')
+    expect(within(customCatalog as HTMLElement).getByText('Legacy Gateway')).toBeInTheDocument()
+    expect(within(customCatalog as HTMLElement).getByText('Custom')).toBeInTheDocument()
+
+    const localCatalog = container.querySelector('[data-provider-catalog="local"]')
     expect(localCatalog).toHaveAttribute('data-provider-catalog-layout', 'comfortable')
     expect(within(localCatalog as HTMLElement).getByText('LM Studio')).toBeInTheDocument()
-    expect(within(localCatalog as HTMLElement).getByText('Custom')).toBeInTheDocument()
+    expect(within(localCatalog as HTMLElement).queryByText('Custom')).not.toBeInTheDocument()
     expect(within(localCatalog as HTMLElement).queryByText('Legacy Gateway')).not.toBeInTheDocument()
   }, 15_000)
 
@@ -560,6 +565,74 @@ describe('Settings > Providers tab', () => {
       ),
     ).toEqual(['oauth'])
     expect(screen.getAllByText('16 providers').length).toBeGreaterThan(0)
+  })
+
+  it('filters custom providers and local models independently without a search query', () => {
+    const makePreset = (
+      id: string,
+      name: string,
+      needsApiKey: boolean,
+    ): ProviderPreset => ({
+      id,
+      name,
+      baseUrl: `https://api.${id}.example/v1`,
+      apiFormat: 'openai_chat',
+      defaultModels: {
+        main: `${id}-main`,
+        haiku: `${id}-fast`,
+        sonnet: `${id}-main`,
+        opus: `${id}-main`,
+      },
+      needsApiKey,
+      websiteUrl: `https://${id}.example`,
+    })
+    providerStoreState.providers = [
+      {
+        id: 'company-gateway',
+        name: 'Company Gateway',
+        presetId: 'custom',
+        apiKey: '***',
+        baseUrl: 'https://gateway.example.com/v1',
+        apiFormat: 'openai_chat',
+        models: {
+          main: 'company-main',
+          haiku: '',
+          sonnet: '',
+          opus: '',
+        },
+        notes: '',
+      },
+    ]
+    providerStoreState.presets = [
+      makePreset('custom', 'Custom', true),
+      makePreset('lmstudio', 'LM Studio', false),
+      makePreset('openai', 'OpenAI', true),
+    ]
+
+    const { container } = render(<ProviderSettings />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }))
+    const filterDialog = screen.getByRole('dialog', { name: 'Filter providers' })
+    fireEvent.click(within(filterDialog).getByRole('checkbox', { name: 'Custom' }))
+
+    expect(
+      Array.from(container.querySelectorAll('[data-provider-catalog]')).map(
+        (catalog) => catalog.getAttribute('data-provider-catalog'),
+      ),
+    ).toEqual(['custom'])
+    expect(screen.getByText('Company Gateway')).toBeInTheDocument()
+    expect(screen.queryByText('LM Studio')).not.toBeInTheDocument()
+
+    fireEvent.click(within(filterDialog).getByRole('checkbox', { name: 'Custom' }))
+    fireEvent.click(within(filterDialog).getByRole('checkbox', { name: 'Local' }))
+
+    expect(
+      Array.from(container.querySelectorAll('[data-provider-catalog]')).map(
+        (catalog) => catalog.getAttribute('data-provider-catalog'),
+      ),
+    ).toEqual(['local', 'media'])
+    expect(screen.getByText('LM Studio')).toBeInTheDocument()
+    expect(screen.queryByText('Company Gateway')).not.toBeInTheDocument()
   })
 
   it('combines access, cost, and modality filters', () => {
@@ -994,7 +1067,7 @@ describe('Settings > Providers tab', () => {
 
     const { container } = render(<ProviderSettings />)
     const noAuthCatalog = container.querySelector('[data-provider-catalog="no-auth"]') as HTMLElement
-    const localCatalog = container.querySelector('[data-provider-catalog="local-custom"]') as HTMLElement
+    const localCatalog = container.querySelector('[data-provider-catalog="local"]') as HTMLElement
 
     expect(within(noAuthCatalog).getByRole('button', {
       name: 'Configure OpenCode Free',
@@ -1538,7 +1611,7 @@ describe('Settings > Providers tab', () => {
     const aggregatorCatalog = container.querySelector(
       '[data-provider-catalog="aggregators-gateways"]',
     ) as HTMLElement
-    const localCatalog = container.querySelector('[data-provider-catalog="local-custom"]') as HTMLElement
+    const localCatalog = container.querySelector('[data-provider-catalog="local"]') as HTMLElement
 
     expect(within(apiCatalog).getByRole('button', { name: 'Edit Kimi Code' })).toBeInTheDocument()
     expect(within(apiCatalog).queryByRole('button', { name: 'Manage Kimi Code' })).not.toBeInTheDocument()

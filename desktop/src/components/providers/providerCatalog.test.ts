@@ -12,7 +12,8 @@ import {
   inferProviderPresetId,
   isAggregatorGatewayPreset,
   isApiKeyProviderPreset,
-  isLocalOrCustomProviderPreset,
+  isCustomProviderPreset,
+  isLocalProviderPreset,
   isNoAuthProviderPreset,
   noAuthProviderIds,
 } from './providerCatalog'
@@ -27,12 +28,13 @@ describe('API key provider catalog', () => {
     expect(isApiKeyProviderPreset({ id: 'custom', needsApiKey: true })).toBe(false)
   })
 
-  it('keeps local runtimes and custom endpoints in their own section', () => {
-    expect(isLocalOrCustomProviderPreset({ id: 'ollama', needsApiKey: false })).toBe(true)
-    expect(isLocalOrCustomProviderPreset({ id: 'lmstudio', needsApiKey: false })).toBe(true)
-    expect(isLocalOrCustomProviderPreset({ id: 'custom', needsApiKey: true })).toBe(true)
-    expect(isLocalOrCustomProviderPreset({ id: 'opencode-free', needsApiKey: false })).toBe(false)
-    expect(isLocalOrCustomProviderPreset({ id: 'siliconflow', needsApiKey: true })).toBe(false)
+  it('distinguishes local runtimes from custom endpoints', () => {
+    expect(isLocalProviderPreset({ id: 'ollama', needsApiKey: false })).toBe(true)
+    expect(isLocalProviderPreset({ id: 'lmstudio', needsApiKey: false })).toBe(true)
+    expect(isLocalProviderPreset({ id: 'custom', needsApiKey: true })).toBe(false)
+    expect(isLocalProviderPreset({ id: 'opencode-free', needsApiKey: false })).toBe(false)
+    expect(isCustomProviderPreset({ id: 'custom' })).toBe(true)
+    expect(isCustomProviderPreset({ id: 'ollama' })).toBe(false)
   })
 
   it('keeps verified keyless clouds in the no-auth catalog', () => {
