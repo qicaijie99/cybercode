@@ -54,6 +54,10 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.label }})
+    env:
+      # Tauri runs build:sidecars again through beforeBuildCommand. Keep the
+      # runtime embedded for both the explicit preparation and that nested run.
+      CYBERCODE_EMBED_COMPUTER_USE_RUNTIME: '1'
 
     steps:
       - name: Checkout
@@ -211,7 +215,6 @@ jobs:
         working-directory: desktop
         env:
           TAURI_ENV_TARGET_TRIPLE: ${{ matrix.rust_target }}
-          CYBERCODE_EMBED_COMPUTER_USE_RUNTIME: '1'
         run: bun run build:sidecars
 
       - name: Smoke-test sidecar server startup
