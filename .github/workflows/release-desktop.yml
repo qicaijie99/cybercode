@@ -41,7 +41,7 @@ jobs:
           # Linux x64
           - platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
-            tauri_args: '--bundles deb,appimage'
+            tauri_args: '--verbose --bundles deb,appimage'
             label: Linux-x64
             asset_suffix: linux_x64
 
