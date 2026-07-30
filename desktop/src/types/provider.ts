@@ -19,9 +19,19 @@ export type ProviderModelInfo = {
   supportsImages?: boolean
 }
 
+export type ProviderModelSyncState = {
+  enabled: boolean
+  syncedModelIds: string[]
+  lastSyncedAt?: string
+  lastSyncError?: string
+  endpoint?: string
+  supported?: boolean
+}
+
 export type SavedProvider = {
   id: string
   presetId: string
+  publicAlias?: string
   name: string
   apiKey: string  // masked from server
   oauthProviderId?: string
@@ -29,6 +39,7 @@ export type SavedProvider = {
   apiFormat: ApiFormat
   models: ModelMapping
   modelCatalog?: ProviderModelInfo[]
+  modelSync?: ProviderModelSyncState
   modelContextWindows?: ModelContextWindows
   imageSupportMode?: ImageSupportMode
   // Legacy boolean kept for older saved provider records.
@@ -38,6 +49,7 @@ export type SavedProvider = {
 
 export type CreateProviderInput = {
   presetId: string
+  publicAlias?: string
   name: string
   apiKey: string
   baseUrl: string
@@ -52,6 +64,7 @@ export type CreateProviderInput = {
 
 export type UpdateProviderInput = {
   presetId?: string
+  publicAlias?: string
   name?: string
   apiKey?: string
   baseUrl?: string
@@ -116,4 +129,13 @@ export type ProviderModelDiscoveryResult = {
   models: ProviderModelInfo[]
   endpoint: string
   cached: boolean
+}
+
+export type ProviderModelSyncResult = {
+  endpoint: string
+  cached: boolean
+  total: number
+  added: number
+  updated: number
+  removed: number
 }

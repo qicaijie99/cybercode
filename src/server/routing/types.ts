@@ -63,21 +63,22 @@ export const RouteProfileSchema = z.object({
   strategy: RoutingStrategySchema.default('auto'),
   strictFree: z.boolean().default(false),
   allowExperimental: z.boolean().default(false),
-  maxAttempts: z.number().int().min(1).max(3).default(3),
+  maxAttempts: z.number().int().min(1).max(8).default(3),
   targets: z.array(RouteTargetSchema).default([]),
 }).superRefine((profile, context) => {
-  const providerIndexes = new Map<string, number>()
+  const targetIndexes = new Map<string, number>()
   for (const [index, target] of profile.targets.entries()) {
-    const firstIndex = providerIndexes.get(target.providerId)
+    const targetKey = `${target.providerId}\u0000${target.modelId ?? ''}`
+    const firstIndex = targetIndexes.get(targetKey)
     if (firstIndex !== undefined) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Provider target is duplicated (first used at index ${firstIndex})`,
-        path: ['targets', index, 'providerId'],
+        message: `Route target is duplicated (first used at index ${firstIndex})`,
+        path: ['targets', index],
       })
       continue
     }
-    providerIndexes.set(target.providerId, index)
+    targetIndexes.set(targetKey, index)
   }
 })
 export type RouteProfile = z.infer<typeof RouteProfileSchema>

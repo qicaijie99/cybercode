@@ -152,6 +152,7 @@ describe('ChatInput composer controls', () => {
     const runtimeControls = screen.getByTestId('composer-runtime-controls')
     const modelSelector = runtimeControls.querySelector('.model-selector-compact')
     const tokenUsage = screen.getByTestId('token-usage-indicator')
+    expect(runtimeControls).toHaveClass('chat-composer-runtime-controls')
     expect(modelSelector).toBeInTheDocument()
     expect(runtimeControls).toContainElement(tokenUsage)
     expect(tokenUsage.compareDocumentPosition(modelSelector!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

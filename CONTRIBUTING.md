@@ -34,9 +34,16 @@ git checkout -b docs/provider-guide
 | Desktop server | `SERVER_PORT=3456 bun run src/server/index.ts` |
 | Desktop frontend | `cd desktop && bun run dev` |
 | Desktop tests | `cd desktop && bun run test` |
+| Desktop browser setup | `cd desktop && bun run test:e2e:install` |
+| Desktop browser E2E | `cd desktop && bun run test:e2e` |
 | Desktop type-check | `cd desktop && bun run lint` |
 | Desktop build | `cd desktop && bun run build` |
 | Docs build | `bun run docs:build` |
+
+Playwright starts an isolated backend and desktop web frontend automatically.
+Its runtime data, screenshots, videos, and traces stay under
+`desktop/test-results/`; it does not read or modify your normal CyberCode
+configuration.
 
 ## Good First Contributions
 

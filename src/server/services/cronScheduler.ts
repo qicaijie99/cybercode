@@ -20,6 +20,7 @@ import {
 } from './conversationService.js'
 import { SessionService } from './sessionService.js'
 import { sendTaskNotification } from './notificationService.js'
+import { closeAgentBrowserSession } from '../../utils/agentBrowser/setup.js'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -256,7 +257,12 @@ export class CronScheduler {
   private intervalId: Timer | null = null
   private runningTasks = new Map<
     string,
-    { proc: ReturnType<typeof Bun.spawn>; startedAt: number; runId: string }
+    {
+      proc: ReturnType<typeof Bun.spawn>
+      startedAt: number
+      runId: string
+      agentBrowserSessionId: string
+    }
   >()
   /** Track which minute each task last fired (prevents same-process duplicate within a minute). */
   private lastFiredMinuteKey = new Map<string, string>()
@@ -290,11 +296,19 @@ export class CronScheduler {
 
   /** Stop the scheduler and kill any running task processes. */
   stop(): void {
+    void this.stopAndWait()
+  }
+
+  async stopAndWait(): Promise<void> {
     if (this.intervalId) {
       clearInterval(this.intervalId)
       this.intervalId = null
     }
+    const browserShutdowns: Promise<boolean>[] = []
     for (const [taskId, entry] of this.runningTasks) {
+      browserShutdowns.push(
+        closeAgentBrowserSession(entry.agentBrowserSessionId),
+      )
       try {
         entry.proc.kill()
       } catch {
@@ -302,6 +316,7 @@ export class CronScheduler {
       }
       this.runningTasks.delete(taskId)
     }
+    await Promise.allSettled(browserShutdowns)
     console.log('[CronScheduler] Stopped')
   }
 
@@ -425,8 +440,14 @@ export class CronScheduler {
     }) + '\n'
 
     let proc: ReturnType<typeof Bun.spawn>
+    const agentBrowserSessionId =
+      sessionId || `cron-${task.id}-${runId}`
     try {
-      const childEnv = await this.buildTaskChildEnv(workDir, task)
+      const childEnv = await this.buildTaskChildEnv(
+        workDir,
+        task,
+        agentBrowserSessionId,
+      )
       proc = Bun.spawn(
         this.buildTaskCliArgs(cliPath, preloadPath, task, sessionId),
         {
@@ -451,7 +472,12 @@ export class CronScheduler {
       return failedRun
     }
 
-    this.runningTasks.set(task.id, { proc, startedAt: Date.now(), runId })
+    this.runningTasks.set(task.id, {
+      proc,
+      startedAt: Date.now(),
+      runId,
+      agentBrowserSessionId,
+    })
 
     // Write prompt to stdin then close it
     try {
@@ -464,6 +490,7 @@ export class CronScheduler {
     // Set up a timeout
     const timeoutId = setTimeout(() => {
       if (this.runningTasks.has(task.id)) {
+        void closeAgentBrowserSession(agentBrowserSessionId)
         try {
           proc.kill()
         } catch {
@@ -491,6 +518,7 @@ export class CronScheduler {
 
       // Wait for exit
       const exitCode = await proc.exited
+      await closeAgentBrowserSession(agentBrowserSessionId)
 
       clearTimeout(timeoutId)
       this.runningTasks.delete(task.id)
@@ -548,6 +576,7 @@ export class CronScheduler {
     } catch (err) {
       clearTimeout(timeoutId)
       this.runningTasks.delete(task.id)
+      await closeAgentBrowserSession(agentBrowserSessionId)
 
       const completedAt = new Date().toISOString()
       const failedRun: TaskRun = {
@@ -677,11 +706,13 @@ export class CronScheduler {
   private async buildTaskChildEnv(
     workDir: string,
     task: CronTask,
+    agentBrowserSessionId = `cron-${task.id}`,
   ): Promise<Record<string, string>> {
     return this.conversationService.buildChildEnv(
       workDir,
       undefined,
       this.buildTaskStartOptions(task),
+      agentBrowserSessionId,
     )
   }
 }

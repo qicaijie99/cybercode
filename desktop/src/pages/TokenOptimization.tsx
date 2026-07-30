@@ -526,7 +526,7 @@ export function TokenOptimization({ initialView = 'overview' }: TokenOptimizatio
 
   if (showGraph && graph) {
     return (
-      <div className="mx-auto flex min-h-[680px] w-full max-w-[1180px] flex-col gap-[16px]">
+      <div className="token-optimization-graph mx-auto flex min-h-[680px] w-full max-w-[1180px] flex-col gap-[16px]">
         <header className="flex items-center justify-between gap-[16px]">
           <div className="flex min-w-0 items-center gap-[10px]">
             <button
@@ -563,7 +563,7 @@ export function TokenOptimization({ initialView = 'overview' }: TokenOptimizatio
         className="relative overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-[18px] py-[18px] sm:px-[22px]"
       >
         <div aria-hidden="true" className="absolute inset-x-0 top-0 h-[3px] bg-[linear-gradient(90deg,#22b8cf_0%,#f2c94c_52%,#ef5da8_100%)]" />
-        <div className="grid min-w-0 grid-cols-1 items-center gap-[18px] sm:grid-cols-[minmax(0,1fr)_210px]">
+        <div className="savings-overview-grid grid min-w-0 grid-cols-1 items-center gap-[18px] sm:grid-cols-[minmax(0,1fr)_210px]">
           <div className="min-w-0">
             <div className="flex items-center gap-[7px] text-[11px] font-bold uppercase text-[var(--color-text-tertiary)]">
               <Gauge size={14} />
@@ -855,7 +855,7 @@ function OptimizerRow({
   return (
     <div
       data-testid={testId}
-      className="grid min-w-0 grid-cols-[38px_minmax(0,1fr)_auto] gap-x-[11px] gap-y-[10px] border-b border-[var(--color-border-separator)] px-[14px] py-[14px] last:border-b-0 sm:grid-cols-[38px_minmax(180px,1fr)_minmax(180px,auto)_auto] sm:items-center sm:px-[16px]"
+      className="optimizer-row grid min-w-0 grid-cols-[38px_minmax(0,1fr)_auto] gap-x-[11px] gap-y-[10px] border-b border-[var(--color-border-separator)] px-[14px] py-[14px] last:border-b-0 sm:grid-cols-[38px_minmax(180px,1fr)_minmax(180px,auto)_auto] sm:items-center sm:px-[16px]"
     >
       <div className={`flex h-[36px] w-[36px] items-center justify-center rounded-[7px] transition-colors ${
         active
@@ -879,10 +879,10 @@ function OptimizerRow({
           {description}
         </p>
       </div>
-      <div className="col-span-2 col-start-2 min-w-0 sm:col-span-1 sm:col-start-auto">
+      <div className="optimizer-row-metrics col-span-2 col-start-2 min-w-0 sm:col-span-1 sm:col-start-auto">
         {metrics}
       </div>
-      <div className="col-start-3 row-start-1 flex items-center justify-end gap-[7px] self-center sm:col-start-auto sm:row-start-auto">
+      <div className="optimizer-row-controls col-start-3 row-start-1 flex items-center justify-end gap-[7px] self-center sm:col-start-auto sm:row-start-auto">
         {meta && <span className="text-[9px] text-[var(--color-text-tertiary)]">{meta}</span>}
         {actions}
         {control}

@@ -145,6 +145,16 @@ The same tools, memory, desktop workflow, and permissions remain available acros
   </tr>
 </table>
 
+### Providers, synchronization, routing, and Agent Node in one flow
+
+Models & Routing now follows the way people actually configure access: official API-key providers and major aggregators first, then OAuth, web sessions, image/video/audio catalogs, and local or custom endpoints. Names follow the selected UI language. Multiple saved keys for one preset can be managed together, while distinct products such as Kimi Code and Kimi remain separate entries.
+
+Compatible `/models` endpoints can be imported on demand or synchronized about every 24 hours without deleting manually entered models. Smart routes combine usable targets with health tracking, failure cooldowns, and failover. Agent Node exposes the resulting models and routes through independently authenticated OpenAI Chat Completions and Anthropic Messages endpoints, without revealing provider keys.
+
+Web-session access uses credentials supplied explicitly by the user. It does not read browser data, solve CAPTCHAs, or bypass account or region restrictions, and it carries more stability and policy risk than official APIs. Media connection tests do not submit paid generation jobs or make media models the chat default.
+
+The desktop app and TUI share this configuration. `/provider sync`, `/routing`, and `/node` work in a standalone TUI without another proxy installation. [Read the Models, Sync, and Smart Routing guide](https://wk42worldworld.github.io/cybercode/en/guide/models-routing).
+
 ### One agent across desktop, terminal, and remote channels
 
 The React + Tauri desktop app and Ink terminal interface share the same local agent core. File attachments, slash commands, permissions, MCP tools, Skills, plugins, background agents, Agent Teams, Git worktrees, Computer Use, and headless output stay part of one workflow instead of becoming separate products.
@@ -166,7 +176,7 @@ CyberCode keeps the client, server, desktop shell, adapters, memory, search, pro
 | Coding workflow | File editing, terminal tools, project search, permission modes, slash commands, attachments, rewind, branching, and session resume |
 | Agent intelligence | Persistent memory, self-evolution review, reusable Skills, sub-agents, Agent Teams, background tasks, and worktrees |
 | Context efficiency | Dynamic context-window awareness, automatic compression, Lite cleanup, smart pruning, Lazy Programmer, Caveman, RTK, and Code Graph |
-| Model access | Official Claude login, Anthropic-compatible APIs, OpenAI-compatible providers, local endpoints, custom models, and per-model context metadata |
+| Model access | Official API keys, aggregators, OAuth, web sessions, media catalogs, local/custom endpoints, model sync, smart routing, and Agent Node |
 | Web and tools | Provider-neutral WebSearch fallback, WebFetch, MCP servers, plugins, Computer Use, and environment-aware tool availability |
 | Interfaces | Cross-platform desktop app, terminal TUI, `--print` headless mode, Telegram, and Feishu |
 | Automation | One-time and recurring scheduled tasks, remote approval, background agents, and machine-readable JSON output |
@@ -203,6 +213,7 @@ Latest stable desktop release: [View GitHub Releases](https://github.com/wk42wor
 - **Smarter Windows tool runtime**: CyberCode finds Git Bash when available, falls back to PowerShell when it is not, and only exposes executable tools that are actually available to the model.
 - **Flexible file attachments**: unsupported audio, binary, and other file types are handled as file paths instead of blocking the conversation request.
 - **Clearer command progress UI**: running command blocks now show GPT-style sweeping text highlights on both parent command rows and nested tool rows.
+- **End-to-end model access and routing**: official keys, aggregators, OAuth, web sessions, and media catalogs share one settings flow, with model sync, health-aware routing, and an OpenAI/Anthropic Agent Node.
 
 ---
 

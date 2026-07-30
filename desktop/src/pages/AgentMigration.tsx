@@ -27,6 +27,7 @@ import { Modal } from '../components/shared/Modal'
 import { SegmentedControl, SettingsPage } from '../components/settings/SettingsLayout'
 import { useTranslation } from '../i18n'
 import { formatBytes } from '../lib/formatBytes'
+import { subscribeToViewportChanges } from '../lib/viewportEvents'
 import { useUIStore } from '../stores/uiStore'
 
 type Filter = 'all' | 'skill' | 'memory' | 'instruction' | 'project'
@@ -438,7 +439,7 @@ function MigrationRoute({
 }) {
   const t = useTranslation()
   return (
-    <div className="grid min-h-[70px] grid-cols-[minmax(0,1fr)_40px_minmax(0,1fr)] items-end gap-[10px] border-b border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] px-[14px] py-[9px]">
+    <div className="agent-migration-route grid min-h-[70px] grid-cols-[minmax(0,1fr)_40px_minmax(0,1fr)] items-end gap-[10px] border-b border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] px-[14px] py-[9px]">
       <AgentRoutePicker
         role="source"
         agents={agents}
@@ -579,13 +580,11 @@ function AgentRoutePicker({
     }
     document.addEventListener('mousedown', handlePointerDown)
     document.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
+    const unsubscribeViewport = subscribeToViewportChanges(updatePosition)
     return () => {
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
+      unsubscribeViewport()
     }
   }, [close, open, updatePosition])
 
@@ -638,7 +637,7 @@ function AgentRoutePicker({
   }
 
   return (
-    <div className="min-w-0">
+    <div className="agent-route-picker min-w-0">
       <span className="block text-[9px] font-bold text-[var(--color-text-tertiary)]">
         {fieldLabel}
       </span>

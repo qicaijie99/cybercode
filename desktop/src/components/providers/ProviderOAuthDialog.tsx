@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import {
   Check,
   Copy,
@@ -17,9 +16,11 @@ import {
   type ProviderOAuthStatus,
 } from '../../api/providerOAuth'
 import { useTranslation } from '../../i18n'
+import { openExternalUrl } from '../../lib/openExternalUrl'
 import { Button } from '../shared/Button'
 import { Input } from '../shared/Input'
 import { Modal } from '../shared/Modal'
+import { OAuthRiskNotice } from './OAuthRiskNotice'
 import { ProviderLogo } from './ProviderLogo'
 import type { OAuthProviderCatalogItem } from './OAuthProviderCatalog'
 
@@ -141,11 +142,15 @@ export function ProviderOAuthDialog({
 
   const openLoginPage = async (flow: ProviderOAuthStart | null = loginFlow) => {
     if (!flow) return
-    await shellOpen(
-      flow.flowType === 'device_code'
-        ? flow.verificationUriComplete || flow.verificationUri
-        : flow.authorizeUrl,
-    )
+    try {
+      await openExternalUrl(
+        flow.flowType === 'device_code'
+          ? flow.verificationUriComplete || flow.verificationUri
+          : flow.authorizeUrl,
+      )
+    } catch {
+      throw new Error(t('settings.routing.oauthDialog.openBrowserFailed'))
+    }
   }
 
   const startLogin = async () => {
@@ -167,6 +172,8 @@ export function ProviderOAuthDialog({
       schedulePoll(provider.id, flow.sessionId, flow.intervalMs)
       await openLoginPage(flow)
     } catch (startError) {
+      setLoginFlow(null)
+      stopPolling()
       setError(startError instanceof Error ? startError.message : String(startError))
     } finally {
       setIsStarting(false)
@@ -226,7 +233,12 @@ export function ProviderOAuthDialog({
   }
 
   const openHelp = async () => {
-    if (capability?.helpUrl) await shellOpen(capability.helpUrl)
+    if (!capability?.helpUrl) return
+    try {
+      await openExternalUrl(capability.helpUrl)
+    } catch {
+      setError(t('settings.routing.oauthDialog.openBrowserFailed'))
+    }
   }
 
   const setupSummary = capability?.setupMode === 'device_code'
@@ -269,6 +281,10 @@ export function ProviderOAuthDialog({
               </div>
             </div>
           </div>
+
+          {!status?.connected && (
+            <OAuthRiskNotice providerName={provider.name} />
+          )}
 
           {status?.connected ? (
             <div className="rounded-[8px] border border-[var(--color-success)]/25 bg-[var(--color-success)]/[0.06] px-[14px] py-[12px]">
@@ -496,7 +512,12 @@ export function ProviderOAuthDialog({
                 type="button"
                 variant="secondary"
                 icon={<ExternalLink size={14} />}
-                onClick={() => void openLoginPage()}
+                onClick={() => {
+                  setError(null)
+                  void openLoginPage().catch((openError) => {
+                    setError(openError instanceof Error ? openError.message : String(openError))
+                  })
+                }}
               >
                 {t('settings.routing.oauthDialog.openPage')}
               </Button>
@@ -532,7 +553,7 @@ export function ProviderOAuthDialog({
                   (!gitLabBaseUrl.trim() || !clientId.trim())
                 }
                 icon={<ExternalLink size={14} />}
-                onClick={startLogin}
+                onClick={() => void startLogin()}
               >
                 {t('settings.routing.oauthDialog.connect')}
               </Button>

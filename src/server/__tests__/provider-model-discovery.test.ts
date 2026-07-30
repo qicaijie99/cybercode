@@ -4,10 +4,12 @@ import {
   clearProviderModelDiscoveryCache,
   discoverProviderModels,
 } from '../services/providerModelDiscovery.js'
+import { clearModelsDevCatalogCache } from '../services/modelsDevCatalog.js'
 
 describe('provider model discovery', () => {
   beforeEach(() => {
     clearProviderModelDiscoveryCache()
+    clearModelsDevCatalogCache()
   })
 
   test('discovers OpenAI-compatible model IDs and metadata', async () => {
@@ -47,6 +49,159 @@ describe('provider model discovery', () => {
         supportsImages: true,
       },
     ])
+  })
+
+  test('discovers the account-scoped Codex catalog and excludes hidden runtime models', async () => {
+    const requests: Array<{ url: string; headers: Headers }> = []
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        headers: new Headers(init?.headers),
+      })
+      return Response.json({
+        models: [
+          {
+            slug: 'gpt-5.6-luna',
+            display_name: 'GPT-5.6 Luna',
+            context_window: 272_000,
+            input_modalities: ['text', 'image'],
+            visibility: 'list',
+          },
+          {
+            slug: 'gpt-5.6-sol',
+            display_name: 'GPT-5.6 Sol',
+            context_window: 272_000,
+            input_modalities: ['text', 'image'],
+            visibility: 'list',
+          },
+          {
+            slug: 'codex-auto-review',
+            display_name: 'Codex Auto Review',
+            hidden: true,
+          },
+        ],
+      })
+    }) as typeof fetch
+
+    const result = await discoverProviderModels({
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      endpoint: 'https://chatgpt.com/backend-api/codex/models?client_version=0.144.1',
+      apiKey: 'oauth-token',
+      apiFormat: 'openai_responses',
+      presetId: 'openai-codex',
+      cacheScope: 'codex-provider',
+      headers: {
+        Version: '0.144.1',
+        originator: 'codex_cli_rs',
+      },
+    }, { fetchImpl })
+
+    expect(requests[0]?.url).toBe(
+      'https://chatgpt.com/backend-api/codex/models?client_version=0.144.1',
+    )
+    expect(requests[0]?.headers.get('authorization')).toBe('Bearer oauth-token')
+    expect(requests[0]?.headers.get('version')).toBe('0.144.1')
+    expect(result.models).toEqual([
+      {
+        id: 'gpt-5.6-sol',
+        label: 'GPT-5.6 Sol',
+        contextWindow: 272_000,
+        supportsImages: true,
+      },
+      {
+        id: 'gpt-5.6-luna',
+        label: 'GPT-5.6 Luna',
+        contextWindow: 272_000,
+        supportsImages: true,
+      },
+    ])
+  })
+
+  test('includes the provider error message when model discovery fails', async () => {
+    const fetchImpl = (async () => Response.json({
+      error: { message: 'The API key is invalid' },
+    }, { status: 401 })) as typeof fetch
+
+    await expect(discoverProviderModels({
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'bad-key',
+      apiFormat: 'openai_chat',
+    }, { fetchImpl })).rejects.toThrow(
+      'Unable to discover models: HTTP 401: The API key is invalid',
+    )
+  })
+
+  test('falls back to the shared catalog while preserving release-date order', async () => {
+    const urls: string[] = []
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      urls.push(url)
+      if (url === 'https://models.dev/api.json') {
+        return Response.json({
+          deepseek: {
+            models: {
+              'deepseek-v99-old': {
+                id: 'deepseek-v99-old',
+                tool_call: true,
+                release_date: '2025-01-01',
+                modalities: { input: ['text'], output: ['text'] },
+                limit: { context: 128_000 },
+              },
+              'deepseek-v1-new': {
+                id: 'deepseek-v1-new',
+                tool_call: true,
+                release_date: '2026-07-01',
+                modalities: { input: ['text'], output: ['text'] },
+                limit: { context: 1_000_000 },
+              },
+            },
+          },
+        })
+      }
+      return new Response('Model endpoint is unavailable', { status: 404 })
+    }) as typeof fetch
+
+    const result = await discoverProviderModels({
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'deepseek-key',
+      apiFormat: 'openai_chat',
+      presetId: 'deepseek',
+    }, {
+      fetchImpl,
+      catalogFallback: true,
+    })
+
+    expect(urls).toEqual([
+      'https://api.deepseek.com/v1/models',
+      'https://models.dev/api.json',
+    ])
+    expect(result.endpoint).toBe('https://models.dev/api.json#deepseek')
+    expect(result.models.map((model) => model.id)).toEqual([
+      'deepseek-v1-new',
+      'deepseek-v99-old',
+    ])
+  })
+
+  test('does not hide invalid credentials behind the shared catalog fallback', async () => {
+    const urls: string[] = []
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      urls.push(String(input))
+      return Response.json({
+        error: { message: 'Invalid API key' },
+      }, { status: 401 })
+    }) as typeof fetch
+
+    await expect(discoverProviderModels({
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'bad-key',
+      apiFormat: 'openai_chat',
+      presetId: 'deepseek',
+    }, {
+      fetchImpl,
+      catalogFallback: true,
+    })).rejects.toThrow('HTTP 401: Invalid API key')
+
+    expect(urls).toEqual(['https://api.deepseek.com/v1/models'])
   })
 
   test('uses the GitHub Models catalog endpoint and reads its metadata', async () => {

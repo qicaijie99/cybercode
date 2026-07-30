@@ -4,13 +4,20 @@ import { AdapterHttpClient } from '../http-client.js'
 describe('AdapterHttpClient', () => {
   let client: AdapterHttpClient
   const originalFetch = globalThis.fetch
+  const originalServerAuthToken = process.env.SERVER_AUTH_TOKEN
 
   beforeEach(() => {
+    delete process.env.SERVER_AUTH_TOKEN
     client = new AdapterHttpClient('ws://127.0.0.1:3456')
   })
 
   afterEach(() => {
     globalThis.fetch = originalFetch
+    if (originalServerAuthToken === undefined) {
+      delete process.env.SERVER_AUTH_TOKEN
+    } else {
+      process.env.SERVER_AUTH_TOKEN = originalServerAuthToken
+    }
   })
 
   it('derives HTTP URL from WS URL', () => {
@@ -101,5 +108,49 @@ describe('AdapterHttpClient', () => {
     expect((globalThis.fetch as any).mock.calls[0][0]).toBe(
       'http://127.0.0.1:3456/api/tasks/lists/session-123',
     )
+  })
+
+  it('authenticates every HTTP helper with the desktop server token', async () => {
+    process.env.SERVER_AUTH_TOKEN = ' desktop-secret '
+    globalThis.fetch = mock((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/sessions')) {
+        return Promise.resolve(Response.json({ sessionId: 'session-123' }, { status: 201 }))
+      }
+      if (url.endsWith('/recent-projects')) {
+        return Promise.resolve(Response.json({ projects: [] }))
+      }
+      if (url.endsWith('/git-info')) {
+        return Promise.resolve(Response.json({
+          branch: 'main',
+          repoName: 'cybercode',
+          workDir: '/repo/cybercode',
+          changedFiles: 0,
+        }))
+      }
+      return Promise.resolve(Response.json({ tasks: [] }))
+    }) as any
+
+    await client.createSession('/repo/cybercode')
+    await client.listRecentProjects()
+    await client.getGitInfo('session-123')
+    await client.getTasksForSession('session-123')
+
+    const calls = (globalThis.fetch as any).mock.calls
+    expect(calls).toHaveLength(4)
+    for (const call of calls) {
+      expect(new Headers(call[1]?.headers).get('Authorization')).toBe('Bearer desktop-secret')
+    }
+  })
+
+  it('does not add authorization when desktop server auth is disabled', async () => {
+    globalThis.fetch = mock(() =>
+      Promise.resolve(Response.json({ projects: [] }))
+    ) as any
+
+    await client.listRecentProjects()
+
+    const call = (globalThis.fetch as any).mock.calls[0]
+    expect(new Headers(call[1]?.headers).get('Authorization')).toBeNull()
   })
 })

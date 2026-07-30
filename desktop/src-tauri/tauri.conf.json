@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/main/nicegui/static/tauri-schema-v2.json",
   "productName": "CyberCode",
-  "version": "1.1.8",
+  "version": "1.1.10",
   "identifier": "com.cybercode.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -15,8 +15,8 @@
         "title": "CyberCode",
         "width": 1200,
         "height": 760,
-        "minWidth": 840,
-        "minHeight": 480,
+        "minWidth": 640,
+        "minHeight": 420,
         "decorations": true,
         "transparent": false,
         "acceptFirstMouse": true

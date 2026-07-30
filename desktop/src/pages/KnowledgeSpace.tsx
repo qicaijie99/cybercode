@@ -350,7 +350,7 @@ export function KnowledgeSpace() {
 
   return (
     <div
-      className="relative flex min-h-0 flex-1 overflow-hidden border-t border-[var(--color-border-separator)] bg-[var(--color-background)]"
+      className="knowledge-space relative flex min-h-0 flex-1 overflow-hidden border-t border-[var(--color-border-separator)] bg-[var(--color-background)]"
       onDragEnter={(event) => {
         event.preventDefault()
         setDragging(true)
@@ -552,7 +552,7 @@ function WorkspaceToolbar({
 }) {
   const t = useTranslation()
   return (
-    <header className="flex min-h-[64px] shrink-0 flex-wrap items-center gap-[12px] border-b border-[var(--color-border-separator)] px-[16px] py-[10px] md:px-[20px]">
+    <header className="knowledge-toolbar flex min-h-[64px] shrink-0 flex-wrap items-center gap-[12px] border-b border-[var(--color-border-separator)] px-[16px] py-[10px] md:px-[20px]">
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-[15px] font-semibold text-[var(--color-text-primary)]">
           {t('knowledgeSpace.title')}
@@ -587,7 +587,7 @@ function WorkspaceToolbar({
           </IconButton>
         </div>
       )}
-      <div className="flex w-full min-w-0 items-center gap-[6px] lg:hidden">
+      <div className="knowledge-mobile-source-controls flex w-full min-w-0 items-center gap-[6px] lg:hidden">
         <select
           value={selectedSourceId ?? ''}
           onChange={(event) => onSourceChange(event.target.value || null)}
@@ -694,14 +694,14 @@ function FilesWorkspace({ documents, loading }: { documents: KnowledgeDocument[]
     return <WorkspaceEmpty icon={<Files size={21} />} title={t('knowledgeSpace.files.empty')} />
   }
   return (
-    <div className="min-w-[560px]">
-      <div className="grid h-[32px] grid-cols-[minmax(220px,1fr)_90px_100px] items-center border-b border-[var(--color-border-separator)] px-[10px] text-[9px] font-semibold uppercase text-[var(--color-text-tertiary)]">
+    <div className="knowledge-document-table min-w-0 w-full">
+      <div className="knowledge-document-row grid h-[32px] grid-cols-[minmax(0,1fr)_90px_100px] items-center border-b border-[var(--color-border-separator)] px-[10px] text-[9px] font-semibold uppercase text-[var(--color-text-tertiary)]">
         <span>{t('knowledgeSpace.files.name')}</span>
         <span>{t('knowledgeSpace.files.mode')}</span>
         <span className="text-right">{t('knowledgeSpace.files.size')}</span>
       </div>
       {documents.map((document) => (
-        <div key={document.id} className="grid min-h-[42px] grid-cols-[minmax(220px,1fr)_90px_100px] items-center border-b border-[var(--color-border-separator)] px-[10px] text-[11px] hover:bg-[var(--color-surface-hover)]">
+        <div key={document.id} className="knowledge-document-row grid min-h-[42px] grid-cols-[minmax(0,1fr)_90px_100px] items-center border-b border-[var(--color-border-separator)] px-[10px] text-[11px] hover:bg-[var(--color-surface-hover)]">
           <div className="flex min-w-0 items-center gap-[8px]">
             <File size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />
             <div className="min-w-0">
@@ -829,7 +829,7 @@ function WorkspaceEmpty({ icon, title, detail, action, progress }: {
   progress?: number
 }) {
   return (
-    <div className="flex min-h-[360px] flex-1 items-center justify-center">
+    <div className="knowledge-workspace-empty flex min-h-[360px] flex-1 items-center justify-center">
       <div className="flex max-w-[420px] flex-col items-center text-center">
         <span className="mb-[12px] text-[var(--color-text-tertiary)]">{icon}</span>
         <p className="text-[12px] font-medium text-[var(--color-text-secondary)]">{title}</p>

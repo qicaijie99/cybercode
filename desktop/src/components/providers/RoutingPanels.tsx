@@ -1,19 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   Check,
-  ChevronDown,
-  Code2,
+  Copy,
   Gauge,
-  Gift,
-  Minus,
+  Pencil,
   Plus,
   RefreshCw,
   Route,
-  Scale,
-  SlidersHorizontal,
   ShieldCheck,
-  Zap,
+  Trash2,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useRoutingStore } from '../../stores/routingStore'
@@ -21,62 +17,23 @@ import type {
   RouteHealthSnapshot,
   RouteProfile,
   RoutingSource,
-  RoutingStrategy,
   SourceAuthClass,
   SourceCostClass,
   SourceRiskClass,
 } from '../../types/routing'
+import {
+  createRouteId,
+  isUneditedLegacyRouteProfile,
+  routeBuilderModeFor,
+} from '../../utils/routingRoutes'
 import { Button } from '../shared/Button'
+import { ConfirmDialog } from '../shared/ConfirmDialog'
 import { SettingsRow, SettingsSection, Switch } from '../settings/SettingsLayout'
 import { ProviderLogo } from './ProviderLogo'
-
-const PROFILE_ICONS = {
-  balanced: Scale,
-  'coding-first': Code2,
-  'free-first': Gift,
-  fastest: Zap,
-  stable: ShieldCheck,
-} as const
-
-const STRATEGY_GROUPS = [
-  {
-    id: 'recommended',
-    icon: Route,
-    strategies: ['auto', 'priority', 'cost-optimized', 'weighted'],
-  },
-  {
-    id: 'loadBalance',
-    icon: Scale,
-    strategies: ['round-robin', 'p2c', 'least-used', 'random', 'strict-random'],
-  },
-  {
-    id: 'reliability',
-    icon: ShieldCheck,
-    strategies: ['fill-first', 'reset-aware', 'reset-window', 'lkgp'],
-  },
-  {
-    id: 'context',
-    icon: Gauge,
-    strategies: ['context-relay', 'headroom', 'context-optimized'],
-  },
-] as const
-
-type StrategyGroupId = (typeof STRATEGY_GROUPS)[number]['id']
-
-type CostPolicy = 'free-only' | 'prefer-free' | 'allow-paid'
+import { RouteBuilderDialog } from './RouteBuilderDialog'
 
 function profileTranslationKey(id: string, suffix: 'name' | 'description') {
   return `settings.routing.profile.${id}.${suffix}` as never
-}
-
-function strategyTranslationKey(strategy: RoutingStrategy, suffix: 'name' | 'description') {
-  return `settings.routing.strategy.${strategy}.${suffix}` as never
-}
-
-function strategyGroupFor(strategy: RoutingStrategy): StrategyGroupId {
-  return STRATEGY_GROUPS.find((group) => (
-    (group.strategies as readonly RoutingStrategy[]).includes(strategy)
-  ))?.id ?? 'recommended'
 }
 
 function translatedOrFallback(
@@ -151,142 +108,6 @@ export function SourceAccessBadges({ source }: { source?: RoutingSource }) {
   )
 }
 
-function RoutingStrategyPicker({
-  value,
-  disabled,
-  onChange,
-}: {
-  value: RoutingStrategy
-  disabled: boolean
-  onChange: (strategy: RoutingStrategy) => void
-}) {
-  const t = useTranslation()
-  const pickerRef = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
-  const [groupId, setGroupId] = useState<StrategyGroupId>(() => strategyGroupFor(value))
-  const strategyLabel = t(strategyTranslationKey(value, 'name'))
-  const activeGroup = STRATEGY_GROUPS.find((group) => group.id === groupId) ?? STRATEGY_GROUPS[0]
-
-  useEffect(() => {
-    if (!open) return
-    setGroupId(strategyGroupFor(value))
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) {
-        setOpen(false)
-      }
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-
-    document.addEventListener('mousedown', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [open, value])
-
-  return (
-    <div ref={pickerRef} className="relative">
-      <button
-        type="button"
-        disabled={disabled}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={`${t('settings.routing.strategyLabel')}: ${strategyLabel}`}
-        onClick={() => setOpen((current) => !current)}
-        className="flex h-[34px] w-[142px] items-center justify-between gap-[8px] rounded-[7px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[10px] text-[11px] font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        <span className="truncate">{strategyLabel}</span>
-        <ChevronDown
-          size={14}
-          className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-
-      {open && (
-        <div
-          role="dialog"
-          aria-label={t('settings.routing.strategyPicker')}
-          className="absolute bottom-[calc(100%+6px)] left-0 z-50 flex max-h-[280px] w-[calc(100vw-160px)] flex-col overflow-hidden rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-dropdown)] md:w-[520px] xl:left-auto xl:right-0"
-        >
-          <div
-            role="tablist"
-            aria-label={t('settings.routing.strategyPicker')}
-            className="grid shrink-0 grid-cols-4 gap-[3px] border-b border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] p-[5px]"
-          >
-            {STRATEGY_GROUPS.map((group) => {
-              const GroupIcon = group.icon
-              const selected = group.id === groupId
-              return (
-                <button
-                  key={group.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  onClick={() => setGroupId(group.id)}
-                  className={`flex h-[30px] min-w-0 items-center justify-center gap-[5px] rounded-[5px] px-[6px] text-[10px] font-semibold transition-colors ${
-                    selected
-                      ? 'bg-[var(--color-background)] text-[var(--color-text-primary)] shadow-[0_1px_3px_rgba(0,0,0,0.08)]'
-                      : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
-                  }`}
-                >
-                  <GroupIcon size={13} className="shrink-0" />
-                  <span className="truncate">
-                    {t(`settings.routing.strategyGroup.${group.id}` as never)}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-
-          <div
-            role="listbox"
-            aria-label={t(`settings.routing.strategyGroup.${groupId}` as never)}
-            className="grid min-h-0 flex-1 grid-cols-1 gap-[5px] overflow-y-auto p-[7px] sm:grid-cols-2"
-          >
-            {activeGroup.strategies.map((strategy) => {
-              const selected = strategy === value
-              return (
-                <button
-                  key={strategy}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  onClick={() => {
-                    onChange(strategy)
-                    setOpen(false)
-                  }}
-                  className={`relative flex h-[58px] min-w-0 flex-col justify-center rounded-[6px] border px-[10px] text-left transition-colors ${
-                    selected
-                      ? 'border-[#1473e6]/45 bg-[#1473e6]/[0.07] dark:border-[#64a8ff]/45 dark:bg-[#64a8ff]/[0.08]'
-                      : 'border-[var(--color-border-separator)] hover:border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]'
-                  }`}
-                >
-                  <span className="flex items-center gap-[6px] pr-[18px] text-[11px] font-semibold text-[var(--color-text-primary)]">
-                    <span className="truncate">{t(strategyTranslationKey(strategy, 'name'))}</span>
-                  </span>
-                  <span className="mt-[2px] line-clamp-2 text-[9px] leading-[13px] text-[var(--color-text-tertiary)]">
-                    {t(strategyTranslationKey(strategy, 'description'))}
-                  </span>
-                  {selected && (
-                    <Check
-                      size={13}
-                      className="absolute right-[8px] top-[9px] text-[#1473e6] dark:text-[#64a8ff]"
-                    />
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function AccessBadge({
   tone,
   children,
@@ -314,46 +135,91 @@ export function SmartRoutingPanel({
   onOpenSources?: () => void
 } = {}) {
   const t = useTranslation()
-  const { dashboard, isLoading, isSaving, error, fetchDashboard, updateConfig, updateProfile } = useRoutingStore()
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null)
+  const {
+    dashboard,
+    isLoading,
+    isSaving,
+    error,
+    fetchDashboard,
+    updateConfig,
+    updateProfile,
+  } = useRoutingStore()
+  const [builderOpen, setBuilderOpen] = useState(false)
+  const [editingRoute, setEditingRoute] = useState<RouteProfile | null>(null)
+  const [routeToDelete, setRouteToDelete] = useState<RouteProfile | null>(null)
 
   useEffect(() => {
     void fetchDashboard()
   }, [fetchDashboard])
 
-  useEffect(() => {
-    const profiles = dashboard?.config.profiles ?? []
-    if (profiles.length === 0) {
-      setSelectedProfileId(null)
-      return
-    }
-    if (!selectedProfileId || !profiles.some((profile) => profile.id === selectedProfileId)) {
-      setSelectedProfileId(profiles.find((profile) => profile.enabled)?.id ?? profiles[0]!.id)
-    }
-  }, [dashboard?.config.profiles, selectedProfileId])
-
   if (isLoading && !dashboard) return <LoadingState />
   if (!dashboard) return <EmptyState text={error || t('settings.routing.loadFailed')} />
 
-  const routableSources = dashboard.sources.filter((source) => source.routable && source.providerId)
-  const profiles = dashboard.config.profiles
-  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0]
+  const routes = dashboard.config.profiles
+  const routableSources = dashboard.sources.filter((source) => (
+    source.routable && source.providerId && source.models.length > 0
+  ))
+
+  const openCreate = () => {
+    setEditingRoute(null)
+    setBuilderOpen(true)
+  }
+
+  const openEdit = (routeProfile: RouteProfile) => {
+    setEditingRoute(routeProfile)
+    setBuilderOpen(true)
+  }
+
+  const saveRoute = async (routeProfile: RouteProfile) => {
+    const profiles = editingRoute
+      ? routes.map((entry) => entry.id === editingRoute.id ? routeProfile : entry)
+      : [...routes, routeProfile]
+    await updateConfig({ ...dashboard.config, profiles })
+    if (useRoutingStore.getState().error) return
+    setBuilderOpen(false)
+    setEditingRoute(null)
+  }
+
+  const duplicateRoute = (routeProfile: RouteProfile) => {
+    const copyName = t('settings.routing.routeCopyName', { name: routeProfile.name })
+    const copy: RouteProfile = {
+      ...routeProfile,
+      id: createRouteId(copyName, routes.map((entry) => entry.id)),
+      name: copyName,
+      enabled: false,
+      targets: routeProfile.targets.map((target) => ({ ...target })),
+    }
+    void updateConfig({
+      ...dashboard.config,
+      profiles: [...routes, copy],
+    })
+  }
+
+  const deleteRoute = async () => {
+    if (!routeToDelete) return
+    await updateConfig({
+      ...dashboard.config,
+      profiles: routes.filter((entry) => entry.id !== routeToDelete.id),
+    })
+    if (useRoutingStore.getState().error) return
+    setRouteToDelete(null)
+  }
 
   return (
-    <div className="flex flex-col gap-[16px]">
+    <div className="flex flex-col gap-[14px]">
       <section className="overflow-hidden rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
         <header className="flex min-h-[76px] items-center justify-between gap-[18px] px-[18px] py-[14px] sm:px-[20px]">
           <div className="min-w-0">
             <h2 className="text-[16px] font-bold text-[var(--color-text-primary)]">
               {t('settings.routing.global')}
             </h2>
-            <p className="mt-[3px] text-[11px] leading-[17px] text-[var(--color-text-tertiary)]">
+            <p className="mt-[3px] max-w-[560px] text-[11px] leading-[17px] text-[var(--color-text-tertiary)]">
               {t('settings.routing.globalHint')}
             </p>
           </div>
 
           <div className="flex shrink-0 items-center gap-[10px]">
-            <span className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
+            <span className="hidden text-[11px] font-semibold text-[var(--color-text-secondary)] sm:block">
               {t(dashboard.config.enabled
                 ? 'settings.routing.globalEnabled'
                 : 'settings.routing.globalDisabled')}
@@ -367,483 +233,294 @@ export function SmartRoutingPanel({
             />
           </div>
         </header>
+      </section>
 
-        {selectedProfile ? (
-          <>
-            <div className="border-t border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] px-[16px] py-[14px] sm:px-[20px]">
-              <div>
-                <h3 className="text-[12px] font-bold text-[var(--color-text-primary)]">
-                  {t('settings.routing.routeProfiles')}
-                </h3>
-                <p className="mt-[2px] text-[10px] leading-[16px] text-[var(--color-text-tertiary)]">
-                  {t('settings.routing.profileSelectorHint')}
-                </p>
-              </div>
-
-              <nav
-                aria-label={t('settings.routing.routeProfiles')}
-                className="mt-[10px] grid grid-cols-2 gap-[6px] sm:grid-cols-3 xl:grid-cols-5"
-              >
-                {profiles.map((profile) => (
-                  <RouteProfileButton
-                    key={profile.id}
-                    profile={profile}
-                    candidateCount={dashboard.routeAvailability[profile.id]?.candidateCount ?? 0}
-                    selected={profile.id === selectedProfile.id}
-                    onSelect={() => setSelectedProfileId(profile.id)}
-                  />
-                ))}
-              </nav>
-            </div>
-
-            <RouteProfileDetail
-              profile={selectedProfile}
-              sources={routableSources}
-              candidateCount={dashboard.routeAvailability[selectedProfile.id]?.candidateCount ?? 0}
-              globallyEnabled={dashboard.config.enabled}
-              disabled={isSaving}
-              onOpenSources={onOpenSources}
-              onChange={(next) => void updateProfile(next)}
-            />
-          </>
-        ) : (
-          <div className="border-t border-[var(--color-border-separator)] px-[20px] py-[36px] text-center text-[12px] text-[var(--color-text-tertiary)]">
-            {t('settings.routing.noProfiles')}
+      <section className="overflow-hidden rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
+        <header className="flex min-h-[68px] items-center justify-between gap-[14px] border-b border-[var(--color-border-separator)] px-[18px] py-[12px] sm:px-[20px]">
+          <div className="min-w-0">
+            <h3 className="text-[13px] font-bold text-[var(--color-text-primary)]">
+              {t('settings.routing.myRoutes')}
+            </h3>
+            <p className="mt-[3px] text-[10px] leading-[16px] text-[var(--color-text-tertiary)]">
+              {t('settings.routing.myRoutesHint')}
+            </p>
           </div>
+          <Button
+            size="sm"
+            icon={<Plus size={14} />}
+            disabled={isSaving}
+            onClick={openCreate}
+            className="h-[36px] shrink-0 rounded-[7px] px-[13px] shadow-none"
+          >
+            {t('settings.routing.createRoute')}
+          </Button>
+        </header>
+
+        {routes.length > 0 ? (
+          <div className="divide-y divide-[var(--color-border-separator)]">
+            {routes.map((routeProfile) => (
+              <RouteListItem
+                key={routeProfile.id}
+                profile={routeProfile}
+                sources={routableSources}
+                candidateCount={dashboard.routeAvailability[routeProfile.id]?.candidateCount ?? 0}
+                globallyEnabled={dashboard.config.enabled}
+                disabled={isSaving}
+                onChange={(next) => void updateProfile(next)}
+                onEdit={() => openEdit(routeProfile)}
+                onDuplicate={() => duplicateRoute(routeProfile)}
+                onDelete={() => setRouteToDelete(routeProfile)}
+              />
+            ))}
+          </div>
+        ) : (
+          <RouteEmptyState
+            hasSources={routableSources.length > 0}
+            onCreate={openCreate}
+            onOpenSources={onOpenSources}
+          />
         )}
       </section>
 
       {error && <p className="text-[12px] text-[var(--color-error)]">{error}</p>}
+
+      <RouteBuilderDialog
+        open={builderOpen}
+        route={editingRoute}
+        sources={routableSources}
+        existingRouteIds={routes.map((routeProfile) => routeProfile.id)}
+        saving={isSaving}
+        onClose={() => {
+          if (isSaving) return
+          setBuilderOpen(false)
+          setEditingRoute(null)
+        }}
+        onSave={saveRoute}
+        onOpenSources={onOpenSources
+          ? () => {
+              setBuilderOpen(false)
+              onOpenSources()
+            }
+          : undefined}
+      />
+
+      <ConfirmDialog
+        open={routeToDelete !== null}
+        onClose={() => setRouteToDelete(null)}
+        onConfirm={deleteRoute}
+        title={t('settings.routing.deleteTitle')}
+        body={t('settings.routing.deleteBody', { name: routeToDelete?.name ?? '' })}
+        confirmLabel={t('common.delete')}
+        cancelLabel={t('common.cancel')}
+        confirmVariant="danger"
+        loading={isSaving}
+      />
     </div>
   )
 }
 
-function RouteProfileButton({
-  profile,
-  candidateCount,
-  selected,
-  onSelect,
-}: {
-  profile: RouteProfile
-  candidateCount: number
-  selected: boolean
-  onSelect: () => void
-}) {
-  const t = useTranslation()
-  const ProfileIcon = PROFILE_ICONS[profile.id as keyof typeof PROFILE_ICONS] ?? Route
-  const profileName = translatedOrFallback(
-    t,
-    profileTranslationKey(profile.id, 'name'),
-    profile.name,
-  )
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onSelect}
-      className={`flex min-h-[58px] min-w-0 items-center gap-[9px] rounded-[7px] border px-[10px] py-[8px] text-left transition-colors duration-150 ${
-        selected
-          ? 'border-[#1473e6]/50 bg-[#1473e6]/[0.07] dark:border-[#64a8ff]/50 dark:bg-[#64a8ff]/[0.08]'
-          : 'border-[var(--color-border-separator)] bg-[var(--color-surface-container-lowest)] hover:border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]'
-      } ${
-        profile.enabled ? '' : 'opacity-55'
-      }`}
-    >
-      <div className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[6px] ${
-        selected
-          ? 'bg-[#1473e6]/10 text-[#1473e6] dark:bg-[#64a8ff]/10 dark:text-[#64a8ff]'
-          : 'bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]'
-      }`}>
-        <ProfileIcon size={15} strokeWidth={1.9} />
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <span className={`block truncate text-[12px] font-bold ${
-          selected ? 'text-[#1473e6] dark:text-[#64a8ff]' : 'text-[var(--color-text-primary)]'
-        }`}>
-          {profileName}
-        </span>
-        <span className="mt-[2px] flex items-center gap-[5px] truncate text-[9px] leading-[14px] text-[var(--color-text-tertiary)]">
-          <span className={`h-[6px] w-[6px] shrink-0 rounded-full ${
-            profile.enabled && candidateCount > 0 ? 'bg-[var(--color-success)]' : 'bg-[var(--color-warning)]'
-          }`} />
-          {t('settings.routing.readyCount', { count: candidateCount })}
-        </span>
-      </div>
-    </button>
-  )
-}
-
-function RouteProfileDetail({
+function RouteListItem({
   profile,
   sources,
   candidateCount,
   globallyEnabled,
   disabled,
-  onOpenSources,
   onChange,
+  onEdit,
+  onDuplicate,
+  onDelete,
 }: {
   profile: RouteProfile
   sources: RoutingSource[]
   candidateCount: number
   globallyEnabled: boolean
   disabled: boolean
-  onOpenSources?: () => void
   onChange: (profile: RouteProfile) => void
+  onEdit: () => void
+  onDuplicate: () => void
+  onDelete: () => void
 }) {
   const t = useTranslation()
-  const [showSources, setShowSources] = useState(false)
-  const [showAdvanced, setShowAdvanced] = useState(false)
-  const profileName = translatedOrFallback(
-    t,
-    profileTranslationKey(profile.id, 'name'),
-    profile.name,
-  )
-  const profileDescription = translatedOrFallback(
-    t,
-    profileTranslationKey(profile.id, 'description'),
-    profile.description || '',
-  )
-  const explicitIds = new Set(profile.targets.map((target) => target.providerId))
-  const usesAllSources = profile.targets.length === 0
-  const selectedSources = sources.filter((source) => (
-    usesAllSources || explicitIds.has(source.providerId!)
-  ))
-  const unselectedSources = sources.filter((source) => (
-    !usesAllSources && !explicitIds.has(source.providerId!)
-  ))
-  const costPolicy = getCostPolicy(profile)
-
-  useEffect(() => {
-    setShowSources(false)
-    setShowAdvanced(false)
-  }, [profile.id])
-
-  const toggleSource = (providerId: string, checked: boolean) => {
-    const allIds = sources.map((source) => source.providerId!).filter(Boolean)
-    const selectedIds = usesAllSources ? new Set(allIds) : new Set(explicitIds)
-    if (checked) selectedIds.add(providerId)
-    else selectedIds.delete(providerId)
-    const targets = selectedIds.size === allIds.length
-      ? []
-      : allIds.filter((id) => selectedIds.has(id)).map((id) => ({ providerId: id }))
-    onChange({ ...profile, targets })
-  }
-
-  const changeCostPolicy = (policy: CostPolicy) => {
-    if (policy === 'free-only') {
-      onChange({ ...profile, strictFree: true })
-      return
+  const mode = routeBuilderModeFor(profile.strategy)
+  const isLegacyProfile = isUneditedLegacyRouteProfile(profile)
+  const profileName = isLegacyProfile
+    ? translatedOrFallback(
+        t,
+        profileTranslationKey(profile.id, 'name'),
+        profile.name,
+      )
+    : profile.name
+  const modeDescription = profile.strictFree
+    ? t('settings.routing.costPolicy.free-only.description')
+    : t(`settings.routing.mode.${mode}.description` as never)
+  const routeDescription = isLegacyProfile
+    ? translatedOrFallback(
+        t,
+        profileTranslationKey(profile.id, 'description'),
+        modeDescription,
+      )
+    : modeDescription
+  const behaviorName = isLegacyProfile
+    ? t(`settings.routing.strategy.${profile.strategy}.name` as never)
+    : t(`settings.routing.mode.${mode}.name` as never)
+  const configuredTargets = profile.targets.map((target) => {
+    const source = sources.find((item) => item.providerId === target.providerId)
+    return {
+      target,
+      source,
+      modelId: target.modelId ?? source?.models[0]?.id ?? '',
     }
-    if (policy === 'prefer-free') {
-      onChange({ ...profile, strictFree: false, strategy: 'cost-optimized' })
-      return
-    }
-    onChange({
-      ...profile,
-      strictFree: false,
-      strategy: profile.strategy === 'cost-optimized' ? 'auto' : profile.strategy,
-    })
-  }
+  })
 
   return (
-    <div className="min-w-0 border-t border-[var(--color-border-separator)] bg-[var(--color-surface-container-lowest)]">
-      <div className="flex flex-col gap-[14px] px-[16px] py-[16px] sm:flex-row sm:items-center sm:justify-between sm:px-[20px]">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-[8px]">
-            <h3 className="text-[16px] font-bold text-[var(--color-text-primary)]">{profileName}</h3>
-            <AccessBadge tone={candidateCount > 0 ? 'positive' : 'warning'}>
-              {t('settings.routing.candidates', { count: candidateCount })}
-            </AccessBadge>
-          </div>
-          {profileDescription && (
-            <p className="mt-[4px] max-w-[430px] text-[11px] leading-[17px] text-[var(--color-text-tertiary)]">
-              {profileDescription}
+    <article className={`px-[16px] py-[15px] sm:px-[20px] ${profile.enabled ? '' : 'opacity-60'}`}>
+      <div className="flex flex-col gap-[13px] sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-start gap-[11px]">
+          <span className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]">
+            <Route size={17} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-[7px]">
+              <h4 className="max-w-full truncate text-[13px] font-bold text-[var(--color-text-primary)]">
+                {profileName}
+              </h4>
+              <AccessBadge tone="neutral">
+                {behaviorName}
+              </AccessBadge>
+              <AccessBadge tone={candidateCount > 0 ? 'positive' : 'warning'}>
+                {t('settings.routing.readyCount', { count: candidateCount })}
+              </AccessBadge>
+            </div>
+            <p className="mt-[3px] text-[10px] leading-[16px] text-[var(--color-text-tertiary)]">
+              {routeDescription}
             </p>
-          )}
+
+            <div className="mt-[8px] flex min-w-0 items-center gap-[8px]">
+              {configuredTargets.length > 0 ? (
+                <>
+                  <div className="flex shrink-0 items-center gap-[3px]">
+                    {configuredTargets.slice(0, 4).map(({ target, source, modelId }, index) => (
+                      <ProviderLogo
+                        key={`${target.providerId}:${modelId}:${index}`}
+                        name={source?.name ?? target.providerId}
+                        providerId={source?.presetId}
+                        size="xs"
+                        decorative
+                      />
+                    ))}
+                  </div>
+                  <span className="min-w-0 truncate text-[10px] font-medium text-[var(--color-text-secondary)]">
+                    {configuredTargets
+                      .slice(0, 3)
+                      .map(({ modelId }) => modelId)
+                      .filter(Boolean)
+                      .join(' → ')}
+                    {configuredTargets.length > 3
+                      ? t('settings.routing.moreModels', { count: configuredTargets.length - 3 })
+                      : ''}
+                  </span>
+                </>
+              ) : (
+                <span className="text-[10px] font-medium text-[var(--color-text-secondary)]">
+                  {t('settings.routing.legacyAllModels')}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-[10px]">
-          <span className="text-[10px] font-semibold text-[var(--color-text-secondary)]">
-            {t('settings.routing.profileMenuVisibility')}
-          </span>
-          <Switch
-            checked={profile.enabled}
-            disabled={disabled || !globallyEnabled}
-            accent
-            ariaLabel={profileName}
-            onChange={(enabled) => onChange({ ...profile, enabled })}
-          />
+        <div className="flex shrink-0 items-center justify-between gap-[8px] border-t border-[var(--color-border-separator)] pt-[10px] sm:justify-end sm:border-t-0 sm:pt-0">
+          <div className="flex items-center gap-[2px]">
+            <RouteActionButton label={t('settings.routing.editRoute')} onClick={onEdit}>
+              <Pencil size={14} />
+            </RouteActionButton>
+            <RouteActionButton label={t('settings.routing.duplicateRoute')} onClick={onDuplicate}>
+              <Copy size={14} />
+            </RouteActionButton>
+            <RouteActionButton label={t('settings.routing.deleteRoute')} onClick={onDelete} danger>
+              <Trash2 size={14} />
+            </RouteActionButton>
+          </div>
+          <div className="ml-[4px] border-l border-[var(--color-border-separator)] pl-[12px]">
+            <Switch
+              checked={profile.enabled}
+              disabled={disabled || !globallyEnabled}
+              accent
+              ariaLabel={profileName}
+              onChange={(enabled) => onChange({ ...profile, enabled })}
+            />
+          </div>
         </div>
       </div>
-
-      <section className="border-t border-[var(--color-border-separator)] px-[16px] py-[16px] sm:px-[20px]">
-        <div className="flex flex-col gap-[10px] sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h4 className="text-[12px] font-bold text-[var(--color-text-primary)]">
-              {t('settings.routing.costBoundary')}
-            </h4>
-            <p className="mt-[3px] text-[10px] leading-[16px] text-[var(--color-text-tertiary)]">
-              {t(`settings.routing.costPolicy.${costPolicy}.description` as never)}
-            </p>
-          </div>
-
-          <div className="grid min-w-0 grid-cols-3 overflow-hidden rounded-[7px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] sm:w-[420px]">
-            {(['free-only', 'prefer-free', 'allow-paid'] as CostPolicy[]).map((policy, index) => {
-              const active = costPolicy === policy
-              return (
-                <button
-                  key={policy}
-                  type="button"
-                  disabled={disabled}
-                  aria-pressed={active}
-                  onClick={() => changeCostPolicy(policy)}
-                  className={`min-h-[36px] min-w-0 px-[7px] text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                    index > 0 ? 'border-l border-[var(--color-border-separator)]' : ''
-                  } ${
-                    active
-                      ? 'bg-[#1473e6]/10 text-[#1473e6] shadow-[inset_0_0_0_1px_#1473e6] dark:bg-[#64a8ff]/10 dark:text-[#64a8ff] dark:shadow-[inset_0_0_0_1px_#64a8ff]'
-                      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-                  }`}
-                >
-                  <span className="block truncate">
-                    {t(`settings.routing.costPolicy.${policy}.label` as never)}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      </section>
-
-      <section className="border-t border-[var(--color-border-separator)] px-[16px] py-[16px] sm:px-[20px]">
-        <div className="flex flex-col gap-[12px] sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <h4 className="text-[12px] font-bold text-[var(--color-text-primary)]">
-              {t('settings.routing.routeSources')}
-            </h4>
-            {selectedSources.length > 0 ? (
-              <div className="mt-[7px] flex min-w-0 items-center gap-[9px]">
-                <div className="flex shrink-0 items-center gap-[4px]">
-                  {selectedSources.slice(0, 4).map((source) => (
-                    <ProviderLogo
-                      key={source.id}
-                      name={source.name}
-                      providerId={source.presetId}
-                      size="xs"
-                      decorative
-                    />
-                  ))}
-                </div>
-                <span className="truncate text-[10px] text-[var(--color-text-secondary)]">
-                  {t(usesAllSources
-                    ? 'settings.routing.sourceSummaryAll'
-                    : 'settings.routing.sourceSummarySelected', {
-                    count: selectedSources.length,
-                  })}
-                </span>
-              </div>
-            ) : (
-              <p className="mt-[4px] text-[10px] leading-[16px] text-[var(--color-warning)]">
-                {t('settings.routing.noConfiguredSources')}
-              </p>
-            )}
-          </div>
-
-          <div className="flex shrink-0 items-center gap-[8px]">
-            {sources.length > 0 && (
-              <button
-                type="button"
-                aria-expanded={showSources}
-                onClick={() => {
-                  setShowSources((current) => !current)
-                  setShowAdvanced(false)
-                }}
-                className="h-[32px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[11px] text-[10px] font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-              >
-                {t(showSources
-                  ? 'settings.routing.doneManagingSources'
-                  : 'settings.routing.manageSources')}
-              </button>
-            )}
-            {onOpenSources && (
-              <button
-                type="button"
-                onClick={onOpenSources}
-                className="inline-flex h-[32px] items-center gap-[5px] rounded-[6px] px-[8px] text-[10px] font-semibold text-[#1473e6] hover:bg-[#1473e6]/[0.07] dark:text-[#64a8ff] dark:hover:bg-[#64a8ff]/[0.08]"
-              >
-                <Plus size={12} />
-                {t('settings.routing.addModelSources')}
-              </button>
-            )}
-          </div>
-        </div>
-
-        {showSources && (
-          <div className="mt-[14px] overflow-hidden border-y border-[var(--color-border-separator)]">
-            <p className="bg-[var(--color-surface-container-low)] px-[10px] py-[8px] text-[9px] leading-[14px] text-[var(--color-text-tertiary)]">
-              {t('settings.routing.sourceManagerHint')}
-            </p>
-            {[...selectedSources, ...unselectedSources].map((source) => {
-              const checked = usesAllSources || explicitIds.has(source.providerId!)
-              return (
-                <RoutingSourceChoice
-                  key={source.id}
-                  source={source}
-                  checked={checked}
-                  disabled={disabled || (checked && selectedSources.length <= 1)}
-                  onChange={(next) => toggleSource(source.providerId!, next)}
-                />
-              )
-            })}
-          </div>
-        )}
-      </section>
-
-      <section className="border-t border-[var(--color-border-separator)]">
-        <button
-          type="button"
-          aria-expanded={showAdvanced}
-          onClick={() => {
-            setShowAdvanced((current) => !current)
-            setShowSources(false)
-          }}
-          className="flex min-h-[50px] w-full items-center gap-[9px] px-[16px] text-left hover:bg-[var(--color-surface-hover)] sm:px-[20px]"
-        >
-          <SlidersHorizontal size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />
-          <span className="text-[11px] font-bold text-[var(--color-text-primary)]">
-            {t('settings.routing.advancedSettings')}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[10px] text-[var(--color-text-tertiary)]">
-            {t('settings.routing.advancedSummary', {
-              strategy: t(strategyTranslationKey(profile.strategy, 'name')),
-              count: profile.maxAttempts,
-            })}
-          </span>
-          <ChevronDown
-            size={14}
-            className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform ${
-              showAdvanced ? 'rotate-180' : ''
-            }`}
-          />
-        </button>
-
-        {showAdvanced && (
-          <div className="grid gap-[14px] border-t border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] px-[16px] py-[14px] sm:grid-cols-3 sm:px-[20px]">
-            <div>
-              <span className="mb-[5px] block text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                {t('settings.routing.strategyLabel')}
-              </span>
-              <RoutingStrategyPicker
-                value={profile.strategy}
-                disabled={disabled}
-                onChange={(strategy) => onChange({ ...profile, strategy })}
-              />
-            </div>
-
-            <div>
-              <span className="mb-[5px] block text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                {t('settings.routing.maxAttempts')}
-              </span>
-              <div className="flex h-[34px] w-fit overflow-hidden rounded-[7px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
-                <button
-                  type="button"
-                  aria-label={t('settings.routing.decreaseAttempts')}
-                  disabled={disabled || profile.maxAttempts <= 1}
-                  onClick={() => onChange({ ...profile, maxAttempts: Math.max(1, profile.maxAttempts - 1) })}
-                  className="flex w-[32px] items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-35"
-                >
-                  <Minus size={13} />
-                </button>
-                <span className="flex w-[34px] items-center justify-center border-x border-[var(--color-border-separator)] text-[11px] font-bold text-[var(--color-text-primary)]">
-                  {profile.maxAttempts}
-                </span>
-                <button
-                  type="button"
-                  aria-label={t('settings.routing.increaseAttempts')}
-                  disabled={disabled || profile.maxAttempts >= 3}
-                  onClick={() => onChange({ ...profile, maxAttempts: Math.min(3, profile.maxAttempts + 1) })}
-                  className="flex w-[32px] items-center justify-center text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-35"
-                >
-                  <Plus size={13} />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-end justify-between gap-[10px] sm:justify-start">
-              <span className="pb-[8px] text-[10px] font-semibold text-[var(--color-text-secondary)]">
-                {t('settings.routing.experimental')}
-              </span>
-              <div className="pb-[4px]">
-                <Switch
-                  checked={profile.allowExperimental}
-                  disabled={disabled}
-                  accent
-                  ariaLabel={t('settings.routing.experimental')}
-                  onChange={(allowExperimental) => onChange({ ...profile, allowExperimental })}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-      </section>
-    </div>
+    </article>
   )
 }
 
-function RoutingSourceChoice({
-  source,
-  checked,
-  disabled,
-  onChange,
+function RouteActionButton({
+  label,
+  danger = false,
+  onClick,
+  children,
 }: {
-  source: RoutingSource
-  checked: boolean
-  disabled: boolean
-  onChange: (checked: boolean) => void
+  label: string
+  danger?: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={`flex h-[32px] w-[32px] items-center justify-center rounded-[6px] transition-colors ${
+        danger
+          ? 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-error)]/10 hover:text-[var(--color-error)]'
+          : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function RouteEmptyState({
+  hasSources,
+  onCreate,
+  onOpenSources,
+}: {
+  hasSources: boolean
+  onCreate: () => void
+  onOpenSources?: () => void
 }) {
   const t = useTranslation()
-
   return (
-    <div className="flex min-h-[48px] items-center gap-[9px] border-t border-[var(--color-border-separator)] px-[10px] first:border-t-0">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-        aria-label={t('settings.routing.toggleSource', { source: source.name })}
-        className="h-[15px] w-[15px] shrink-0 accent-[#1473e6] disabled:opacity-45 dark:accent-[#64a8ff]"
-      />
-      <ProviderLogo name={source.name} providerId={source.presetId} size="xs" decorative />
-      <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[var(--color-text-primary)]">
-        {source.name}
+    <div className="flex min-h-[236px] flex-col items-center justify-center px-[24px] py-[32px] text-center">
+      <span className="flex h-[44px] w-[44px] items-center justify-center rounded-[9px] bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]">
+        <Route size={20} />
       </span>
-      <SourceCostBadge source={source} />
+      <h4 className="mt-[13px] text-[14px] font-bold text-[var(--color-text-primary)]">
+        {t(hasSources
+          ? 'settings.routing.emptyTitle'
+          : 'settings.routing.emptyNoSourcesTitle')}
+      </h4>
+      <p className="mt-[5px] max-w-[390px] text-[11px] leading-[18px] text-[var(--color-text-tertiary)]">
+        {t(hasSources
+          ? 'settings.routing.emptyHint'
+          : 'settings.routing.emptyNoSourcesHint')}
+      </p>
+      <Button
+        size="sm"
+        icon={<Plus size={14} />}
+        onClick={hasSources || !onOpenSources ? onCreate : onOpenSources}
+        className="mt-[16px] h-[36px] rounded-[7px] px-[14px] shadow-none"
+      >
+        {t(hasSources || !onOpenSources
+          ? 'settings.routing.createFirstRoute'
+          : 'settings.routing.addModelSources')}
+      </Button>
     </div>
   )
-}
-
-function SourceCostBadge({ source }: { source: RoutingSource }) {
-  const t = useTranslation()
-  const tone = source.cost === 'paid'
-    ? 'bg-[var(--color-error)]/8 text-[var(--color-error)]'
-    : source.cost === 'mixed' || source.cost === 'signup-credit'
-      ? 'bg-[var(--color-warning)]/12 text-[var(--color-text-secondary)]'
-      : source.cost === 'unknown'
-        ? 'bg-[var(--color-surface-container-high)] text-[var(--color-text-tertiary)]'
-        : 'bg-[#22a447]/10 text-[#168438] dark:text-[#62c97e]'
-
-  return (
-    <span className={`inline-flex max-w-full items-center rounded-[5px] px-[6px] py-[3px] text-[9px] font-semibold ${tone}`}>
-      <span className="truncate">{t(`settings.routing.cost.${source.cost}` as never)}</span>
-    </span>
-  )
-}
-
-function getCostPolicy(profile: RouteProfile): CostPolicy {
-  if (profile.strictFree) return 'free-only'
-  if (profile.strategy === 'cost-optimized') return 'prefer-free'
-  return 'allow-paid'
 }
 
 export function RoutingStatusPanel() {

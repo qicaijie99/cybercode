@@ -12,11 +12,24 @@ import { requireAuth } from './middleware/auth.js'
 import { teamWatcher } from './services/teamWatcher.js'
 import { cronScheduler } from './services/cronScheduler.js'
 import { handleProxyRequest } from './proxy/handler.js'
+import { handleGatewayRequest } from './gateway/handler.js'
 import { ProviderService } from './services/providerService.js'
 import { handleCybercodeOAuthCallback } from './api/cybercode-oauth.js'
 import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
 import { codeGraphService } from './services/codeGraphService.js'
 import { startCybercodeUsageReporter } from '../services/cybercodeUsageAnalytics.js'
+import { conversationService } from './services/conversationService.js'
+import {
+  startProviderModelSyncScheduler,
+  stopProviderModelSyncScheduler,
+} from './services/providerModelSyncScheduler.js'
+
+type StoppableServer = {
+  stop(closeActiveConnections?: boolean): void
+}
+
+let activeServer: StoppableServer | null = null
+let shutdownPromise: Promise<void> | null = null
 
 function readArgValue(flag: string): string | undefined {
   const args = process.argv.slice(2)
@@ -157,6 +170,19 @@ export function startServer(port = PORT, host = HOST) {
         return handleCybercodeOAuthCallback(url)
       }
 
+      if (url.pathname === '/internal/shutdown' && req.method === 'POST') {
+        if (!process.env.SERVER_AUTH_TOKEN) {
+          return new Response('Not Found', { status: 404 })
+        }
+        const authError = requireAuth(req)
+        if (authError) return authError
+
+        setTimeout(() => {
+          void shutdownServer(server, 'desktop request')
+        }, 0)
+        return Response.json({ status: 'shutting_down' }, { status: 202 })
+      }
+
       // REST API
       if (url.pathname.startsWith('/api/')) {
         // Enforce authentication when required
@@ -222,6 +248,27 @@ export function startServer(port = PORT, host = HOST) {
         }
       }
 
+      // External-agent node — OpenAI-compatible gateway with its own scoped API key.
+      if (url.pathname.startsWith('/v1/')) {
+        try {
+          const response = await handleGatewayRequest(req, url)
+          const headers = new Headers(response.headers)
+          for (const [key, value] of Object.entries(corsHeaders(origin))) {
+            headers.set(key, value)
+          }
+          return new Response(response.body, {
+            status: response.status,
+            headers,
+          })
+        } catch (error) {
+          console.error('[Server] Gateway error:', error)
+          return Response.json(
+            { error: { message: 'Internal gateway error', type: 'server_error' } },
+            { status: 500, headers: corsHeaders(origin) },
+          )
+        }
+      }
+
       // Health check
       if (url.pathname === '/health') {
         return Response.json(
@@ -241,6 +288,7 @@ export function startServer(port = PORT, host = HOST) {
 
   // Start the cron scheduler to execute scheduled tasks
   cronScheduler.start()
+  startProviderModelSyncScheduler()
 
   void ensureDesktopCliLauncherInstalled().catch((error) => {
     console.error(
@@ -252,38 +300,74 @@ export function startServer(port = PORT, host = HOST) {
   codeGraphService.restoreEnabledProjects()
   startCybercodeUsageReporter('desktop')
 
+  activeServer = server
   console.log(`[Server] CyberCode API server running at http://${host}:${port}`)
   return server
 }
 
-// ─── Graceful shutdown: kill all CLI subprocesses on exit ────────────────────
-import { conversationService } from './services/conversationService.js'
-
-function cleanupAllSessions() {
+// ─── Graceful shutdown: close owned runtimes before the sidecar exits ────────
+async function cleanupAllSessions(): Promise<void> {
   codeGraphService.shutdown()
+  teamWatcher.stop()
+  stopProviderModelSyncScheduler()
+  await cronScheduler.stopAndWait()
+
   const active = conversationService.getActiveSessions()
   if (active.length > 0) {
-    console.log(`[Server] Shutting down — killing ${active.length} CLI subprocess(es)`)
-    for (const sessionId of active) {
-      conversationService.stopSession(sessionId)
-    }
+    console.log(
+      `[Server] Shutting down — closing ${active.length} CLI subprocess(es)`,
+    )
+  }
+  await conversationService.stopAllSessions()
+}
+
+function cleanupAllSessionsSync(): void {
+  codeGraphService.shutdown()
+  teamWatcher.stop()
+  stopProviderModelSyncScheduler()
+  cronScheduler.stop()
+  for (const sessionId of conversationService.getActiveSessions()) {
+    conversationService.stopSession(sessionId)
   }
 }
 
+function shutdownServer(
+  server: StoppableServer | null,
+  reason: string,
+): Promise<void> {
+  if (shutdownPromise) return shutdownPromise
+
+  shutdownPromise = (async () => {
+    console.log(`[Server] Graceful shutdown requested (${reason})`)
+    try {
+      await cleanupAllSessions()
+    } catch (error) {
+      console.error(
+        '[Server] Graceful shutdown cleanup failed:',
+        error instanceof Error ? error.message : error,
+      )
+    } finally {
+      server?.stop(true)
+      process.exit(0)
+    }
+  })()
+  return shutdownPromise
+}
+
+export function requestServerShutdown(reason: string): Promise<void> {
+  return shutdownServer(activeServer, reason)
+}
+
 process.on('SIGTERM', () => {
-  console.log('[Server] Received SIGTERM')
-  cleanupAllSessions()
-  process.exit(0)
+  void requestServerShutdown('SIGTERM')
 })
 
 process.on('SIGINT', () => {
-  console.log('[Server] Received SIGINT')
-  cleanupAllSessions()
-  process.exit(0)
+  void requestServerShutdown('SIGINT')
 })
 
 process.on('exit', () => {
-  cleanupAllSessions()
+  cleanupAllSessionsSync()
 })
 
 // Direct execution

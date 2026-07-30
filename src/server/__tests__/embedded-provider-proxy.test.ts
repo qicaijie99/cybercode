@@ -3,10 +3,13 @@ import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 import {
+  activateRouteForCli,
   ensureActiveProviderRuntime,
+  ensureEmbeddedRuntimeServer,
   getEmbeddedProviderProxyPort,
   stopEmbeddedProviderProxy,
 } from '../proxy/embeddedProxy.js'
+import { routingService } from '../routing/routingService.js'
 import { ProviderService } from '../services/providerService.js'
 
 const ENV_KEYS = [
@@ -15,7 +18,9 @@ const ENV_KEYS = [
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_MODEL',
+  'CYBERCODE_MODEL_CONTEXT_WINDOWS',
   'CYBERCODE_PROVIDER_ID',
+  'CYBERCODE_TUI_SERVER_PORT',
 ] as const
 
 describe('standalone CLI provider runtime', () => {
@@ -27,9 +32,11 @@ describe('standalone CLI provider runtime', () => {
     originalEnv = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]))
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cybercode-embedded-proxy-'))
     process.env.CLAUDE_CONFIG_DIR = tmpDir
+    process.env.CYBERCODE_TUI_SERVER_PORT = '0'
     delete process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
     upstream = null
     stopEmbeddedProviderProxy()
+    routingService.resetHealth()
   })
 
   afterEach(async () => {
@@ -117,6 +124,84 @@ describe('standalone CLI provider runtime', () => {
     expect(getEmbeddedProviderProxyPort()).toBe(runtime.proxyPort!)
   })
 
+  test('activates a smart route through the same built-in TUI runtime', async () => {
+    upstream = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch() {
+        return Response.json({
+          id: 'chatcmpl-route',
+          object: 'chat.completion',
+          created: 1,
+          model: 'route-model',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'routed' },
+            finish_reason: 'stop',
+          }],
+          usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+        })
+      },
+    })
+
+    const service = new ProviderService()
+    const provider = await service.addProvider({
+      presetId: 'custom',
+      name: 'Route target',
+      apiKey: 'route-secret',
+      baseUrl: `http://127.0.0.1:${upstream.port}`,
+      apiFormat: 'openai_chat',
+      models: {
+        main: 'route-model',
+        haiku: 'route-model',
+        sonnet: 'route-model',
+        opus: 'route-model',
+      },
+    })
+    await routingService.updateConfig({
+      version: 1,
+      enabled: true,
+      profiles: [{
+        id: 'tui-route',
+        name: 'TUI route',
+        enabled: true,
+        strategy: 'priority',
+        strictFree: false,
+        allowExperimental: true,
+        maxAttempts: 2,
+        targets: [{ providerId: provider.id, modelId: 'route-model' }],
+      }],
+    })
+
+    const runtime = await activateRouteForCli('tui-route', 'tui-session')
+
+    expect(runtime.mode).toBe('route')
+    expect(runtime.model).toBe('cybercode-route-tui-route')
+    expect(process.env.ANTHROPIC_BASE_URL).toBe(
+      `http://127.0.0.1:${runtime.proxyPort}/proxy/routes/tui-route/sessions/tui-session`,
+    )
+    expect(ensureEmbeddedRuntimeServer().port).toBe(runtime.proxyPort)
+
+    const response = await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+      },
+      body: JSON.stringify({
+        model: runtime.model,
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'route this' }],
+      }),
+    })
+    const body = await response.json() as {
+      content: Array<{ type: string; text?: string }>
+    }
+
+    expect(response.status).toBe(200)
+    expect(body.content).toEqual([{ type: 'text', text: 'routed' }])
+  })
+
   test('connects directly when the provider already supports Anthropic Messages', async () => {
     const service = new ProviderService()
     const provider = await service.addProvider({
@@ -152,6 +237,9 @@ describe('standalone CLI provider runtime', () => {
     expect(getEmbeddedProviderProxyPort()).toBeNull()
     expect(process.env.ANTHROPIC_BASE_URL).toBe(
       'http://127.0.0.1:3456/proxy/providers/desktop',
+    )
+    expect(() => ensureEmbeddedRuntimeServer()).toThrow(
+      'manage the node from Desktop settings',
     )
   })
 

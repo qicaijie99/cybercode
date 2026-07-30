@@ -90,14 +90,8 @@ describe('ModelSelector', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/i }))
 
-    const volcanoHeader = screen
-      .getAllByText('火山')
-      .find((element) => element.className.includes('text-[var(--color-text-primary)]'))
-      ?.parentElement
-    const qianfanHeader = screen
-      .getAllByText('百度千帆')
-      .find((element) => element.className.includes('text-[var(--color-text-primary)]'))
-      ?.parentElement
+    const volcanoHeader = screen.getByRole('button', { name: /火山/ })
+    const qianfanHeader = screen.getByRole('button', { name: /百度千帆/ })
 
     expect(volcanoHeader?.querySelector('[data-provider-logo="volcengine"]')).toBeInTheDocument()
     expect(volcanoHeader?.querySelector('[data-provider-logo="zhipuglm"]')).not.toBeInTheDocument()
@@ -136,6 +130,7 @@ describe('ModelSelector', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Kimi/ }))
     fireEvent.click(screen.getByText('kimi-k2.6').closest('button')!)
 
     expect(onRuntimeChange).toHaveBeenCalledWith({
@@ -184,6 +179,7 @@ describe('ModelSelector', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/i }))
     expect(screen.getAllByText('Claude Official').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('tab', { name: /Routes/ }))
     fireEvent.click(screen.getByText('Team route').closest('button')!)
 
     expect(onRuntimeChange).toHaveBeenCalledWith({
@@ -193,6 +189,97 @@ describe('ModelSelector', () => {
       modelId: 'cybercode-route-team-route',
       contextWindow: 262_144,
     })
+  })
+
+  it('shows the real strategy for untouched legacy routes', () => {
+    useRoutingStore.setState({
+      dashboard: {
+        config: {
+          version: 1,
+          enabled: true,
+          profiles: [{
+            id: 'coding-first',
+            name: 'Coding first',
+            description: 'Legacy coding route',
+            enabled: true,
+            strategy: 'headroom',
+            strictFree: false,
+            allowExperimental: false,
+            maxAttempts: 3,
+            targets: [{ providerId: 'legacy-provider' }],
+          }],
+        },
+        sources: [],
+        health: [],
+        events: [],
+        routeAvailability: {
+          'coding-first': { candidateCount: 2, available: true },
+        },
+      },
+    })
+
+    render(
+      <ModelSelector
+        runtimeValue={{ providerId: null, modelId: 'claude-opus-4-8' }}
+        onRuntimeChange={vi.fn()}
+        compact
+        variant="pill"
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /Routes/ }))
+
+    expect(screen.getByText('Context headroom · 2 models ready')).toBeInTheDocument()
+    expect(screen.queryByText('Reliability first · 2 models ready')).not.toBeInTheDocument()
+  })
+
+  it('filters providers and keeps unrelated model groups collapsed', () => {
+    useProviderStore.setState({
+      providers: [
+        makeProvider({
+          id: 'kimi',
+          presetId: 'kimi',
+          name: 'Kimi',
+          models: {
+            main: 'kimi-k2.6',
+            haiku: '',
+            sonnet: '',
+            opus: '',
+          },
+        }),
+        makeProvider({
+          id: 'deepseek',
+          presetId: 'deepseek',
+          name: 'DeepSeek',
+          models: {
+            main: 'deepseek-v3',
+            haiku: '',
+            sonnet: '',
+            opus: '',
+          },
+        }),
+      ],
+    })
+
+    render(
+      <ModelSelector
+        runtimeValue={{ providerId: null, modelId: 'claude-opus-4-8' }}
+        onRuntimeChange={vi.fn()}
+        compact
+        variant="pill"
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/i }))
+    expect(screen.queryByText('kimi-k2.6')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search models or providers' }), {
+      target: { value: 'kimi' },
+    })
+
+    expect(screen.getByText('kimi-k2.6')).toBeInTheDocument()
+    expect(screen.queryByText('deepseek-v3')).not.toBeInTheDocument()
   })
 
   it('refreshes route availability whenever the runtime selector is reopened', async () => {

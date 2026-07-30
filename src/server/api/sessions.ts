@@ -25,6 +25,8 @@ import {
   previewSessionRewind,
   type RewindTargetSelector,
 } from '../services/sessionRewindService.js'
+import { handleSessionGitApi } from './gitWorkspace.js'
+import { gitWorkspaceService } from '../services/gitWorkspaceService.js'
 
 export async function handleSessionsApi(
   req: Request,
@@ -84,6 +86,10 @@ export async function handleSessionsApi(
         )
       }
       return await getGitInfo(sessionId, url)
+    }
+
+    if (subResource === 'git') {
+      return await handleSessionGitApi(req, url, sessionId, segments[4])
     }
 
     if (subResource === 'rewind') {
@@ -466,51 +472,14 @@ async function getGitInfo(sessionId: string, url: URL): Promise<Response> {
   }
 
   try {
-    // Get branch name
-    const branchProc = Bun.spawn(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: workDir,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    const branchText = await new Response(branchProc.stdout).text()
-    const branch = branchText.trim()
-
-    // Get repo name from remote or directory
-    let repoName = ''
-    try {
-      const remoteProc = Bun.spawn(['git', 'remote', 'get-url', 'origin'], {
-        cwd: workDir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-      })
-      const remoteText = await new Response(remoteProc.stdout).text()
-      const remote = remoteText.trim()
-      // Extract repo name from URL: git@github.com:user/repo.git or https://...repo.git
-      const match = remote.match(/\/([^/]+?)(?:\.git)?$/) || remote.match(/:([^/]+\/[^/]+?)(?:\.git)?$/)
-      repoName = match ? match[1]! : ''
-    } catch {
-      // No remote, use directory name
-      const parts = workDir.split('/')
-      repoName = parts[parts.length - 1] || ''
-    }
-
-    // Get short status
-    const statusProc = Bun.spawn(['git', 'status', '--porcelain'], {
-      cwd: workDir,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    const statusText = await new Response(statusProc.stdout).text()
-    const changedFiles = statusText.trim().split('\n').filter(Boolean).length
-
+    const status = await gitWorkspaceService.getStatus(workDir)
     return Response.json({
-      branch,
-      repoName,
+      branch: status.branch,
+      repoName: status.repoName,
       workDir,
-      changedFiles,
+      changedFiles: status.changes.length,
     })
   } catch {
-    // Not a git repo or git not available
     return Response.json({
       branch: null,
       repoName: null,

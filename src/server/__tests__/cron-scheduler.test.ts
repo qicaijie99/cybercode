@@ -268,6 +268,7 @@ describe('CronScheduler', () => {
     expect(env.ANTHROPIC_BASE_URL).toBe('https://api.example.com')
     expect(env.ANTHROPIC_API_KEY).toBe('secret-key')
     expect(env.ANTHROPIC_MODEL).toBe('kimi-k2.6')
+    expect(env.CYBERCODE_AGENT_BROWSER_SESSION_ID).toBe(`cron-${task.id}`)
     expect(JSON.parse(env.CYBERCODE_MODEL_CONTEXT_WINDOWS)).toEqual({
       'kimi-k2.6': 1000000,
     })

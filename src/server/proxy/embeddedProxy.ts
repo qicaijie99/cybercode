@@ -6,6 +6,8 @@ import {
   getProviderManagedEnvKeys,
 } from '../services/providerService.js'
 import type { SavedProvider } from '../types/provider.js'
+import { handleGatewayRequest } from '../gateway/handler.js'
+import { routingService } from '../routing/routingService.js'
 import { handleProxyRequest } from './handler.js'
 
 type EmbeddedProxyServer = ReturnType<typeof Bun.serve>
@@ -14,6 +16,13 @@ export type ProviderRuntimeStatus = {
   mode: 'official' | 'direct' | 'proxy' | 'host-managed'
   provider?: SavedProvider
   proxyPort?: number
+}
+
+export type RouteRuntimeStatus = {
+  mode: 'route'
+  routeId: string
+  model: string
+  proxyPort: number
 }
 
 let embeddedProxy: EmbeddedProxyServer | null = null
@@ -53,17 +62,36 @@ function registerProxyCleanup(): void {
   })
 }
 
-function startEmbeddedProxy(): EmbeddedProxyServer {
-  if (embeddedProxy) return embeddedProxy
+function preferredEmbeddedPort(): number {
+  const configured = Number.parseInt(process.env.CYBERCODE_TUI_SERVER_PORT ?? '3456', 10)
+  return Number.isInteger(configured) && configured >= 0 && configured <= 65_535
+    ? configured
+    : 3456
+}
 
-  embeddedProxy = Bun.serve({
+function createEmbeddedProxy(port: number): EmbeddedProxyServer {
+  return Bun.serve({
     hostname: '127.0.0.1',
-    port: 0,
+    port,
     idleTimeout: 60,
     async fetch(req) {
       const url = new URL(req.url)
       if (url.pathname === '/health') {
-        return Response.json({ status: 'ok', service: 'cybercode-provider-proxy' })
+        return Response.json({ status: 'ok', service: 'cybercode-tui-runtime' })
+      }
+      if (url.pathname.startsWith('/v1/')) {
+        try {
+          return await handleGatewayRequest(req, url)
+        } catch (error) {
+          logForDebugging(
+            `[tui-runtime] gateway request failed: ${error instanceof Error ? error.message : String(error)}`,
+            { level: 'error' },
+          )
+          return Response.json(
+            { error: { type: 'server_error', message: 'Internal gateway error' } },
+            { status: 500 },
+          )
+        }
       }
       if (!url.pathname.startsWith('/proxy/')) {
         return new Response('Not Found', { status: 404 })
@@ -89,12 +117,42 @@ function startEmbeddedProxy(): EmbeddedProxyServer {
       }
     },
   })
+}
+
+function startEmbeddedProxy(): EmbeddedProxyServer {
+  if (embeddedProxy) return embeddedProxy
+
+  const preferredPort = preferredEmbeddedPort()
+  try {
+    embeddedProxy = createEmbeddedProxy(preferredPort)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (
+      preferredPort === 0 ||
+      (code !== 'EADDRINUSE' && !String(error).includes('address already in use'))
+    ) {
+      throw error
+    }
+    embeddedProxy = createEmbeddedProxy(0)
+  }
 
   registerProxyCleanup()
   logForDebugging(
-    `[provider-proxy] embedded proxy listening on 127.0.0.1:${embeddedProxy.port}`,
+    `[tui-runtime] embedded server listening on 127.0.0.1:${embeddedProxy.port}`,
   )
   return embeddedProxy
+}
+
+export function ensureEmbeddedRuntimeServer(): { port: number; origin: string } {
+  if (isProviderManagedByHost()) {
+    throw new Error('This session uses the CyberCode Desktop runtime; manage the node from Desktop settings')
+  }
+  const server = startEmbeddedProxy()
+  ProviderService.setServerPort(server.port)
+  return {
+    port: server.port,
+    origin: `http://127.0.0.1:${server.port}`,
+  }
 }
 
 /**
@@ -119,8 +177,7 @@ export async function ensureActiveProviderRuntime(options?: {
   }
 
   if ((provider.apiFormat ?? 'anthropic') !== 'anthropic') {
-    const server = startEmbeddedProxy()
-    ProviderService.setServerPort(server.port)
+    const server = ensureEmbeddedRuntimeServer()
     await providerService.activateProvider(provider.id)
     const runtimeEnv = await providerService.getProviderRuntimeEnv(provider.id)
     if (options?.applyEnvironment !== false) applyProviderEnvironment(runtimeEnv)
@@ -131,6 +188,21 @@ export async function ensureActiveProviderRuntime(options?: {
   const runtimeEnv = await providerService.getProviderRuntimeEnv(provider.id)
   if (options?.applyEnvironment !== false) applyProviderEnvironment(runtimeEnv)
   return { mode: 'direct', provider }
+}
+
+export async function activateRouteForCli(
+  routeId: string,
+  sessionId: string,
+): Promise<RouteRuntimeStatus> {
+  const server = ensureEmbeddedRuntimeServer()
+  const runtimeEnv = await routingService.getRuntimeEnv(routeId, sessionId)
+  applyProviderEnvironment(runtimeEnv)
+  return {
+    mode: 'route',
+    routeId,
+    model: runtimeEnv.ANTHROPIC_MODEL!,
+    proxyPort: server.port,
+  }
 }
 
 export async function activateProviderForCli(

@@ -121,7 +121,7 @@ private func requireScreenRecordingPermission() throws {
   }
   throw HelperFailure(
     code: "SCREEN_CAPTURE_PERMISSION_REQUIRED",
-    message: "Screen Recording permission is required for CyberCode Computer Use"
+    message: "Grant Screen Recording permission to CyberCode Computer Use (not Terminal or iTerm), then retry"
   )
 }
 

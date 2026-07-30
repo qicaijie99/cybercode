@@ -67,6 +67,22 @@ describe('agent-browser setup', () => {
     expect(name.length).toBeLessThanOrEqual(64)
     expect(name).toMatch(/^cybercode-[A-Za-z0-9_-]+$/)
   })
+
+  test('isolates standalone CLI browser sessions and gives them an idle timeout', () => {
+    process.env.CYBER_AGENT_BROWSER_PATH = process.execPath
+    process.env.AGENT_BROWSER_SOCKET_DIR = '/tmp/cyber-agent-browser-test'
+    delete process.env.CYBERCODE_AGENT_BROWSER_SESSION_ID
+    delete process.env.AGENT_BROWSER_SESSION
+    delete process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS
+
+    const setup = setupAgentBrowserMCP()
+    const config = setup?.mcpConfig[AGENT_BROWSER_MCP_SERVER_NAME]
+
+    expect(config?.env).toMatchObject({
+      AGENT_BROWSER_SESSION: `cybercode-cli-${process.pid}`,
+      AGENT_BROWSER_IDLE_TIMEOUT_MS: '1800000',
+    })
+  })
 })
 
 function restoreEnv(name: string, value: string | undefined) {

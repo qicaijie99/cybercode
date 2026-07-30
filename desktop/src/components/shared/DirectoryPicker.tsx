@@ -4,6 +4,7 @@ import { ChevronRight, Folder, FolderOpen, GitBranch } from 'lucide-react'
 import { sessionsApi, type RecentProject } from '../../api/sessions'
 import { filesystemApi } from '../../api/filesystem'
 import { useTranslation } from '../../i18n'
+import { subscribeToViewportChanges } from '../../lib/viewportEvents'
 import { Icon } from './Icon'
 
 type Props = {
@@ -14,10 +15,22 @@ type Props = {
 
 type DirEntry = { name: string; path: string; isDirectory: boolean }
 
+type DropdownPosition = {
+  top: number
+  left: number
+  width: number
+  maxHeight: number
+  direction: 'up' | 'down'
+}
+
 // Module-level cache for recent projects (shared across instances, survives re-renders)
 let cachedProjects: RecentProject[] | null = null
 let cacheTimestamp = 0
 const CACHE_TTL = 30_000 // 30s
+const DROPDOWN_WIDTH = 320
+const DROPDOWN_HEIGHT = 380
+const VIEWPORT_MARGIN = 12
+const DROPDOWN_GAP = 4
 
 function isTauriRuntime() {
   return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
@@ -32,7 +45,7 @@ export function DirectoryPicker({ value, onChange, variant = 'default' }: Props)
   const [browsePath, setBrowsePath] = useState('')
   const [browseParent, setBrowseParent] = useState('')
   const [loading, setLoading] = useState(false)
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; direction: 'up' | 'down' } | null>(null)
+  const [dropdownPos, setDropdownPos] = useState<DropdownPosition | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
 
@@ -41,13 +54,23 @@ export function DirectoryPicker({ value, onChange, variant = 'default' }: Props)
   const updateDropdownPos = useCallback(() => {
     if (!triggerRef.current) return
     const rect = triggerRef.current.getBoundingClientRect()
-    const DROPDOWN_HEIGHT = 380 // approximate max height
-    const spaceAbove = rect.top
-    const spaceBelow = window.innerHeight - rect.bottom
+    const width = Math.min(
+      DROPDOWN_WIDTH,
+      Math.max(1, window.innerWidth - VIEWPORT_MARGIN * 2),
+    )
+    const maxLeft = Math.max(
+      VIEWPORT_MARGIN,
+      window.innerWidth - width - VIEWPORT_MARGIN,
+    )
+    const spaceAbove = rect.top - DROPDOWN_GAP - VIEWPORT_MARGIN
+    const spaceBelow = window.innerHeight - rect.bottom - DROPDOWN_GAP - VIEWPORT_MARGIN
     const direction = spaceBelow >= DROPDOWN_HEIGHT || spaceBelow >= spaceAbove ? 'down' : 'up'
+    const availableHeight = direction === 'down' ? spaceBelow : spaceAbove
     setDropdownPos({
-      top: direction === 'down' ? rect.bottom + 4 : rect.top - 4,
-      left: rect.left,
+      top: direction === 'down' ? rect.bottom + DROPDOWN_GAP : rect.top - DROPDOWN_GAP,
+      left: Math.min(Math.max(rect.left, VIEWPORT_MARGIN), maxLeft),
+      width,
+      maxHeight: Math.max(48, Math.min(DROPDOWN_HEIGHT, availableHeight)),
       direction,
     })
   }, [])
@@ -69,12 +92,7 @@ export function DirectoryPicker({ value, onChange, variant = 'default' }: Props)
   useEffect(() => {
     if (!isOpen) return
     updateDropdownPos()
-    window.addEventListener('scroll', updateDropdownPos, true)
-    window.addEventListener('resize', updateDropdownPos)
-    return () => {
-      window.removeEventListener('scroll', updateDropdownPos, true)
-      window.removeEventListener('resize', updateDropdownPos)
-    }
+    return subscribeToViewportChanges(updateDropdownPos)
   }, [isOpen, updateDropdownPos])
 
   // Load recent projects when opened (with client-side cache)
@@ -199,10 +217,12 @@ export function DirectoryPicker({ value, onChange, variant = 'default' }: Props)
       {isOpen && dropdownPos && createPortal(
         <div
           ref={dropdownRef}
-          className="settings-ui native-ui-text w-[320px] overflow-hidden rounded-[12px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-dropdown)]"
+          className="settings-ui native-ui-text overflow-y-auto overscroll-contain rounded-[12px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-dropdown)]"
           style={{
             position: 'fixed',
             left: dropdownPos.left,
+            width: dropdownPos.width,
+            maxHeight: dropdownPos.maxHeight,
             ...(dropdownPos.direction === 'down'
               ? { top: dropdownPos.top }
               : { bottom: window.innerHeight - dropdownPos.top }),

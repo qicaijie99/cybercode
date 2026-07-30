@@ -5,7 +5,41 @@ import * as path from 'node:path'
 import { handleProxyRequest } from '../proxy/handler.js'
 import { routingService } from '../routing/routingService.js'
 import { getRouteTargetCost } from '../routing/sourceCatalog.js'
+import type { RouteProfile } from '../routing/types.js'
 import { ProviderService } from '../services/providerService.js'
+
+const TEST_ROUTE_PROFILES = [
+  {
+    id: 'balanced',
+    name: 'Balanced',
+    enabled: true,
+    strategy: 'auto' as const,
+    strictFree: false,
+    allowExperimental: false,
+    maxAttempts: 3,
+    targets: [],
+  },
+  {
+    id: 'free-first',
+    name: 'Free first',
+    enabled: true,
+    strategy: 'cost-optimized' as const,
+    strictFree: true,
+    allowExperimental: false,
+    maxAttempts: 3,
+    targets: [],
+  },
+  {
+    id: 'stable',
+    name: 'Stable',
+    enabled: true,
+    strategy: 'lkgp' as const,
+    strictFree: false,
+    allowExperimental: false,
+    maxAttempts: 3,
+    targets: [],
+  },
+]
 
 describe('native smart routing', () => {
   let tempDir: string
@@ -18,6 +52,11 @@ describe('native smart routing', () => {
     process.env.CLAUDE_CONFIG_DIR = tempDir
     ProviderService.setServerPort(3456)
     routingService.resetHealth()
+    await routingService.updateConfig({
+      version: 1,
+      enabled: true,
+      profiles: TEST_ROUTE_PROFILES,
+    })
     upstream = null
   })
 
@@ -29,7 +68,8 @@ describe('native smart routing', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('keeps default route profiles separate from existing provider settings', async () => {
+  test('starts with an empty route list without touching existing provider settings', async () => {
+    await fs.rm(path.join(tempDir, 'cybercode', 'routing.json'), { force: true })
     const service = new ProviderService()
     const provider = await service.addProvider({
       presetId: 'custom',
@@ -46,13 +86,7 @@ describe('native smart routing', () => {
     })
 
     const dashboard = await routingService.getDashboard()
-    expect(dashboard.config.profiles.map((profile) => profile.id)).toEqual([
-      'balanced',
-      'coding-first',
-      'free-first',
-      'fastest',
-      'stable',
-    ])
+    expect(dashboard.config.profiles).toEqual([])
     expect(dashboard.sources.find((source) => source.providerId === provider.id)).toMatchObject({
       configured: true,
       routable: true,
@@ -89,6 +123,72 @@ describe('native smart routing', () => {
     ) as { providers: unknown[] }
     expect(providerIndex.providers).toHaveLength(1)
     expect(await fs.stat(path.join(tempDir, 'cybercode', 'routing.json')).catch(() => null)).toBeNull()
+  })
+
+  test('repairs conflicting strategies on untouched legacy built-in routes', async () => {
+    const configPath = path.join(tempDir, 'cybercode', 'routing.json')
+    await fs.writeFile(configPath, JSON.stringify({
+      version: 1,
+      enabled: true,
+      profiles: [
+        {
+          ...TEST_ROUTE_PROFILES[0],
+          strictFree: true,
+          targets: [{ providerId: 'legacy-balanced-provider' }],
+        },
+        {
+          id: 'coding-first',
+          name: 'Coding first',
+          enabled: true,
+          strategy: 'cost-optimized',
+          strictFree: false,
+          allowExperimental: false,
+          maxAttempts: 3,
+          targets: [{ providerId: 'legacy-coding-provider' }],
+        },
+        TEST_ROUTE_PROFILES[1],
+      ],
+    }))
+
+    const config = await routingService.getConfig()
+
+    expect(config.profiles.find((profile) => profile.id === 'balanced')).toMatchObject({
+      strategy: 'auto',
+      strictFree: false,
+    })
+    expect(config.profiles.find((profile) => profile.id === 'coding-first')).toMatchObject({
+      strategy: 'headroom',
+      strictFree: false,
+    })
+    expect(config.profiles.find((profile) => profile.id === 'free-first')).toMatchObject({
+      strategy: 'cost-optimized',
+      strictFree: true,
+    })
+
+    const persisted = JSON.parse(await fs.readFile(configPath, 'utf-8')) as {
+      profiles: RouteProfile[]
+    }
+    expect(persisted.profiles.find((profile) => profile.id === 'coding-first')).toMatchObject({
+      strategy: 'headroom',
+      strictFree: false,
+    })
+  })
+
+  test('does not rewrite a user-edited legacy route with explicit models', async () => {
+    const config = await routingService.updateConfig({
+      version: 1,
+      enabled: true,
+      profiles: [{
+        ...TEST_ROUTE_PROFILES[0],
+        strategy: 'cost-optimized',
+        targets: [{ providerId: 'provider-a', modelId: 'model-a' }],
+      }],
+    })
+
+    expect(config.profiles[0]).toMatchObject({
+      strategy: 'cost-optimized',
+      strictFree: false,
+    })
   })
 
   test('classifies only documented Zhipu Flash models as free', () => {
@@ -160,6 +260,48 @@ describe('native smart routing', () => {
       messages: [{ role: 'user', content: 'use an available source' }],
     })
     expect(plan.targets.map((target) => target.provider.id)).toEqual([local.id])
+  })
+
+  test('keeps connected OAuth providers routable without persisting their access token', async () => {
+    const service = new ProviderService()
+    const oauthProvider = await service.upsertOAuthProvider('test-oauth', {
+      presetId: 'test-oauth-runtime',
+      name: 'OAuth runtime',
+      baseUrl: 'https://oauth.example.com/v1',
+      apiFormat: 'openai_chat',
+      models: {
+        main: 'oauth-model',
+        haiku: 'oauth-model',
+        sonnet: 'oauth-model',
+        opus: 'oauth-model',
+      },
+    })
+    const config = await routingService.getConfig()
+    await routingService.updateConfig({
+      ...config,
+      profiles: config.profiles.map((profile) => profile.id === 'balanced'
+        ? {
+            ...profile,
+            targets: [{ providerId: oauthProvider.id }],
+          }
+        : profile),
+    })
+
+    const dashboard = await routingService.getDashboard()
+    expect(dashboard.sources.find((source) => source.providerId === oauthProvider.id)).toMatchObject({
+      configured: true,
+      routable: true,
+      auth: 'oauth',
+    })
+    expect(dashboard.routeAvailability.balanced).toMatchObject({
+      available: true,
+      candidateCount: 1,
+    })
+
+    const plan = await routingService.resolveAttempts('balanced', 'oauth-runtime', {
+      messages: [{ role: 'user', content: 'Use the OAuth connection' }],
+    })
+    expect(plan.targets.map((target) => target.provider.id)).toEqual([oauthProvider.id])
   })
 
   test('does not send an empty authorization header to a keyless local source', async () => {
@@ -268,7 +410,7 @@ describe('native smart routing', () => {
     expect(response.headers.get('x-cybercode-route-provider')).toBe(provider.id)
   })
 
-  test('rejects duplicate route ids and duplicate provider targets', async () => {
+  test('rejects duplicate route ids and duplicate provider-model targets', async () => {
     const config = await routingService.getConfig()
     const firstProfile = config.profiles[0]!
 
@@ -283,12 +425,53 @@ describe('native smart routing', () => {
         ? {
             ...profile,
             targets: [
-              { providerId: 'provider-a' },
-              { providerId: 'provider-a', modelId: 'another-model' },
+              { providerId: 'provider-a', modelId: 'same-model' },
+              { providerId: 'provider-a', modelId: 'same-model' },
             ],
           }
         : profile),
-    })).rejects.toThrow('Provider target is duplicated')
+    })).rejects.toThrow('Route target is duplicated')
+  })
+
+  test('keeps multiple models from the same provider in fallback order', async () => {
+    const service = new ProviderService()
+    const provider = await service.addProvider({
+      presetId: 'custom',
+      name: 'Multi-model source',
+      apiKey: 'provider-key',
+      baseUrl: 'https://models.example.com',
+      apiFormat: 'openai_chat',
+      models: {
+        main: 'model-primary',
+        haiku: 'model-primary',
+        sonnet: 'model-primary',
+        opus: 'model-primary',
+      },
+    })
+    const config = await routingService.getConfig()
+    await routingService.updateConfig({
+      ...config,
+      profiles: config.profiles.map((profile) => profile.id === 'balanced'
+        ? {
+            ...profile,
+            strategy: 'priority' as const,
+            maxAttempts: 2,
+            targets: [
+              { providerId: provider.id, modelId: 'model-primary', priority: 0 },
+              { providerId: provider.id, modelId: 'model-fallback', priority: 1 },
+            ],
+          }
+        : profile),
+    })
+
+    const plan = await routingService.resolveAttempts('balanced', 'same-provider-models', {
+      messages: [{ role: 'user', content: 'use the fallback chain' }],
+    })
+
+    expect(plan.targets.map((target) => target.modelId)).toEqual([
+      'model-primary',
+      'model-fallback',
+    ])
   })
 
   test('fails over before output and pins the successful target through a tool loop', async () => {

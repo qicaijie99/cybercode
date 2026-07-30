@@ -130,6 +130,28 @@ describe('ProviderLogo', () => {
     expect(fallback.initials).toBe('FA')
   })
 
+  it('keeps web-session brands independent from the selected model vendor', () => {
+    const webSessionAssets = [
+      ['yuanbao-web', 'web-yuanbao.svg'],
+      ['huggingchat', 'web-huggingchat.svg'],
+      ['muse-spark-web', 'web-metaai.svg'],
+      ['lmarena', 'web-lmarena.svg'],
+      ['v0-vercel-web', 'web-v0.svg'],
+      ['copilot-m365-web', 'web-copilot.svg'],
+      ['venice-web', 'web-venice.png'],
+    ] as const
+
+    for (const [providerId, asset] of webSessionAssets) {
+      const identity = resolveProviderIdentity({
+        providerId,
+        name: providerId,
+        modelId: 'deepseek-v4-pro',
+      })
+      expect(identity.id).toBe(providerId)
+      expect(identity.assetSrc).toBe(`/provider-icons/brands/${asset}`)
+    }
+  })
+
   it('prefers provider identity over a model vendor for custom endpoints', () => {
     expect(resolveProviderIdentity({
       name: '火山',

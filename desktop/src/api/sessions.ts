@@ -185,6 +185,88 @@ export type SessionInspectionResponse = {
   errors?: Record<string, string>
 }
 
+export type GitDiffScope = 'staged' | 'unstaged'
+
+export type GitFileChange = {
+  path: string
+  previousPath?: string
+  indexStatus: string
+  worktreeStatus: string
+  kind: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflicted' | 'type-changed' | 'unknown'
+  staged: boolean
+  unstaged: boolean
+  conflicted: boolean
+}
+
+export type GitWorkspaceStatus = {
+  gitAvailable: boolean
+  isRepository: boolean
+  workDir: string
+  repoRoot: string | null
+  repoName: string | null
+  branch: string | null
+  detached: boolean
+  headCommit: string | null
+  upstream: string | null
+  ahead: number
+  behind: number
+  stagedCount: number
+  unstagedCount: number
+  conflictedCount: number
+  changes: GitFileChange[]
+}
+
+export type GitFileDiff = {
+  path: string
+  previousPath?: string
+  scope: GitDiffScope
+  oldText: string
+  newText: string
+  additions: number
+  deletions: number
+  binary: boolean
+  truncated: boolean
+}
+
+export type GitCommitResponse = {
+  status: GitWorkspaceStatus
+  commit: string
+  output: string
+}
+
+export type GitBranchInfo = {
+  name: string
+  commit: string | null
+  upstream: string | null
+  current: boolean
+  ahead: number
+  behind: number
+  upstreamGone: boolean
+}
+
+export type GitCommitInfo = {
+  hash: string
+  shortHash: string
+  subject: string
+  authorName: string
+  authoredAt: string
+  refs: string[]
+}
+
+function sessionGitPath(
+  sessionId: string,
+  action?: string,
+  params?: SessionLocatorParams & { scope?: GitDiffScope; path?: string; limit?: number },
+) {
+  const query = new URLSearchParams()
+  if (params?.projectPath) query.set('projectPath', params.projectPath)
+  if (params?.scope) query.set('scope', params.scope)
+  if (params?.path) query.set('path', params.path)
+  if (params?.limit) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  return `/api/sessions/${sessionId}/git${action ? `/${action}` : ''}${qs ? `?${qs}` : ''}`
+}
+
 export const sessionsApi = {
   list: listSessions,
 
@@ -229,6 +311,73 @@ export const sessionsApi = {
   getGitInfo(sessionId: string, params?: SessionLocatorParams) {
     const query = params?.projectPath ? `?projectPath=${encodeURIComponent(params.projectPath)}` : ''
     return api.get<{ branch: string | null; repoName: string | null; workDir: string; changedFiles: number }>(`/api/sessions/${sessionId}/git-info${query}`)
+  },
+
+  getGitStatus(sessionId: string, params?: SessionLocatorParams) {
+    return api.get<GitWorkspaceStatus>(sessionGitPath(sessionId, undefined, params))
+  },
+
+  getGitDiff(
+    sessionId: string,
+    scope: GitDiffScope,
+    path: string,
+    params?: SessionLocatorParams,
+  ) {
+    return api.get<GitFileDiff>(sessionGitPath(sessionId, 'diff', {
+      ...params,
+      scope,
+      path,
+    }))
+  },
+
+  getGitBranches(sessionId: string, params?: SessionLocatorParams) {
+    return api.get<{ branches: GitBranchInfo[] }>(
+      sessionGitPath(sessionId, 'branches', params),
+    )
+  },
+
+  getGitHistory(sessionId: string, limit = 40, params?: SessionLocatorParams) {
+    return api.get<{ commits: GitCommitInfo[] }>(
+      sessionGitPath(sessionId, 'history', { ...params, limit }),
+    )
+  },
+
+  initializeGit(sessionId: string, params?: SessionLocatorParams) {
+    return api.post<GitWorkspaceStatus>(sessionGitPath(sessionId, 'init', params))
+  },
+
+  stageGitFiles(sessionId: string, paths: string[], params?: SessionLocatorParams) {
+    return api.post<GitWorkspaceStatus>(sessionGitPath(sessionId, 'stage', params), { paths })
+  },
+
+  unstageGitFiles(sessionId: string, paths: string[], params?: SessionLocatorParams) {
+    return api.post<GitWorkspaceStatus>(sessionGitPath(sessionId, 'unstage', params), { paths })
+  },
+
+  discardGitFiles(sessionId: string, paths: string[], params?: SessionLocatorParams) {
+    return api.post<GitWorkspaceStatus>(sessionGitPath(sessionId, 'discard', params), { paths })
+  },
+
+  commitGit(
+    sessionId: string,
+    message: string,
+    params?: SessionLocatorParams,
+  ) {
+    return api.post<GitCommitResponse>(sessionGitPath(sessionId, 'commit', params), { message })
+  },
+
+  switchGitBranch(sessionId: string, name: string, params?: SessionLocatorParams) {
+    return api.post<GitWorkspaceStatus>(
+      sessionGitPath(sessionId, 'switch-branch', params),
+      { name },
+    )
+  },
+
+  createGitBranch(sessionId: string, name: string, params?: SessionLocatorParams) {
+    return api.post<GitWorkspaceStatus>(
+      sessionGitPath(sessionId, 'create-branch', params),
+      { name },
+    )
   },
 
   getSlashCommands(sessionId: string, params?: SessionLocatorParams) {

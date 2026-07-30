@@ -8,6 +8,7 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import { createHash } from 'node:crypto'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
@@ -31,6 +32,7 @@ import {
   inferContextWindowFromModelName,
   parseContextWindowTokenValue,
 } from '../../utils/modelContextWindows.js'
+import { PublicProviderAliasSchema } from '../types/provider.js'
 import type {
   SavedProvider,
   ProvidersIndex,
@@ -42,6 +44,8 @@ import type {
   ApiFormat,
   ModelContextWindows,
   ModelMapping,
+  ProviderModelInfo,
+  ProviderModelSyncState,
 } from '../types/provider.js'
 import { resolveProviderImageSupport } from './modelImageSupport.js'
 import { resolveProviderImageSupportDynamically } from './modelImageCapabilityProbe.js'
@@ -57,6 +61,20 @@ import {
   requiresEnabledThinkingParamForModel,
 } from '../../utils/model/thinkingPolicy.js'
 import { providerOAuthService } from './providerOAuthService.js'
+import {
+  CODEX_DEFAULT_MODEL_CONTEXT_WINDOWS,
+  CODEX_DEFAULT_MODELS,
+  CODEX_FALLBACK_MODEL_CATALOG,
+  isLegacyCodexContextWindows,
+  isLegacyCodexDefaultModels,
+} from './codexModelCatalog.js'
+import { shouldEnableProviderModelSynchronization } from './providerModelSyncPolicy.js'
+import {
+  getWebSessionProviderIdFromPreset,
+  getWebSessionPresetId,
+  getWebSessionProvider,
+  type WebSessionProviderId,
+} from '../../shared/webSessionProviders.js'
 
 const MANAGED_ENV_KEYS = [
   'ANTHROPIC_BASE_URL',
@@ -83,6 +101,26 @@ const KIMI_CODE_STABLE_MODEL = 'kimi-for-coding'
 const KIMI_CODE_HIGHSPEED_MODEL = 'kimi-for-coding-highspeed'
 const XIAOMI_MIMO_PRESET_ID = 'xiaomimimo'
 const MASKED_API_KEYS = new Set(['***', '••••••••'])
+const PUBLIC_PROVIDER_ALIASES: Record<string, string> = {
+  official: 'claude',
+  zhipuglm: 'zhipu',
+  xiaomimimo: 'mimo',
+}
+const PUBLIC_PROVIDER_HOST_ALIASES: Array<[suffix: string, alias: string]> = [
+  ['volces.com', 'volcengine'],
+  ['baidubce.com', 'qianfan'],
+  ['bigmodel.cn', 'zhipu'],
+  ['moonshot.cn', 'kimi'],
+  ['kimi.com', 'kimi'],
+  ['siliconflow.cn', 'siliconflow'],
+  ['siliconflow.com', 'siliconflow'],
+  ['openrouter.ai', 'openrouter'],
+  ['deepseek.com', 'deepseek'],
+  ['minimax.io', 'minimax'],
+  ['dashscope.aliyuncs.com', 'dashscope'],
+  ['openai.com', 'openai'],
+  ['anthropic.com', 'claude'],
+]
 const LEGACY_PRESET_MODEL_IDS: Record<string, Record<string, string>> = {
   deepseek: {
     'deepseek-v4-pro[1m]': 'deepseek-v4-pro',
@@ -160,6 +198,96 @@ function normalizeProviderModels(models: ModelMapping): ModelMapping {
     sonnet: models.sonnet.trim() || main,
     opus: models.opus.trim() || main,
   }
+}
+
+function mergeModelCatalog(
+  defaults: ProviderModelInfo[] | undefined,
+  existing: ProviderModelInfo[] | undefined,
+): ProviderModelInfo[] | undefined {
+  if (!defaults?.length && !existing?.length) return undefined
+
+  const models = new Map<string, ProviderModelInfo>()
+  for (const model of defaults ?? []) {
+    models.set(model.id.trim().toLowerCase(), { ...model, id: model.id.trim() })
+  }
+  for (const model of existing ?? []) {
+    const key = model.id.trim().toLowerCase()
+    if (!key) continue
+    models.set(key, {
+      ...models.get(key),
+      ...model,
+      id: model.id.trim(),
+    })
+  }
+  return [...models.values()]
+}
+
+function migrateManagedProviderModelDefaults(provider: SavedProvider): SavedProvider {
+  if (provider.oauthProviderId === 'codex') {
+    const shouldMigrateModels = isLegacyCodexDefaultModels(provider.models)
+    const shouldSeedCatalog =
+      provider.modelCatalog === undefined ||
+      provider.modelSync === undefined
+    const modelCatalog = shouldSeedCatalog
+      ? mergeModelCatalog(CODEX_FALLBACK_MODEL_CATALOG, provider.modelCatalog)
+      : provider.modelCatalog
+    const fallbackIds = CODEX_FALLBACK_MODEL_CATALOG.map((model) => model.id)
+    const nextModelSync: ProviderModelSyncState = provider.modelSync === undefined
+      ? {
+          enabled: true,
+          syncedModelIds: fallbackIds,
+        }
+      : shouldSeedCatalog
+        ? {
+            ...provider.modelSync,
+            syncedModelIds: [
+              ...new Set([
+                ...(provider.modelSync.syncedModelIds ?? []),
+                ...fallbackIds,
+              ]),
+            ],
+          }
+        : provider.modelSync
+    const catalogChanged =
+      JSON.stringify(modelCatalog) !== JSON.stringify(provider.modelCatalog)
+    const modelSyncChanged =
+      JSON.stringify(nextModelSync) !== JSON.stringify(provider.modelSync)
+
+    if (
+      !shouldMigrateModels &&
+      !catalogChanged &&
+      !modelSyncChanged
+    ) {
+      return provider
+    }
+
+    return {
+      ...provider,
+      ...(shouldMigrateModels && {
+        models: { ...CODEX_DEFAULT_MODELS },
+        ...(isLegacyCodexContextWindows(provider.modelContextWindows) && {
+          modelContextWindows: { ...CODEX_DEFAULT_MODEL_CONTEXT_WINDOWS },
+        }),
+      }),
+      ...(modelCatalog && { modelCatalog }),
+      modelSync: nextModelSync,
+    }
+  }
+
+  if (
+    provider.modelSync === undefined &&
+    shouldEnableProviderModelSynchronization(provider)
+  ) {
+    return {
+      ...provider,
+      modelSync: {
+        enabled: true,
+        syncedModelIds: [],
+      },
+    }
+  }
+
+  return provider
 }
 
 function migrateLegacyPresetModelIds(provider: SavedProvider): ModelMapping {
@@ -256,9 +384,121 @@ function addCapabilityEnv(
   if (value !== undefined) target[key] = value
 }
 
+function publicAliasSlug(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+}
+
+function isValidPublicAlias(value: string | undefined): value is string {
+  return Boolean(
+    value &&
+    value.length <= 64 &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value),
+  )
+}
+
+function providerHostPublicAlias(provider: SavedProvider): string {
+  try {
+    const hostname = new URL(provider.baseUrl).hostname.toLowerCase()
+    const known = PUBLIC_PROVIDER_HOST_ALIASES.find(([suffix]) => (
+      hostname === suffix || hostname.endsWith(`.${suffix}`)
+    ))
+    if (known) return known[1]
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return 'local'
+
+    const genericLabels = new Set(['api', 'gateway', 'open', 'www'])
+    const label = hostname
+      .split('.')
+      .find((part) => part.length > 1 && !genericLabels.has(part))
+    return publicAliasSlug(label ?? '')
+  } catch {
+    return ''
+  }
+}
+
+function providerPublicAliasCandidates(provider: SavedProvider): string[] {
+  const presetAlias = PUBLIC_PROVIDER_ALIASES[provider.presetId] ?? provider.presetId
+  const nameAlias = publicAliasSlug(provider.name)
+  const hostAlias = providerHostPublicAlias(provider)
+  const candidates = provider.presetId === 'custom'
+    ? [nameAlias, hostAlias, 'custom']
+    : [publicAliasSlug(presetAlias), nameAlias, hostAlias]
+  return [...new Set(candidates.filter(Boolean))]
+}
+
+function isLegacyGeneratedPublicAlias(
+  provider: SavedProvider,
+  alias: string | undefined,
+): boolean {
+  if (!alias) return true
+  if (provider.presetId === 'custom' && /^custom(?:-[a-f0-9]{6})?$/.test(alias)) {
+    return true
+  }
+  const base = providerPublicAliasCandidates(provider)[0] ?? 'custom'
+  const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${escapedBase}-[a-f0-9]{6}$`).test(alias)
+}
+
+function migrateProviderPublicAliases(
+  providers: SavedProvider[],
+): { providers: SavedProvider[]; changed: boolean } {
+  const replaceableIds = new Set(
+    providers
+      .filter((provider) => (
+        !isValidPublicAlias(provider.publicAlias) ||
+        isLegacyGeneratedPublicAlias(provider, provider.publicAlias)
+      ))
+      .map((provider) => provider.id),
+  )
+  const reserved = new Set(
+    providers
+      .filter((provider) => !replaceableIds.has(provider.id))
+      .map((provider) => provider.publicAlias)
+      .filter(isValidPublicAlias),
+  )
+  const claimed = new Set<string>()
+  let changed = false
+
+  const migrated = providers.map((provider) => {
+    if (
+      !replaceableIds.has(provider.id) &&
+      isValidPublicAlias(provider.publicAlias) &&
+      !claimed.has(provider.publicAlias)
+    ) {
+      claimed.add(provider.publicAlias)
+      return provider
+    }
+
+    const candidates = providerPublicAliasCandidates(provider)
+    let alias = candidates.find((candidate) => (
+      !reserved.has(candidate) && !claimed.has(candidate)
+    ))
+    const base = candidates[0] ?? 'custom'
+    let attempt = 0
+    while (!alias || reserved.has(alias) || claimed.has(alias)) {
+      const seed = attempt === 0 ? provider.id : `${provider.id}:${attempt}`
+      const suffix = createHash('sha256').update(seed).digest('hex').slice(0, 6)
+      alias = `${base}-${suffix}`
+      attempt += 1
+    }
+
+    reserved.add(alias)
+    claimed.add(alias)
+    if (provider.publicAlias !== alias) changed = true
+    return { ...provider, publicAlias: alias }
+  })
+
+  return { providers: migrated, changed }
+}
+
 function migrateProviderIndex(index: ProvidersIndex): { index: ProvidersIndex; changed: boolean } {
   let changed = false
-  const providers = index.providers.map((provider) => {
+  const migratedProviders = index.providers.map((provider) => {
     let migrated = provider
 
     const normalizedModels = migrateLegacyPresetModelIds(migrated)
@@ -309,11 +549,19 @@ function migrateProviderIndex(index: ProvidersIndex): { index: ProvidersIndex; c
       migrated = contextWindowMigration
     }
 
+    const managedModelMigration = migrateManagedProviderModelDefaults(migrated)
+    if (managedModelMigration !== migrated) {
+      changed = true
+      migrated = managedModelMigration
+    }
+
     return migrated
   })
+  const aliasMigration = migrateProviderPublicAliases(migratedProviders)
+  if (aliasMigration.changed) changed = true
 
   return {
-    index: changed ? { ...index, providers } : index,
+    index: changed ? { ...index, providers: aliasMigration.providers } : index,
     changed,
   }
 }
@@ -498,7 +746,7 @@ export class ProviderService {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 })
     await this.securePath(dir, 0o700)
 
-    const tmpFile = `${filePath}.tmp.${Date.now()}`
+    const tmpFile = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID()}`
     try {
       await fs.writeFile(tmpFile, JSON.stringify(index, null, 2) + '\n', {
         encoding: 'utf-8',
@@ -530,7 +778,7 @@ export class ProviderService {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 })
     await this.securePath(dir, 0o700)
 
-    const tmpFile = `${filePath}.tmp.${Date.now()}`
+    const tmpFile = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID()}`
     try {
       await fs.writeFile(tmpFile, JSON.stringify(settings, null, 2) + '\n', {
         encoding: 'utf-8',
@@ -617,10 +865,19 @@ export class ProviderService {
 
   async addProvider(input: CreateProviderInput): Promise<SavedProvider> {
     const index = await this.readIndex()
+    const requestedAlias = input.publicAlias
+      ? PublicProviderAliasSchema.parse(input.publicAlias)
+      : undefined
+    if (requestedAlias && index.providers.some((provider) => (
+      provider.publicAlias === requestedAlias
+    ))) {
+      throw ApiError.conflict(`Provider alias "${requestedAlias}" is already in use`)
+    }
 
-    const provider: SavedProvider = {
+    let provider: SavedProvider = {
       id: crypto.randomUUID(),
       presetId: input.presetId,
+      ...(requestedAlias && { publicAlias: requestedAlias }),
       name: input.name,
       apiKey: input.apiKey,
       baseUrl: input.baseUrl,
@@ -635,8 +892,17 @@ export class ProviderService {
         input.supportsImages !== undefined && { supportsImages: input.supportsImages }),
       ...(input.notes !== undefined && { notes: input.notes }),
     }
+    if (shouldEnableProviderModelSynchronization(provider)) {
+      provider.modelSync = {
+        enabled: true,
+        syncedModelIds: [],
+      }
+    }
 
     index.providers.push(provider)
+    const migrated = migrateProviderPublicAliases(index.providers)
+    index.providers = migrated.providers
+    provider = index.providers.find((entry) => entry.id === provider.id) ?? provider
     await this.writeIndex(index)
     return provider
   }
@@ -648,9 +914,18 @@ export class ProviderService {
 
     const existing = index.providers[idx]
     const isOAuthManaged = Boolean(existing.oauthProviderId)
+    const requestedAlias = input.publicAlias !== undefined
+      ? PublicProviderAliasSchema.parse(input.publicAlias)
+      : undefined
+    if (requestedAlias && index.providers.some((provider) => (
+      provider.id !== id && provider.publicAlias === requestedAlias
+    ))) {
+      throw ApiError.conflict(`Provider alias "${requestedAlias}" is already in use`)
+    }
     const updated: SavedProvider = {
       ...existing,
       ...(input.presetId !== undefined && !isOAuthManaged && { presetId: input.presetId }),
+      ...(requestedAlias !== undefined && { publicAlias: requestedAlias }),
       ...(input.name !== undefined && { name: input.name }),
       ...(input.apiKey !== undefined &&
         !isMaskedApiKey(input.apiKey) && { apiKey: input.apiKey }),
@@ -674,6 +949,32 @@ export class ProviderService {
     await this.writeIndex(index)
 
     if (index.activeId === id) {
+      await this.syncToSettings(updated)
+    }
+
+    return updated
+  }
+
+  async updateProviderModelSync(
+    id: string,
+    input: {
+      modelCatalog?: ProviderModelInfo[]
+      modelSync: ProviderModelSyncState
+    },
+  ): Promise<SavedProvider> {
+    const index = await this.readIndex()
+    const idx = index.providers.findIndex((provider) => provider.id === id)
+    if (idx === -1) throw ApiError.notFound(`Provider not found: ${id}`)
+
+    const updated: SavedProvider = {
+      ...index.providers[idx],
+      ...(input.modelCatalog !== undefined && { modelCatalog: input.modelCatalog }),
+      modelSync: input.modelSync,
+    }
+    index.providers[idx] = updated
+    await this.writeIndex(index)
+
+    if (index.activeId === id && input.modelCatalog !== undefined) {
       await this.syncToSettings(updated)
     }
 
@@ -726,6 +1027,8 @@ export class ProviderService {
       apiFormat: ApiFormat
       models: ModelMapping
       modelContextWindows?: ModelContextWindows
+      modelCatalog?: ProviderModelInfo[]
+      modelSyncEnabled?: boolean
     },
   ): Promise<SavedProvider> {
     const index = await this.readIndex()
@@ -733,21 +1036,39 @@ export class ProviderService {
       (provider) => provider.oauthProviderId === oauthProviderId,
     )
     const existing = existingIndex >= 0 ? index.providers[existingIndex] : undefined
+    const modelCatalog = existing?.modelCatalog !== undefined
+      ? existing.modelCatalog
+      : mergeModelCatalog(definition.modelCatalog, undefined)
+    const defaultSyncedModelIds = definition.modelCatalog?.map((model) => model.id) ?? []
     const provider: SavedProvider = {
       id: existing?.id ?? crypto.randomUUID(),
       presetId: definition.presetId,
+      ...(existing?.publicAlias && { publicAlias: existing.publicAlias }),
       name: existing?.name ?? definition.name,
       apiKey: '',
       oauthProviderId,
       baseUrl: definition.baseUrl,
       apiFormat: definition.apiFormat,
       models: existing?.models ?? normalizeProviderModels(definition.models),
-      ...(existing?.modelCatalog && { modelCatalog: existing.modelCatalog }),
+      ...(modelCatalog && { modelCatalog }),
       ...(existing?.imageSupportMode && { imageSupportMode: existing.imageSupportMode }),
       ...(existing?.notes && { notes: existing.notes }),
-      ...(definition.modelContextWindows && {
-        modelContextWindows: compactModelContextWindows(definition.modelContextWindows),
-      }),
+      ...(existing?.modelContextWindows
+        ? { modelContextWindows: existing.modelContextWindows }
+        : definition.modelContextWindows && {
+            modelContextWindows: compactModelContextWindows(definition.modelContextWindows),
+          }),
+    }
+    if (existing?.modelSync) {
+      provider.modelSync = existing.modelSync
+    } else if (
+      definition.modelSyncEnabled ||
+      shouldEnableProviderModelSynchronization(provider)
+    ) {
+      provider.modelSync = {
+        enabled: true,
+        syncedModelIds: defaultSyncedModelIds,
+      }
     }
 
     if (existingIndex >= 0) index.providers[existingIndex] = provider
@@ -771,6 +1092,99 @@ export class ProviderService {
     if (wasActive) index.activeId = null
     await this.writeIndex(index)
     if (wasActive) await this.clearProviderFromSettings()
+  }
+
+  async upsertWebSessionProvider(
+    providerId: WebSessionProviderId,
+    credential: string | undefined,
+    modelId?: string,
+  ): Promise<SavedProvider> {
+    const definition = getWebSessionProvider(providerId)
+    if (!definition) throw ApiError.badRequest(`Unknown Web Cookie provider: ${providerId}`)
+
+    const selectedModel = modelId?.trim() || definition.defaultModel
+    const index = await this.readIndex()
+    const presetId = getWebSessionPresetId(providerId)
+    const existingIndex = index.providers.findIndex(
+      (provider) => provider.presetId === presetId,
+    )
+    const existing = existingIndex >= 0 ? index.providers[existingIndex] : undefined
+    const normalizedCredential = credential?.trim() || existing?.apiKey || ''
+    if (!normalizedCredential) throw ApiError.badRequest('A session credential is required')
+    const provider: SavedProvider = {
+      id: existing?.id ?? crypto.randomUUID(),
+      presetId,
+      ...(existing?.publicAlias && { publicAlias: existing.publicAlias }),
+      name: existing?.name ?? definition.names.en,
+      apiKey: normalizedCredential,
+      baseUrl: definition.website,
+      apiFormat: 'openai_chat',
+      models: {
+        main: selectedModel,
+        haiku: selectedModel,
+        sonnet: selectedModel,
+        opus: selectedModel,
+      },
+      modelCatalog: definition.models.map((model) => ({
+        id: model.id,
+        label: model.label,
+      })),
+      imageSupportMode: 'disabled',
+      notes: 'CyberCode Web Cookie Provider',
+    }
+
+    if (existingIndex >= 0) index.providers[existingIndex] = provider
+    else index.providers.push(provider)
+    await this.writeIndex(index)
+
+    if (index.activeId === provider.id) await this.syncToSettings(provider)
+    return provider
+  }
+
+  async removeWebSessionProvider(providerId: WebSessionProviderId): Promise<void> {
+    const index = await this.readIndex()
+    const presetId = getWebSessionPresetId(providerId)
+    const providerIndex = index.providers.findIndex(
+      (provider) => provider.presetId === presetId,
+    )
+    if (providerIndex < 0) return
+
+    const provider = index.providers[providerIndex]!
+    const wasActive = index.activeId === provider.id
+    index.providers.splice(providerIndex, 1)
+    if (wasActive) index.activeId = null
+    await this.writeIndex(index)
+    if (wasActive) await this.clearProviderFromSettings()
+  }
+
+  async refreshWebSessionCredential(
+    providerRecordId: string,
+    credential: string,
+  ): Promise<boolean> {
+    const normalizedCredential = credential.trim()
+    if (!normalizedCredential || normalizedCredential.length > 64_000) return false
+
+    const index = await this.readIndex()
+    const providerIndex = index.providers.findIndex(
+      (provider) => provider.id === providerRecordId,
+    )
+    if (providerIndex < 0) return false
+
+    const existing = index.providers[providerIndex]!
+    if (!getWebSessionProviderIdFromPreset(existing.presetId)) return false
+    if (existing.apiKey === normalizedCredential) return false
+
+    const updated = {
+      ...existing,
+      apiKey: normalizedCredential,
+    }
+    index.providers[providerIndex] = updated
+    await this.writeIndex(index)
+
+    if (index.activeId === providerRecordId) {
+      await this.syncToSettings(updated)
+    }
+    return true
   }
 
   // --- Settings sync ---
@@ -974,40 +1388,18 @@ export class ProviderService {
 
   // --- Proxy support ---
 
-  async getProviderForProxy(providerId?: string): Promise<{
-    baseUrl: string
-    apiKey: string
-    apiFormat: ApiFormat
-    oauthProviderId?: string
-  } | null> {
+  async getProviderForProxy(providerId?: string): Promise<SavedProvider | null> {
     if (providerId) {
-      const provider = await this.getProvider(providerId)
-      return {
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        apiFormat: provider.apiFormat ?? 'anthropic',
-        ...(provider.oauthProviderId && { oauthProviderId: provider.oauthProviderId }),
-      }
+      return this.getProvider(providerId)
     }
 
     const index = await this.readIndex()
     if (!index.activeId) return null
     const provider = index.providers.find((p) => p.id === index.activeId)
-    if (!provider) return null
-    return {
-      baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
-      apiFormat: provider.apiFormat ?? 'anthropic',
-      ...(provider.oauthProviderId && { oauthProviderId: provider.oauthProviderId }),
-    }
+    return provider ?? null
   }
 
-  async getActiveProviderForProxy(): Promise<{
-    baseUrl: string
-    apiKey: string
-    apiFormat: ApiFormat
-    oauthProviderId?: string
-  } | null> {
+  async getActiveProviderForProxy(): Promise<SavedProvider | null> {
     return this.getProviderForProxy()
   }
 

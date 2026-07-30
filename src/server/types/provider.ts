@@ -49,9 +49,27 @@ export const ProviderModelInfoSchema = z.object({
   supportsImages: z.boolean().optional(),
 })
 
+export const ProviderModelSyncStateSchema = z.object({
+  enabled: z.boolean().default(false),
+  syncedModelIds: z.array(z.string()).default([]),
+  lastSyncedAt: z.string().optional(),
+  lastSyncError: z.string().optional(),
+  endpoint: z.string().optional(),
+  // Derived for API responses. It is not written by the sync service.
+  supported: z.boolean().optional(),
+})
+
+export const PublicProviderAliasSchema = z.string()
+  .trim()
+  .toLowerCase()
+  .min(2)
+  .max(64)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/)
+
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
+  publicAlias: PublicProviderAliasSchema.optional(),
   name: z.string().min(1),
   apiKey: z.string(),
   oauthProviderId: z.string().optional(),
@@ -59,6 +77,7 @@ export const SavedProviderSchema = z.object({
   apiFormat: ApiFormatSchema.default('anthropic'),
   models: ModelMappingSchema,
   modelCatalog: z.array(ProviderModelInfoSchema).optional(),
+  modelSync: ProviderModelSyncStateSchema.optional(),
   modelContextWindows: ModelContextWindowsSchema.optional(),
   imageSupportMode: ImageSupportModeSchema.optional(),
   // Legacy boolean from older desktop builds. New writes should use imageSupportMode.
@@ -73,6 +92,7 @@ export const ProvidersIndexSchema = z.object({
 
 export const CreateProviderSchema = z.object({
   presetId: z.string().min(1),
+  publicAlias: PublicProviderAliasSchema.optional(),
   name: z.string().min(1),
   apiKey: z.string(),
   baseUrl: z.string(),
@@ -87,6 +107,7 @@ export const CreateProviderSchema = z.object({
 
 export const UpdateProviderSchema = z.object({
   presetId: z.string().min(1).optional(),
+  publicAlias: PublicProviderAliasSchema.optional(),
   name: z.string().min(1).optional(),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),
@@ -113,6 +134,7 @@ export const TestProviderSchema = z.object({
 export type ModelMapping = z.infer<typeof ModelMappingSchema>
 export type ModelContextWindows = z.infer<typeof ModelContextWindowsSchema>
 export type ProviderModelInfo = z.infer<typeof ProviderModelInfoSchema>
+export type ProviderModelSyncState = z.infer<typeof ProviderModelSyncStateSchema>
 export type SavedProvider = z.infer<typeof SavedProviderSchema>
 export type ProvidersIndex = z.infer<typeof ProvidersIndexSchema>
 export type CreateProviderInput = z.infer<typeof CreateProviderSchema>

@@ -25,6 +25,11 @@ import {
 import { codeGraphService } from './codeGraphService.js'
 import { shouldAutoApproveBypassPermission } from './permissionPolicy.js'
 import { routingService } from '../routing/routingService.js'
+import { closeAgentBrowserSession } from '../../utils/agentBrowser/setup.js'
+import { sleep } from '../../utils/sleep.js'
+
+const SESSION_SHUTDOWN_GRACE_MS = 2500
+const SESSION_FORCE_KILL_SETTLE_MS = 250
 
 type AttachmentRef = {
   type: 'file' | 'image'
@@ -100,6 +105,7 @@ export class ConversationStartupError extends Error {
 
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
+  private sessionShutdowns = new Set<Promise<void>>()
   private generationStopPromises = new Map<
     string,
     Promise<StopGenerationResult>
@@ -408,6 +414,18 @@ export class ConversationService {
     if (existing) return existing
 
     const stopPromise = this.performStopGeneration(sessionId, timeoutMs)
+      .then(async (result) => {
+        try {
+          await this.closeBrowserSession(sessionId)
+        } catch (error) {
+          console.warn(
+            `[ConversationService] Failed to close agent-browser session for ${sessionId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+        }
+        return result
+      })
       .finally(() => {
         if (this.generationStopPromises.get(sessionId) === stopPromise) {
           this.generationStopPromises.delete(sessionId)
@@ -415,6 +433,10 @@ export class ConversationService {
       })
     this.generationStopPromises.set(sessionId, stopPromise)
     return stopPromise
+  }
+
+  private closeBrowserSession(sessionId: string): Promise<boolean> {
+    return closeAgentBrowserSession(sessionId)
   }
 
   requestControl(
@@ -660,6 +682,14 @@ export class ConversationService {
     if (session) this.stopSessionProcess(sessionId, session)
   }
 
+  async stopAllSessions(): Promise<void> {
+    for (const sessionId of this.getActiveSessions()) {
+      this.stopSession(sessionId)
+    }
+
+    await Promise.allSettled(Array.from(this.sessionShutdowns))
+  }
+
   getActiveSessions(): string[] {
     return Array.from(this.sessions.keys())
   }
@@ -751,20 +781,69 @@ export class ConversationService {
     if (current !== expectedSession) return false
 
     current.isGenerating = false
+    if (this.sessions.get(sessionId) === current) {
+      this.sessions.delete(sessionId)
+    }
+
+    const shutdown = this.shutdownSessionProcess(sessionId, current.proc)
+    this.sessionShutdowns.add(shutdown)
+    void shutdown.finally(() => {
+      this.sessionShutdowns.delete(shutdown)
+    })
+    return true
+  }
+
+  private async shutdownSessionProcess(
+    sessionId: string,
+    proc: SessionProcess['proc'],
+  ): Promise<void> {
+    const browserShutdown = closeAgentBrowserSession(sessionId)
+
     try {
-      current.proc.kill()
+      if (process.platform === 'win32') {
+        proc.kill()
+      } else {
+        proc.kill('SIGTERM')
+      }
     } catch (error) {
       console.warn(
         `[ConversationService] Failed to terminate CLI process for ${sessionId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       )
-    } finally {
-      if (this.sessions.get(sessionId) === current) {
-        this.sessions.delete(sessionId)
-      }
     }
-    return true
+
+    const exited = proc.exited
+    if (!exited || typeof exited.then !== 'function') {
+      await browserShutdown
+      return
+    }
+
+    const exitedDuringGrace = await Promise.race([
+      exited.then(() => true),
+      sleep(SESSION_SHUTDOWN_GRACE_MS).then(() => false),
+    ])
+
+    if (!exitedDuringGrace) {
+      console.warn(
+        `[ConversationService] CLI process for ${sessionId} did not exit after SIGTERM; forcing shutdown`,
+      )
+      try {
+        if (process.platform === 'win32') {
+          proc.kill()
+        } else {
+          proc.kill('SIGKILL')
+        }
+      } catch {
+        // The process may have exited between the timeout and escalation.
+      }
+      await Promise.race([
+        exited,
+        sleep(SESSION_FORCE_KILL_SETTLE_MS),
+      ])
+    }
+
+    await browserShutdown
   }
 
   private getPermissionArgs(
@@ -879,9 +958,9 @@ export class ConversationService {
             CYBERCODE_DESKTOP_AWAIT_MCP: '1',
             CYBERCODE_DESKTOP_AWAIT_MCP_TIMEOUT_MS: '5000',
             CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
-            CYBERCODE_AGENT_BROWSER_SESSION_ID: sessionId,
           }
         : {}),
+      CYBERCODE_AGENT_BROWSER_SESSION_ID: sessionId,
       // Tell the CLI entrypoint to skip project .env loading. Provider env
       // should come from Desktop-managed config or inherited launch env, not
       // be reintroduced from the repo's .env file.

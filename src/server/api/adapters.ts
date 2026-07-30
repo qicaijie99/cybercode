@@ -16,6 +16,7 @@ const ALLOWED_TOP_KEYS = new Set([
   'feishu',
   'weixin',
   'qq',
+  'dingtalk',
   'pairing',
 ])
 

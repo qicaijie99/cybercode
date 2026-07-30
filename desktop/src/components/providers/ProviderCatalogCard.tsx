@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { subscribeToViewportChanges } from '../../lib/viewportEvents'
 import { Icon } from '../shared/Icon'
 import { ProviderLogo } from './ProviderLogo'
 
@@ -131,13 +133,52 @@ function ProviderCatalogActionMenu({
   actions: ProviderCatalogAction[]
 }) {
   const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState<{
+    top: number
+    left: number
+    width: number
+    maxHeight: number
+    direction: 'up' | 'down'
+  } | null>(null)
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current
+    if (!trigger) return
+
+    const rect = trigger.getBoundingClientRect()
+    const margin = 12
+    const gap = 6
+    const width = Math.min(164, Math.max(1, window.innerWidth - margin * 2))
+    const menuHeight = Math.min(300, actions.length * 36 + 10)
+    const spaceBelow = window.innerHeight - rect.bottom - gap - margin
+    const spaceAbove = rect.top - gap - margin
+    const direction = (
+      spaceBelow >= menuHeight ||
+      spaceBelow >= spaceAbove
+    ) ? 'down' : 'up'
+    const availableHeight = direction === 'down' ? spaceBelow : spaceAbove
+
+    setPosition({
+      top: direction === 'down' ? rect.bottom + gap : rect.top - gap,
+      left: Math.min(
+        Math.max(margin, rect.right - width),
+        Math.max(margin, window.innerWidth - width - margin),
+      ),
+      width,
+      maxHeight: Math.max(48, Math.min(menuHeight, availableHeight)),
+      direction,
+    })
+  }, [actions.length])
 
   useEffect(() => {
     if (!open) return
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false)
@@ -151,9 +192,20 @@ function ProviderCatalogActionMenu({
     }
   }, [open])
 
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null)
+      return
+    }
+
+    updatePosition()
+    return subscribeToViewportChanges(updatePosition)
+  }, [open, updatePosition])
+
   return (
-    <div ref={menuRef} className="absolute right-[8px] top-[8px] z-10">
+    <div className="absolute right-[8px] top-[8px] z-10">
       <button
+        ref={triggerRef}
         type="button"
         aria-label={label}
         aria-haspopup="menu"
@@ -169,11 +221,20 @@ function ProviderCatalogActionMenu({
         <Icon name="more_horiz" size={16} />
       </button>
 
-      {open && (
+      {open && position && createPortal(
         <div
+          ref={menuRef}
           role="menu"
           aria-label={label}
-          className="absolute right-0 top-[36px] z-50 w-[164px] overflow-hidden rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-background)] p-[5px] shadow-[var(--shadow-dropdown)]"
+          className="settings-ui native-ui-text fixed z-[9999] overflow-y-auto overscroll-contain rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-background)] p-[5px] shadow-[var(--shadow-dropdown)]"
+          style={{
+            left: position.left,
+            width: position.width,
+            maxHeight: position.maxHeight,
+            ...(position.direction === 'down'
+              ? { top: position.top }
+              : { bottom: window.innerHeight - position.top }),
+          }}
         >
           {actions.map((action) => (
             <button
@@ -194,7 +255,8 @@ function ProviderCatalogActionMenu({
               <span className="truncate">{action.label}</span>
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

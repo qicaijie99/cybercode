@@ -102,6 +102,19 @@ export function ComputerUseSettings() {
     void fetchStatus()
   }, [fetchStatus])
 
+  useEffect(() => {
+    const recheckAfterReturning = () => {
+      if (document.visibilityState === 'hidden') return
+      void fetchStatus(true)
+    }
+    window.addEventListener('focus', recheckAfterReturning)
+    document.addEventListener('visibilitychange', recheckAfterReturning)
+    return () => {
+      window.removeEventListener('focus', recheckAfterReturning)
+      document.removeEventListener('visibilitychange', recheckAfterReturning)
+    }
+  }, [fetchStatus])
+
   // Load apps when environment is ready
   const envReady = status?.runtime.ready ?? false
   useEffect(() => {
@@ -258,32 +271,123 @@ export function ComputerUseSettings() {
             </div>
           )}
 
+          {status.supported && !envReady && (
+            <section
+              aria-labelledby="computer-use-quick-setup-title"
+              className="border-y border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-5 py-5"
+            >
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-brand)] text-[var(--color-on-primary)]">
+                      <Icon name="download" size={22} />
+                    </div>
+                    <div>
+                      <h3
+                        id="computer-use-quick-setup-title"
+                        className="text-[16px] font-semibold text-[var(--color-text-primary)]"
+                      >
+                        {t('settings.computerUse.quickSetupTitle')}
+                      </h3>
+                      <p className="mt-1 max-w-[620px] text-[13px] leading-5 text-[var(--color-text-secondary)]">
+                        {t('settings.computerUse.quickSetupDescription')}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-[12px] text-[var(--color-text-tertiary)]">
+                    {[
+                      t('settings.computerUse.quickSetupNoPython'),
+                      t('settings.computerUse.quickSetupVerified'),
+                      t('settings.computerUse.quickSetupResumable'),
+                    ].map(item => (
+                      <span key={item} className="inline-flex items-center gap-1.5">
+                        <Icon name="check" size={14} className="text-[var(--color-success)]" />
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                  {!runtimeActive && status.runtime.phase !== 'not-installed' && (
+                    <p
+                      role={status.runtime.phase === 'error' ? 'alert' : 'status'}
+                      className={`mt-3 text-[12px] ${
+                        status.runtime.phase === 'error'
+                          ? 'text-[var(--color-error)]'
+                          : 'text-[var(--color-text-secondary)]'
+                      }`}
+                    >
+                      {runtimeDetail}
+                    </p>
+                  )}
+                </div>
+
+                {!runtimeActive && (
+                  <Button
+                    type="button"
+                    size="lg"
+                    onClick={handleSetup}
+                    icon={<Icon name="download" size={18} />}
+                    className="shrink-0"
+                  >
+                    {status.runtime.phase === 'error'
+                      ? t('settings.computerUse.runtimeRetry')
+                      : status.runtime.phase === 'paused'
+                        ? t('settings.computerUse.runtimeResume')
+                        : t('settings.computerUse.runtimeInstallAll')}
+                  </Button>
+                )}
+              </div>
+
+              {runtimeActive && (
+                <div className="mt-5">
+                  <div className="flex items-center justify-between gap-4 text-[12px]">
+                    <span className="font-medium text-[var(--color-text-primary)]">
+                      {runtimeDetail}
+                    </span>
+                    <span className="tabular-nums text-[var(--color-text-tertiary)]">
+                      {status.runtime.progressPercent}%
+                    </span>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-border-separator)]">
+                    <div
+                      role="progressbar"
+                      aria-label={t('settings.computerUse.runtime')}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={status.runtime.progressPercent}
+                      className="h-full rounded-full bg-[var(--color-brand)] transition-[width] duration-300 ease-out"
+                      style={{ width: `${Math.max(2, status.runtime.progressPercent)}%` }}
+                    />
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-[12px] text-[var(--color-text-tertiary)]">
+                      {t('settings.computerUse.runtimeBackgroundHint')}
+                    </p>
+                    {status.runtime.canPause && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={handlePause}
+                        icon={<Icon name="pause" size={16} />}
+                      >
+                        {t('settings.computerUse.runtimePause')}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Runtime status */}
-          <div className="space-y-2">
+          {envReady && (
             <StatusRow
               label={t('settings.computerUse.runtime')}
-              ok={status.runtime.ready ? true : status.runtime.phase === 'error' ? false : null}
+              ok
               detail={runtimeDetail}
             />
-            {runtimeActive && (
-              <div className="px-4 py-3 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
-                <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-border-separator)]">
-                  <div
-                    role="progressbar"
-                    aria-label={t('settings.computerUse.runtime')}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={status.runtime.progressPercent}
-                    className="h-full rounded-full bg-[var(--color-brand)] transition-[width] duration-300 ease-out"
-                    style={{ width: `${Math.max(2, status.runtime.progressPercent)}%` }}
-                  />
-                </div>
-                <p className="mt-2 text-[12px] text-[var(--color-text-tertiary)]">
-                  {t('settings.computerUse.runtimeBackgroundHint')}
-                </p>
-              </div>
-            )}
-          </div>
+          )}
 
           {/* macOS Permissions — only shown on macOS (darwin) */}
           {envReady && status.platform === 'darwin' && (
@@ -376,40 +480,6 @@ export function ComputerUseSettings() {
 
           {/* Action buttons */}
           <div className="flex flex-wrap gap-3">
-            {status.supported && !envReady && !runtimeActive && (
-              <Button
-                type="button"
-                onClick={handleSetup}
-                icon={<Icon name="download" size={18} />}
-              >
-                {status.runtime.phase === 'error'
-                  ? t('settings.computerUse.runtimeRetry')
-                  : status.runtime.phase === 'paused'
-                    ? t('settings.computerUse.runtimeResume')
-                    : t('settings.computerUse.runtimePrepare')}
-              </Button>
-            )}
-            {status.supported && runtimeActive && (
-              <Button
-                type="button"
-                disabled
-                icon={<Icon name="hourglass_empty" size={18} />}
-              >
-                {t('settings.computerUse.runtimePreparing', {
-                  percent: status.runtime.progressPercent,
-                })}
-              </Button>
-            )}
-            {status.supported && runtimeActive && status.runtime.canPause && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={handlePause}
-                icon={<Icon name="pause" size={18} />}
-              >
-                {t('settings.computerUse.runtimePause')}
-              </Button>
-            )}
             <Button
               type="button"
               variant="secondary"

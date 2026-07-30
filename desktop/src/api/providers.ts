@@ -9,6 +9,7 @@ import type {
   ProviderTestResult,
   DiscoverProviderModelsInput,
   ProviderModelDiscoveryResult,
+  ProviderModelSyncResult,
 } from '../types/provider'
 import type { ProviderPreset } from '../types/providerPreset'
 
@@ -17,6 +18,15 @@ type ProviderResponse = { provider: SavedProvider }
 type PresetsResponse = { presets: ProviderPreset[] }
 type TestResultResponse = { result: ProviderTestResult }
 type ModelDiscoveryResponse = { result: ProviderModelDiscoveryResult }
+type ModelSyncResponse = {
+  provider: SavedProvider
+  result: ProviderModelSyncResult
+}
+type ModelAutoSyncResponse = {
+  provider: SavedProvider
+  result?: ProviderModelSyncResult
+  warning?: string
+}
 type AuthStatusResponse = {
   hasAuth: boolean
   source: 'cybercode-provider' | 'original-settings' | 'env' | 'none'
@@ -79,5 +89,18 @@ export const providersApi = {
 
   discoverModels(input: DiscoverProviderModelsInput) {
     return api.post<ModelDiscoveryResponse>('/api/providers/models/discover', input)
+  },
+
+  syncModels(id: string) {
+    return api.post<ModelSyncResponse>(
+      `/api/providers/${encodeURIComponent(id)}/models/sync`,
+    )
+  },
+
+  setModelAutoSync(id: string, enabled: boolean) {
+    return api.put<ModelAutoSyncResponse>(
+      `/api/providers/${encodeURIComponent(id)}/models/auto-sync`,
+      { enabled },
+    )
   },
 }

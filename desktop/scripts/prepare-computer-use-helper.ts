@@ -3,8 +3,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { detectHostTriple } from './sidecarTarget'
+import { buildComputerUseCodesignArgs } from './computerUseSigning'
 
-const HELPER_VERSION = '2'
+const HELPER_VERSION = '3'
 const MAC_BUNDLE_NAME = 'CyberCode Computer Use.app'
 const MAC_EXECUTABLE_NAME = 'CyberCodeComputerUse'
 const MAC_BUNDLE_IDENTIFIER = 'com.cybercode.computer-use'
@@ -28,6 +29,10 @@ const macExecutablePath = path.join(
   MAC_EXECUTABLE_NAME,
 )
 const macInfoPlistPath = path.join(macAppBundle, 'Contents', 'Info.plist')
+const macDevelopmentRequirementPath = path.join(
+  macSourceDir,
+  'designated-requirement.txt',
+)
 const linuxExecutablePath = path.join(resourceDir, LINUX_EXECUTABLE_NAME)
 const manifestPath = path.join(resourceDir, 'manifest.json')
 const targetTriple =
@@ -117,6 +122,7 @@ function sourceDigestForTarget() {
   if (targetTriple.endsWith('-apple-darwin')) {
     hash.update(readFileSync(path.join(macSourceDir, 'main.swift')))
     hash.update(readFileSync(path.join(macSourceDir, 'Info.plist')))
+    hash.update(readFileSync(macDevelopmentRequirementPath))
   } else if (targetTriple.endsWith('-unknown-linux-gnu')) {
     hash.update(readFileSync(path.join(linuxSourceDir, 'Cargo.toml')))
     hash.update(readFileSync(path.join(linuxSourceDir, 'Cargo.lock')))
@@ -244,21 +250,14 @@ async function buildLinuxHelper() {
 }
 
 async function signMacHelper() {
-  const identity = process.env.APPLE_SIGNING_IDENTITY?.trim() || '-'
-  const signArgs = [
-    '--force',
-    '--deep',
-    '--sign',
-    identity,
-    '--identifier',
-    MAC_BUNDLE_IDENTIFIER,
-  ]
-  if (identity === '-') {
-    signArgs.push('--timestamp=none')
-  } else {
-    signArgs.push('--options', 'runtime', '--timestamp')
-  }
-  signArgs.push(macAppBundle)
+  const signArgs = buildComputerUseCodesignArgs({
+    appBundlePath: macAppBundle,
+    bundleIdentifier: MAC_BUNDLE_IDENTIFIER,
+    developmentRequirementPath: macDevelopmentRequirementPath,
+    identity: process.env.APPLE_SIGNING_IDENTITY,
+    requireOfficialIdentity:
+      process.env.CYBERCODE_REQUIRE_OFFICIAL_MAC_SIGNING === '1',
+  })
 
   const sign = Bun.spawn(['codesign', ...signArgs], {
     stdout: 'inherit',

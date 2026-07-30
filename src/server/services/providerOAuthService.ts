@@ -18,6 +18,12 @@ import {
 } from '../../services/oauth/crypto.js'
 import { getPublicOAuthCredential } from './providerPublicOAuthCredentials.js'
 import { qoderRuntimeService } from './qoderRuntimeService.js'
+import {
+  CODEX_CLIENT_VERSION,
+  CODEX_DEFAULT_MODEL_CONTEXT_WINDOWS,
+  CODEX_DEFAULT_MODELS,
+  CODEX_FALLBACK_MODEL_CATALOG,
+} from './codexModelCatalog.js'
 
 export const DEVICE_OAUTH_PROVIDER_IDS = [
   'kimi-coding',
@@ -252,7 +258,6 @@ const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token'
 const CODEX_CALLBACK_PATH = '/auth/callback'
 const CODEX_CALLBACK_PORT = 1455
 const CODEX_OAUTH_TIMEOUT_MS = 10 * 60_000
-const CODEX_CLIENT_VERSION = '0.144.1'
 const GITHUB_API_VERSION = '2026-06-01'
 const GITHUB_EDITOR_VERSION = 'vscode/1.126.0'
 const GITHUB_CHAT_PLUGIN_VERSION = 'copilot-chat/0.54.0'
@@ -279,10 +284,13 @@ const EXPIRY_BUFFER_MS = 5 * 60_000
 const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_USER_INFO_URL = 'https://www.googleapis.com/oauth2/v1/userinfo'
-const GOOGLE_CODE_ASSIST_SCOPES = [
+const GOOGLE_GEMINI_CLI_SCOPES = [
   'https://www.googleapis.com/auth/cloud-platform',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
+]
+const GOOGLE_ANTIGRAVITY_SCOPES = [
+  ...GOOGLE_GEMINI_CLI_SCOPES,
   'https://www.googleapis.com/auth/cclog',
   'https://www.googleapis.com/auth/experimentsandconfigs',
 ]
@@ -404,18 +412,10 @@ export const OAUTH_PROVIDER_RUNTIME_DEFINITIONS = {
     name: 'OpenAI Codex',
     baseUrl: 'https://chatgpt.com/backend-api/codex',
     apiFormat: 'openai_responses' as const,
-    models: {
-      main: 'gpt-5.5',
-      haiku: 'gpt-5.5-low',
-      sonnet: 'gpt-5.5',
-      opus: 'gpt-5.5-high',
-    },
-    modelContextWindows: {
-      main: 400_000,
-      haiku: 400_000,
-      sonnet: 400_000,
-      opus: 400_000,
-    },
+    models: CODEX_DEFAULT_MODELS,
+    modelContextWindows: CODEX_DEFAULT_MODEL_CONTEXT_WINDOWS,
+    modelCatalog: CODEX_FALLBACK_MODEL_CATALOG,
+    modelSyncEnabled: true,
   },
   cursor: {
     presetId: 'cursor-oauth',
@@ -768,6 +768,55 @@ function escapeHtml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
+}
+
+function readOAuthError(
+  data: Record<string, unknown>,
+  raw: string,
+): { code: string; message: string } {
+  const nested = data.error &&
+    typeof data.error === 'object' &&
+    !Array.isArray(data.error)
+    ? data.error as Record<string, unknown>
+    : {}
+  const code = readNonEmptyString(nested, 'code') ||
+    readNonEmptyString(data, 'error')
+  const message = readNonEmptyString(nested, 'message') ||
+    readNonEmptyString(data, 'error_description') ||
+    code ||
+    raw.slice(0, 300)
+  return { code, message }
+}
+
+function codexTokenExchangeFailure(
+  status: number,
+  data: Record<string, unknown>,
+  raw: string,
+): string {
+  const { code, message } = readOAuthError(data, raw)
+  if (code === 'unsupported_country_region_territory') {
+    return 'OpenAI rejected this sign-in because the current country or region is not supported. CyberCode cannot bypass provider region policies. Please choose a provider that is available in your region.'
+  }
+  return `OpenAI Codex token exchange failed (${status}): ${message}`
+}
+
+function browserAuthorizationFailure(
+  providerId: BrowserOAuthProviderId,
+  code: string | null,
+  description: string | null,
+): string {
+  if (
+    (providerId === 'antigravity' || providerId === 'gemini-cli') &&
+    (
+      code === 'restricted_client' ||
+      description?.toLowerCase().includes('unregistered scope')
+    )
+  ) {
+    return 'Google rejected this OAuth client or one of its requested permissions. CyberCode cannot bypass Google account or scope restrictions. Update CyberCode or choose another supported connection method.'
+  }
+  return description ||
+    code ||
+    `${OAUTH_PROVIDER_RUNTIME_DEFINITIONS[providerId].name} did not return an authorization code.`
 }
 
 function oauthCallbackHtml(success: boolean, message: string): string {
@@ -1653,6 +1702,9 @@ export class ProviderOAuthService {
     cleanupTimer.unref?.()
 
     const isAntigravity = providerId === 'antigravity'
+    const scopes = isAntigravity
+      ? GOOGLE_ANTIGRAVITY_SCOPES
+      : GOOGLE_GEMINI_CLI_SCOPES
     const clientId = getPublicOAuthCredential(
       isAntigravity ? 'antigravityClientId' : 'geminiClientId',
       isAntigravity ? 'ANTIGRAVITY_OAUTH_CLIENT_ID' : 'GEMINI_OAUTH_CLIENT_ID',
@@ -1687,7 +1739,7 @@ export class ProviderOAuthService {
       client_id: clientId,
       response_type: 'code',
       redirect_uri: redirectUri,
-      scope: GOOGLE_CODE_ASSIST_SCOPES.join(' '),
+      scope: scopes.join(' '),
       state,
       access_type: 'offline',
       prompt: 'consent',
@@ -1808,9 +1860,11 @@ export class ProviderOAuthService {
     const providerError = callbackUrl.searchParams.get('error')
     const code = callbackUrl.searchParams.get('code')
     if (providerError || !code) {
-      const message = callbackUrl.searchParams.get('error_description') ||
-        providerError ||
-        `${session.providerId === 'codex' ? 'OpenAI' : 'Cline'} did not return an authorization code.`
+      const message = browserAuthorizationFailure(
+        session.providerId,
+        providerError,
+        callbackUrl.searchParams.get('error_description'),
+      )
       session.outcome = { status: 'error', message }
       response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
       response.end(oauthCallbackHtml(false, message))
@@ -1896,10 +1950,7 @@ export class ProviderOAuthService {
       // The status and short response body below are enough for a useful error.
     }
     if (!response.ok) {
-      const detail = typeof data.error_description === 'string'
-        ? data.error_description
-        : typeof data.error === 'string' ? data.error : raw.slice(0, 300)
-      throw new Error(`OpenAI Codex token exchange failed (${response.status}): ${detail}`)
+      throw new Error(codexTokenExchangeFailure(response.status, data, raw))
     }
     if (typeof data.access_token !== 'string' || !data.access_token) {
       throw new Error('OpenAI Codex token response did not include an access token')

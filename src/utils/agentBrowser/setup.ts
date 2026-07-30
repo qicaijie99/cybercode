@@ -4,9 +4,15 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { buildMcpToolName } from '../../services/mcp/mcpStringUtils.js'
 import type { ScopedMcpServerConfig } from '../../services/mcp/types.js'
+import { registerCleanup } from '../cleanupRegistry.js'
 
 export const AGENT_BROWSER_MCP_SERVER_NAME = 'agent-browser'
 const CYBERCODE_AGENT_BROWSER_IDLE_TIMEOUT_MS = '1800000'
+const AGENT_BROWSER_CLOSE_TIMEOUT_MS = 2000
+const AGENT_BROWSER_DAEMON_SETTLE_TIMEOUT_MS = 750
+const AGENT_BROWSER_DAEMON_SETTLE_INTERVAL_MS = 25
+
+let unregisterAgentBrowserCleanup: (() => void) | null = null
 
 const CORE_TOOLS = [
   'agent_browser_tools_profiles',
@@ -73,6 +79,88 @@ export function buildAgentBrowserSessionName(sessionId: string): string {
   return `${prefix}${base.slice(0, maxBaseLength - digest.length - 1)}-${digest}`
 }
 
+function resolveAgentBrowserSocketDir(): string {
+  return (
+    process.env.AGENT_BROWSER_SOCKET_DIR ||
+    path.join(homedir(), '.cyber', 'agent-browser')
+  )
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
+
+async function closeOwnedAgentBrowserSession(
+  command: string,
+  sessionName: string,
+  socketDir: string,
+): Promise<boolean> {
+  const pidPath = path.join(socketDir, `${sessionName}.pid`)
+  if (!existsSync(pidPath) || typeof Bun === 'undefined') return false
+
+  let closeProcess: ReturnType<typeof Bun.spawn> | null = null
+  try {
+    closeProcess = Bun.spawn(
+      [command, '--session', sessionName, '--json', 'close'],
+      {
+        env: {
+          ...process.env,
+          AGENT_BROWSER_SESSION: sessionName,
+          AGENT_BROWSER_SOCKET_DIR: socketDir,
+        },
+        stdin: 'ignore',
+        stdout: 'ignore',
+        stderr: 'ignore',
+      },
+    )
+
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const exitCode = await Promise.race([
+      closeProcess.exited,
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(resolve, AGENT_BROWSER_CLOSE_TIMEOUT_MS, null)
+        timeout.unref?.()
+      }),
+    ])
+    if (timeout) clearTimeout(timeout)
+
+    if (exitCode === null) {
+      try {
+        closeProcess.kill()
+      } catch {
+        // The close helper may have exited between the timeout and kill.
+      }
+      return false
+    }
+    if (exitCode !== 0) return false
+
+    const settleDeadline =
+      Date.now() + AGENT_BROWSER_DAEMON_SETTLE_TIMEOUT_MS
+    while (existsSync(pidPath) && Date.now() < settleDeadline) {
+      await wait(AGENT_BROWSER_DAEMON_SETTLE_INTERVAL_MS)
+    }
+    return !existsSync(pidPath)
+  } catch {
+    return false
+  }
+}
+
+export async function closeAgentBrowserSession(
+  sessionId: string,
+): Promise<boolean> {
+  const command = resolveAgentBrowserBinary()
+  if (!command) return false
+
+  return closeOwnedAgentBrowserSession(
+    command,
+    buildAgentBrowserSessionName(sessionId),
+    resolveAgentBrowserSocketDir(),
+  )
+}
+
 export function setupAgentBrowserMCP(): {
   mcpConfig: Record<string, ScopedMcpServerConfig>
   allowedTools: string[]
@@ -81,28 +169,36 @@ export function setupAgentBrowserMCP(): {
   const command = resolveAgentBrowserBinary()
   if (!command) return null
 
+  const socketDir = resolveAgentBrowserSocketDir()
   const env: Record<string, string> = {
-    AGENT_BROWSER_SOCKET_DIR:
-      process.env.AGENT_BROWSER_SOCKET_DIR ||
-      path.join(homedir(), '.cyber', 'agent-browser'),
+    AGENT_BROWSER_SOCKET_DIR: socketDir,
   }
   const cybercodeSessionId =
     process.env.CYBERCODE_AGENT_BROWSER_SESSION_ID?.trim()
   const configuredSession = process.env.AGENT_BROWSER_SESSION?.trim()
+  let sessionName: string
   if (cybercodeSessionId) {
-    env.AGENT_BROWSER_SESSION =
-      buildAgentBrowserSessionName(cybercodeSessionId)
-    env.AGENT_BROWSER_IDLE_TIMEOUT_MS =
-      process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS ||
-      CYBERCODE_AGENT_BROWSER_IDLE_TIMEOUT_MS
+    sessionName = buildAgentBrowserSessionName(cybercodeSessionId)
   } else if (configuredSession) {
-    env.AGENT_BROWSER_SESSION = configuredSession
+    sessionName = configuredSession
+  } else {
+    sessionName = buildAgentBrowserSessionName(`cli-${process.pid}`)
   }
+  env.AGENT_BROWSER_SESSION = sessionName
+  env.AGENT_BROWSER_IDLE_TIMEOUT_MS =
+    process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS ||
+    CYBERCODE_AGENT_BROWSER_IDLE_TIMEOUT_MS
+
   const browserExecutable =
     process.env.CYBER_AGENT_BROWSER_EXECUTABLE_PATH?.trim()
   if (browserExecutable) {
     env.AGENT_BROWSER_EXECUTABLE_PATH = browserExecutable
   }
+
+  unregisterAgentBrowserCleanup?.()
+  unregisterAgentBrowserCleanup = registerCleanup(async () => {
+    await closeOwnedAgentBrowserSession(command, sessionName, socketDir)
+  })
 
   return {
     mcpConfig: {

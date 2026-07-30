@@ -1137,8 +1137,8 @@ export function ChatInput({ variant = 'default', sessionId: sessionIdProp, proje
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-x-[8px] gap-y-[4px] px-[8px] pb-[8px] pt-[4px]">
-            <div className="flex items-center gap-[8px] min-[640px]:gap-[12px]">
+          <div className="chat-composer-toolbar flex flex-wrap items-center gap-x-[8px] gap-y-[4px] px-[8px] pb-[8px] pt-[4px]">
+            <div className="chat-composer-tools flex items-center gap-[8px] min-[721px]:gap-[12px]">
               <div className="relative flex items-center" ref={plusMenuRef}>
                 {!isMemberSession && (
                   <>
@@ -1256,7 +1256,10 @@ export function ChatInput({ variant = 'default', sessionId: sessionIdProp, proje
               )}
             </div>
 
-            <div data-testid="composer-runtime-controls" className="ml-auto flex min-w-0 items-center justify-end gap-[8px] overflow-visible">
+            <div
+              data-testid="composer-runtime-controls"
+              className="chat-composer-runtime-controls ml-auto flex min-w-0 items-center justify-end gap-[8px] overflow-visible"
+            >
               {!isHeroComposer && !isMemberSession && activeTabId && (
                 <TokenUsageIndicator
                   sessionId={activeTabId}

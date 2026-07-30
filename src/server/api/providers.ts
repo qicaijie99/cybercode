@@ -12,6 +12,8 @@
  * POST   /api/providers/:id/activate — activate a saved provider
  * POST   /api/providers/official     — activate official (clear env)
  * POST   /api/providers/:id/test     — test a saved provider
+ * POST   /api/providers/:id/models/sync — synchronize the saved model catalog
+ * PUT    /api/providers/:id/models/auto-sync — toggle periodic model synchronization
  * POST   /api/providers/test         — test unsaved config
  */
 
@@ -27,18 +29,40 @@ import {
 import type { SavedProvider } from '../types/provider.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { discoverProviderModels } from '../services/providerModelDiscovery.js'
+import {
+  setProviderModelAutoSync,
+  supportsProviderModelSync,
+  syncProviderModels,
+} from '../services/providerModelSyncService.js'
 import { getSourceMetadata } from '../routing/sourceCatalog.js'
+import { peekModelsDevModels } from '../services/modelsDevCatalog.js'
 
 const providerService = new ProviderService()
 const MASKED_API_KEY = '••••••••'
-const PROVIDER_PRESETS_FOR_API = PROVIDER_PRESETS.map((preset) => {
-  const metadata = getSourceMetadata(preset.id)
-  return {
-    ...preset,
-    cost: metadata.cost,
-    ...(metadata.costNote && { costNote: metadata.costNote }),
-  }
-})
+function providerPresetsForApi() {
+  return PROVIDER_PRESETS.map((preset) => {
+    const metadata = getSourceMetadata(preset.id)
+    const modelOptions = new Map(
+      (peekModelsDevModels(preset.id) ?? []).map((model) => [
+        model.id.toLowerCase(),
+        model,
+      ]),
+    )
+    for (const model of preset.modelOptions ?? []) {
+      const key = model.id.toLowerCase()
+      modelOptions.set(key, {
+        ...model,
+        ...modelOptions.get(key),
+      })
+    }
+    return {
+      ...preset,
+      ...(modelOptions.size > 0 && { modelOptions: [...modelOptions.values()] }),
+      cost: metadata.cost,
+      ...(metadata.costNote && { costNote: metadata.costNote }),
+    }
+  })
+}
 const DiscoverProviderModelsSchema = z.object({
   providerId: z.string().optional(),
   presetId: z.string().optional(),
@@ -46,6 +70,9 @@ const DiscoverProviderModelsSchema = z.object({
   apiKey: z.string().optional(),
   apiFormat: ApiFormatSchema.optional(),
   force: z.boolean().optional(),
+})
+const ProviderModelAutoSyncSchema = z.object({
+  enabled: z.boolean(),
 })
 
 export async function handleProvidersApi(
@@ -56,6 +83,7 @@ export async function handleProvidersApi(
   try {
     const id = segments[2]
     const action = segments[3]
+    const subaction = segments[4]
 
     // POST /api/providers/models/discover
     if (id === 'models' && action === 'discover' && req.method === 'POST') {
@@ -69,7 +97,7 @@ export async function handleProvidersApi(
 
     // GET /api/providers/presets
     if (id === 'presets' && req.method === 'GET') {
-      return Response.json({ presets: PROVIDER_PRESETS_FOR_API })
+      return Response.json({ presets: providerPresetsForApi() })
     }
 
     // GET /api/providers/auth-status
@@ -126,6 +154,67 @@ export async function handleProvidersApi(
       } catch { /* no body is fine — uses saved values */ }
       const result = await providerService.testProvider(id, overrides)
       return Response.json({ result })
+    }
+
+    // POST /api/providers/:id/models/sync
+    if (action === 'models' && subaction === 'sync') {
+      if (req.method !== 'POST') throw methodNotAllowed(req.method)
+      try {
+        const result = await syncProviderModels(id, { force: true })
+        return Response.json({
+          provider: toPublicProvider(result.provider),
+          result: {
+            endpoint: result.endpoint,
+            cached: result.cached,
+            total: result.total,
+            added: result.added,
+            updated: result.updated,
+            removed: result.removed,
+          },
+        })
+      } catch (error) {
+        throw ApiError.badRequest(error instanceof Error ? error.message : String(error))
+      }
+    }
+
+    // PUT /api/providers/:id/models/auto-sync
+    if (action === 'models' && subaction === 'auto-sync') {
+      if (req.method !== 'PUT') throw methodNotAllowed(req.method)
+      let body: z.infer<typeof ProviderModelAutoSyncSchema>
+      try {
+        body = ProviderModelAutoSyncSchema.parse(await parseJsonBody(req))
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          throw ApiError.badRequest(error.issues.map((issue) => issue.message).join('; '))
+        }
+        throw error
+      }
+      let provider = await setProviderModelAutoSync(id, body.enabled)
+      let result: Awaited<ReturnType<typeof syncProviderModels>> | undefined
+      let warning: string | undefined
+      if (body.enabled) {
+        try {
+          result = await syncProviderModels(id, { force: true })
+          provider = result.provider
+        } catch (error) {
+          warning = error instanceof Error ? error.message : String(error)
+          provider = await providerService.getProvider(id)
+        }
+      }
+      return Response.json({
+        provider: toPublicProvider(provider),
+        ...(result && {
+          result: {
+            endpoint: result.endpoint,
+            cached: result.cached,
+            total: result.total,
+            added: result.added,
+            updated: result.updated,
+            removed: result.removed,
+          },
+        }),
+        ...(warning && { warning }),
+      })
     }
 
     // /api/providers/:id
@@ -201,7 +290,10 @@ async function handleDiscoverModels(req: Request): Promise<Response> {
       apiKey,
       apiFormat: input.apiFormat ?? saved?.apiFormat ?? 'anthropic',
       presetId: input.presetId ?? saved?.presetId,
-    }, { force: input.force })
+    }, {
+      force: input.force,
+      catalogFallback: true,
+    })
     return Response.json({ result })
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -228,6 +320,20 @@ function toPublicProvider(provider: SavedProvider): SavedProvider {
   return {
     ...provider,
     apiKey: provider.apiKey ? MASKED_API_KEY : '',
+    modelSync: {
+      enabled: provider.modelSync?.enabled ?? false,
+      syncedModelIds: provider.modelSync?.syncedModelIds ?? [],
+      ...(provider.modelSync?.lastSyncedAt && {
+        lastSyncedAt: provider.modelSync.lastSyncedAt,
+      }),
+      ...(provider.modelSync?.lastSyncError && {
+        lastSyncError: provider.modelSync.lastSyncError,
+      }),
+      ...(provider.modelSync?.endpoint && {
+        endpoint: provider.modelSync.endpoint,
+      }),
+      supported: supportsProviderModelSync(provider),
+    },
   }
 }
 

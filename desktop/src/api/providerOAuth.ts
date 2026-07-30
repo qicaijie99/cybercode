@@ -1,4 +1,5 @@
 import { api } from './client'
+import { createReadThroughCache, type CachedReadOptions } from './readThroughCache'
 
 export type ProviderOAuthStatus = {
   providerId: string
@@ -139,9 +140,17 @@ export type ProviderOAuthDetection = {
   source?: string
 }
 
+const providerOAuthCatalogCache = createReadThroughCache(
+  () => api.get<ProviderOAuthCatalog>('/api/provider-oauth'),
+)
+
 export const providerOAuthApi = {
-  catalog() {
-    return api.get<ProviderOAuthCatalog>('/api/provider-oauth')
+  catalog(options?: CachedReadOptions) {
+    return providerOAuthCatalogCache.read(options)
+  },
+
+  peekCatalog() {
+    return providerOAuthCatalogCache.peek()
   },
 
   status(providerId: string) {
@@ -157,17 +166,21 @@ export const providerOAuthApi = {
     )
   },
 
-  poll(providerId: string, sessionId: string) {
-    return api.post<ProviderOAuthPoll>(
+  async poll(providerId: string, sessionId: string) {
+    const result = await api.post<ProviderOAuthPoll>(
       `/api/provider-oauth/${encodeURIComponent(providerId)}/poll`,
       { sessionId },
     )
+    if (result.status === 'connected') providerOAuthCatalogCache.invalidate()
+    return result
   },
 
-  disconnect(providerId: string) {
-    return api.delete<{ ok: true }>(
+  async disconnect(providerId: string) {
+    const result = await api.delete<{ ok: true }>(
       `/api/provider-oauth/${encodeURIComponent(providerId)}`,
     )
+    providerOAuthCatalogCache.invalidate()
+    return result
   },
 
   detect(providerId: string) {
@@ -176,13 +189,15 @@ export const providerOAuthApi = {
     )
   },
 
-  importConnection(providerId: string, input: ProviderOAuthImportInput) {
-    return api.post<{
+  async importConnection(providerId: string, input: ProviderOAuthImportInput) {
+    const result = await api.post<{
       connection: ProviderOAuthStatus
       providerId: string
     }>(
       `/api/provider-oauth/${encodeURIComponent(providerId)}/import`,
       input,
     )
+    providerOAuthCatalogCache.invalidate()
+    return result
   },
 }

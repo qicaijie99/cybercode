@@ -69,10 +69,19 @@ describe('ComputerUseSettings runtime preparation', () => {
   })
 
   it('offers one-click preparation without asking the user to install Python', async () => {
+    vi.mocked(computerUseApi.prepareRuntime).mockResolvedValue(runtime())
+
     render(<ComputerUseSettings />)
 
-    expect(await screen.findByText('Computer Use 运行组件')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '自动准备' })).toBeInTheDocument()
+    expect(await screen.findByText('一键准备 CyberCode Computer Use')).toBeInTheDocument()
+    expect(screen.getByText(/无需配置 Python、pip 或输入终端命令/)).toBeInTheDocument()
+    const installButton = screen.getByRole('button', { name: '一键安装全部依赖' })
+    fireEvent.click(installButton)
+
+    await waitFor(() => {
+      expect(computerUseApi.prepareRuntime).toHaveBeenCalledOnce()
+      expect(computerUseApi.getStatus).toHaveBeenCalledTimes(2)
+    })
     expect(screen.queryByText('下载 Python 3')).not.toBeInTheDocument()
     expect(screen.queryByText('虚拟环境')).not.toBeInTheDocument()
   })
@@ -91,10 +100,9 @@ describe('ComputerUseSettings runtime preparation', () => {
       .mockResolvedValue(status(downloading))
 
     render(<ComputerUseSettings />)
-    fireEvent.click(await screen.findByRole('button', { name: '自动准备' }))
+    fireEvent.click(await screen.findByRole('button', { name: '一键安装全部依赖' }))
 
     expect(await screen.findByText('正在下载 25% · 10.0 MB / 40.0 MB')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '正在准备 25%' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument()
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25')
     expect(screen.getByText('准备过程在后台继续，你仍可正常使用 CyberCode。')).toBeInTheDocument()
@@ -114,7 +122,9 @@ describe('ComputerUseSettings runtime preparation', () => {
       totalBytes: 40 * 1024 * 1024,
       progressPercent: 25,
     })
-    vi.mocked(computerUseApi.getStatus).mockResolvedValue(status(downloading))
+    vi.mocked(computerUseApi.getStatus)
+      .mockResolvedValueOnce(status(downloading))
+      .mockResolvedValue(status(paused))
     vi.mocked(computerUseApi.pauseRuntime).mockResolvedValue(paused)
 
     render(<ComputerUseSettings />)
@@ -138,7 +148,7 @@ describe('ComputerUseSettings runtime preparation', () => {
 
     expect(await screen.findByText('已就绪 · 沿用现有 CyberCode 环境')).toBeInTheDocument()
     await waitFor(() => expect(computerUseApi.getInstalledApps).toHaveBeenCalled())
-    expect(screen.queryByRole('button', { name: '自动准备' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '一键安装全部依赖' })).not.toBeInTheDocument()
   })
 
   it('keeps Wayland screenshots available without claiming full input support', async () => {
@@ -166,5 +176,45 @@ describe('ComputerUseSettings runtime preparation', () => {
     expect(screen.getByText('已通过 X11 后端或系统 Portal 就绪')).toBeInTheDocument()
     expect(screen.getByText(/原生 Wayland 会阻止静默全局输入/)).toBeInTheDocument()
     expect(screen.queryByText('所有检查通过，Computer Use 已就绪。')).not.toBeInTheDocument()
+  })
+
+  it('names the helper that needs Screen Recording and rechecks on return', async () => {
+    const macStatus: ComputerUseStatus = {
+      ...status(runtime({
+        phase: 'ready',
+        ready: true,
+        version: '3.12.11',
+        platformKey: 'darwin-arm64',
+        source: 'managed',
+        progressPercent: 100,
+      })),
+      platform: 'darwin',
+      permissions: {
+        accessibility: true,
+        screenRecording: false,
+      },
+    }
+    vi.mocked(computerUseApi.getStatus).mockResolvedValue(macStatus)
+    vi.mocked(computerUseApi.openSettings).mockResolvedValue({ ok: true })
+
+    render(<ComputerUseSettings />)
+
+    const permissionButton = await screen.findByRole('button', {
+      name: '授权 CyberCode Computer Use',
+    })
+    expect(screen.getByText(/不是终端或 iTerm/)).toBeInTheDocument()
+
+    fireEvent.click(permissionButton)
+    expect(computerUseApi.openSettings).toHaveBeenCalledWith(
+      'Privacy_ScreenCapture',
+    )
+
+    const callsBeforeFocus = vi.mocked(computerUseApi.getStatus).mock.calls.length
+    fireEvent.focus(window)
+    await waitFor(() => {
+      expect(computerUseApi.getStatus).toHaveBeenCalledTimes(
+        callsBeforeFocus + 1,
+      )
+    })
   })
 })

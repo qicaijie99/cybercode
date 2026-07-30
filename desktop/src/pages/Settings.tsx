@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } fro
 import { AnimatePresence, motion } from 'motion/react'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useProviderStore } from '../stores/providerStore'
-import { localeOptions, useTranslation } from '../i18n'
+import { localeOptions, translate, useTranslation } from '../i18n'
 import { Modal } from '../components/shared/Modal'
 import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import { Input } from '../components/shared/Input'
@@ -10,7 +10,7 @@ import { Textarea } from '../components/shared/Textarea'
 import { Button } from '../components/shared/Button'
 import { Dropdown } from '../components/shared/Dropdown'
 import type { PermissionMode, EffortLevel, ThemeMode } from '../types/settings'
-import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, ApiFormat, ModelContextWindows, ImageSupportMode, ProviderModelInfo } from '../types/provider'
+import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, ApiFormat, ModelContextWindows, ImageSupportMode, ProviderModelInfo, ProviderModelSyncState } from '../types/provider'
 import type { ProviderPreset, ProviderModelOption } from '../types/providerPreset'
 import {
   MODEL_ROLES,
@@ -53,7 +53,6 @@ import {
   type ProviderCatalogCardTone,
 } from '../components/providers/ProviderCatalogCard'
 import {
-  aggregatorGatewayProviderIds,
   compareAggregatorGatewayOrder,
   compareProviderPopularity,
   getProviderCatalogDisplayName,
@@ -72,15 +71,58 @@ import {
 } from '../components/providers/cloudflareWorkersAi'
 import { ProviderOAuthDialog } from '../components/providers/ProviderOAuthDialog'
 import {
+  EMPTY_PROVIDER_CATALOG_FILTERS,
+  ProviderCatalogFilterBar,
+  countProviderCatalogFilters,
+  matchesProviderCatalogCandidate,
+  normalizeProviderSearchQuery,
+  scoreProviderCatalogCandidate,
+  selectMostRelevantProviderResults,
+  type ProviderAuthFilter,
+  type ProviderCatalogFilterCandidate,
+  type ProviderCatalogFilterGroup,
+  type ProviderCatalogFilterState,
+  type ProviderCatalogFilterValue,
+  type ProviderModalityFilter,
+} from '../components/providers/ProviderCatalogFilterBar'
+import { WebSessionProviderCatalog } from '../components/providers/WebSessionProviderCatalog'
+import { WebSessionProviderDialog } from '../components/providers/WebSessionProviderDialog'
+import { MediaProviderCatalog } from '../components/providers/MediaProviderCatalog'
+import { MediaProviderDialog } from '../components/providers/MediaProviderDialog'
+import {
   mergeProviderOAuthCapabilities,
   providerOAuthApi,
   type ProviderOAuthCatalog,
 } from '../api/providerOAuth'
+import {
+  webSessionProvidersApi,
+  type WebSessionProviderCatalogStatus,
+  type WebSessionProviderTestResult,
+} from '../api/webSessionProviders'
+import {
+  mediaProvidersApi,
+  type MediaProviderCatalogStatus,
+  type MediaProviderTestResult,
+} from '../api/mediaProviders'
+import {
+  WEB_SESSION_PROVIDERS,
+  getWebSessionProviderIdFromPreset,
+  type WebSessionProviderDefinition,
+  type WebSessionProviderId,
+} from '../../../src/shared/webSessionProviders'
+import {
+  MEDIA_PROVIDERS,
+  getMediaProviderKey,
+  type MediaProviderDefinition,
+  type MediaProviderKind,
+} from '../../../src/shared/mediaProviders'
+import type { SourceCostClass } from '../types/routing'
 import { useCybercodeOAuthStore } from '../stores/cybercodeOAuthStore'
 import { useUpdateStore } from '../stores/updateStore'
 import { formatBytes } from '../lib/formatBytes'
 import { isTauriRuntime } from '../lib/desktopRuntime'
 import { Icon } from '../components/shared/Icon'
+import { GatewayNodePanel } from '../components/providers/GatewayNodePanel'
 import {
   promptMemoryApi,
   type PromptMemoryAutoReviewLogEntry,
@@ -151,7 +193,7 @@ export function Settings() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-[var(--color-background)]">
-      <header className="z-10 flex h-[76px] shrink-0 items-center justify-end bg-[var(--color-background)] px-[24px] md:px-[32px]">
+      <header className="settings-home-header z-10 flex h-[76px] shrink-0 items-center justify-end bg-[var(--color-background)] px-[24px] md:px-[32px]">
         <button
           onClick={() => useUIStore.getState().closeSettings()}
           className="flex h-[36px] w-[36px] items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-black dark:text-[var(--color-text-secondary)] dark:hover:bg-[var(--color-surface-hover)] dark:hover:text-[var(--color-text-primary)]"
@@ -163,7 +205,7 @@ export function Settings() {
       </header>
 
       <div className="flex-1 overflow-y-auto bg-[var(--color-background)]">
-        <div className="flex min-h-[68px] flex-wrap items-center justify-center gap-[6px] px-[24px] pb-[30px] pt-[10px] md:px-[32px]">
+        <div className="settings-home-tabs flex min-h-[68px] flex-wrap items-center justify-center gap-[6px] px-[24px] pb-[30px] pt-[10px] md:px-[32px]">
           {SETTINGS_TABS.map((key) => {
             const isActive = activeTab === key
             const label = t(`settings.tab.${key}` as never) as string
@@ -182,7 +224,7 @@ export function Settings() {
             )
           })}
         </div>
-        <div className="px-[24px] pb-[40px] md:px-[32px]">
+        <div className="settings-home-body px-[24px] pb-[40px] md:px-[32px]">
           {activeTab === 'general' && <GeneralSettings />}
           {activeTab === 'memory' && <MemorySettings />}
           {activeTab === 'about' && <AboutSettings />}
@@ -211,28 +253,64 @@ export function ProviderSettings() {
     testProvider,
   } = useProviderStore()
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
+  const locale = useSettingsStore((s) => s.locale)
   const fetchRoutingDashboard = useRoutingStore((s) => s.fetchDashboard)
   const t = useTranslation()
-  const [providerView, setProviderView] = useState<'sources' | 'routing' | 'status'>('sources')
+  const [providerView, setProviderView] = useState<'sources' | 'routing' | 'node' | 'status'>('sources')
   const [sourceQuery, setSourceQuery] = useState('')
+  const [sourceFilters, setSourceFilters] = useState<ProviderCatalogFilterState>(() => ({
+    auth: [...EMPTY_PROVIDER_CATALOG_FILTERS.auth],
+    cost: [...EMPTY_PROVIDER_CATALOG_FILTERS.cost],
+    modality: [...EMPTY_PROVIDER_CATALOG_FILTERS.modality],
+  }))
   const [editingProvider, setEditingProvider] = useState<SavedProvider | null>(null)
   const [creatingPresetId, setCreatingPresetId] = useState<string | null>(null)
   const [selectedProviderCatalogKey, setSelectedProviderCatalogKey] = useState<string | null>(null)
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<SavedProvider | null>(null)
   const [isDeletingProvider, setIsDeletingProvider] = useState(false)
   const [testResults, setTestResults] = useState<Record<string, { loading: boolean; result?: ProviderTestResult }>>({})
-  const [providerOAuthCatalog, setProviderOAuthCatalog] = useState<ProviderOAuthCatalog>({
-    supportedProviders: [],
-    capabilities: [],
-    statuses: [],
-  })
+  const [providerOAuthCatalog, setProviderOAuthCatalog] = useState<ProviderOAuthCatalog>(() => (
+    providerOAuthApi.peekCatalog() ?? {
+      supportedProviders: [],
+      capabilities: [],
+      statuses: [],
+    }
+  ))
   const [selectedOAuthProvider, setSelectedOAuthProvider] = useState<OAuthProviderCatalogItem | null>(null)
+  const [webSessionCatalog, setWebSessionCatalog] = useState<WebSessionProviderCatalogStatus>(() => (
+    webSessionProvidersApi.peekCatalog() ?? {
+      total: 24,
+      configured: 0,
+      statuses: [],
+    }
+  ))
+  const [selectedWebSessionProvider, setSelectedWebSessionProvider] =
+    useState<WebSessionProviderDefinition | null>(null)
+  const [webSessionTestResults, setWebSessionTestResults] =
+    useState<Map<WebSessionProviderId, WebSessionProviderTestResult>>(new Map())
+  const [testingWebSessionProviderIds, setTestingWebSessionProviderIds] =
+    useState<Set<WebSessionProviderId>>(new Set())
+  const [isTestingAllWebSessions, setIsTestingAllWebSessions] = useState(false)
+  const [mediaCatalog, setMediaCatalog] = useState<MediaProviderCatalogStatus>(() => (
+    mediaProvidersApi.peekCatalog() ?? {
+      total: 0,
+      configured: 0,
+      totalsByKind: { image: 0, video: 0, audio: 0 },
+      statuses: [],
+    }
+  ))
+  const [activeMediaKind, setActiveMediaKind] = useState<MediaProviderKind>('video')
+  const [selectedMediaProvider, setSelectedMediaProvider] =
+    useState<MediaProviderDefinition | null>(null)
+  const [mediaTestResults, setMediaTestResults] =
+    useState<Map<string, MediaProviderTestResult>>(new Map())
+  const [testingMediaKeys, setTestingMediaKeys] = useState<Set<string>>(new Set())
   const claudeOAuthStatus = useCybercodeOAuthStore((s) => s.status)
   const fetchClaudeOAuthStatus = useCybercodeOAuthStore((s) => s.fetchStatus)
 
-  const fetchProviderOAuthCatalog = useCallback(async () => {
+  const fetchProviderOAuthCatalog = useCallback(async (force = false) => {
     try {
-      const catalog = await providerOAuthApi.catalog()
+      const catalog = await providerOAuthApi.catalog({ force })
       setProviderOAuthCatalog({
         supportedProviders: Array.isArray(catalog.supportedProviders)
           ? catalog.supportedProviders
@@ -249,12 +327,37 @@ export function ProviderSettings() {
     }
   }, [])
 
+  const fetchWebSessionCatalog = useCallback(async (force = false) => {
+    try {
+      setWebSessionCatalog(await webSessionProvidersApi.catalog({ force }))
+    } catch (error) {
+      console.warn('[ProviderSettings] Failed to load Web Cookie providers:', error)
+    }
+  }, [])
+
+  const fetchMediaCatalog = useCallback(async (force = false) => {
+    try {
+      setMediaCatalog(await mediaProvidersApi.catalog({ force }))
+    } catch (error) {
+      console.warn('[ProviderSettings] Failed to load media providers:', error)
+    }
+  }, [])
+
   useEffect(() => {
     void fetchProviders()
     void fetchPresets()
     void fetchClaudeOAuthStatus()
     void fetchProviderOAuthCatalog()
-  }, [fetchClaudeOAuthStatus, fetchPresets, fetchProviderOAuthCatalog, fetchProviders])
+    void fetchWebSessionCatalog()
+    void fetchMediaCatalog()
+  }, [
+    fetchClaudeOAuthStatus,
+    fetchPresets,
+    fetchProviderOAuthCatalog,
+    fetchProviders,
+    fetchMediaCatalog,
+    fetchWebSessionCatalog,
+  ])
 
   useEffect(() => {
     if (!hasLoadedProviders) return
@@ -262,30 +365,18 @@ export function ProviderSettings() {
   }, [fetchRoutingDashboard, hasLoadedProviders, providers])
 
   const providerRows = useMemo(
-    () => buildProviderCatalogRows(providers, presets),
+    () => buildProviderCatalogRows(
+      providers.filter(
+        (provider) => getWebSessionProviderIdFromPreset(provider.presetId) === null,
+      ),
+      presets,
+    ),
     [providers, presets],
   )
   const selectedProviderCatalogRow = selectedProviderCatalogKey
     ? providerRows.find((row) => row.key === selectedProviderCatalogKey) ?? null
     : null
-  const normalizedSourceQuery = sourceQuery.trim().toLowerCase()
-  const matchesSourceQuery = (row: ProviderCatalogRow) => {
-    if (!normalizedSourceQuery) return true
-    return [
-      row.groupName,
-      ...row.variants.flatMap(({ preset, providers: configuredProviders }) => [
-        preset.name,
-        getProviderCatalogDisplayName(preset.id, preset.name, t),
-        preset.id,
-        preset.baseUrl,
-        ...configuredProviders.flatMap((provider) => [
-          provider.name,
-          provider.baseUrl,
-          provider.models.main,
-        ]),
-      ]),
-    ].some((value) => value?.toLowerCase().includes(normalizedSourceQuery))
-  }
+  const normalizedSourceQuery = normalizeProviderSearchQuery(sourceQuery)
   const apiKeyProviderCatalogRows = providerRows
     .filter((row) => row.variants.some(({ preset, providers: configuredProviders }) => (
       (
@@ -294,25 +385,11 @@ export function ProviderSettings() {
       ) &&
       !isAggregatorGatewayPreset(preset)
     )))
-  const apiKeyProviderRows = apiKeyProviderCatalogRows
-    .filter(matchesSourceQuery)
-    .sort((left, right) => compareProviderPopularity(left.preset.id, right.preset.id))
   const aggregatorGatewayCatalogRows = providerRows
     .filter((row) => row.variants.some(({ preset }) => isAggregatorGatewayPreset(preset)))
-  const aggregatorGatewayRows = aggregatorGatewayCatalogRows
-    .filter(matchesSourceQuery)
-    .sort((left, right) => (
-      compareAggregatorGatewayOrder(left.preset.id, right.preset.id)
-    ))
-  const noAuthProviderRows = providerRows
+  const noAuthProviderCatalogRows = providerRows
     .filter((row) => row.variants.some(({ preset }) => isNoAuthProviderPreset(preset)))
-    .filter(matchesSourceQuery)
-  const configuredAggregatorGatewayCount = new Set(
-    aggregatorGatewayCatalogRows
-      .filter(({ providers: configuredProviders }) => configuredProviders.length > 0)
-      .map(({ catalogId }) => catalogId),
-  ).size
-  const localAndCustomProviderRows = providerRows
+  const localAndCustomProviderCatalogRows = providerRows
     .filter((row) => row.variants.some(({ preset, providers: configuredProviders }) => (
       isLocalOrCustomProviderPreset(preset) &&
       (
@@ -320,6 +397,169 @@ export function ProviderSettings() {
         configuredProviders.some((provider) => !isRemoteCustomProvider(preset, provider))
       )
     )))
+
+  const mostRelevantProviderKeys = selectMostRelevantProviderResults([
+    ...apiKeyProviderCatalogRows.map((row) => ({
+      key: getProviderSearchResultKey('api-key', row.key),
+      score: providerCatalogRowFilterScore(
+        row,
+        'api-key',
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    })),
+    ...aggregatorGatewayCatalogRows.map((row) => ({
+      key: getProviderSearchResultKey('aggregator', row.key),
+      score: providerCatalogRowFilterScore(
+        row,
+        'aggregator',
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    })),
+    ...noAuthProviderCatalogRows.map((row) => ({
+      key: getProviderSearchResultKey('no-auth', row.key),
+      score: providerCatalogRowFilterScore(
+        row,
+        'no-auth',
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    })),
+    ...localAndCustomProviderCatalogRows.map((row) => ({
+      key: getProviderSearchResultKey('local-custom', row.key),
+      score: providerCatalogRowFilterScore(
+        row,
+        'local-custom',
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    })),
+    ...OAUTH_PROVIDER_CATALOG.map((provider) => ({
+      key: getProviderSearchResultKey('oauth', provider.id),
+      score: providerCatalogCandidateFilterScore(
+        getOAuthProviderFilterCandidate(provider),
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    })),
+    ...WEB_SESSION_PROVIDERS.map((provider) => ({
+      key: getProviderSearchResultKey('web-session', provider.id),
+      score: providerCatalogCandidateFilterScore(
+        getWebSessionProviderFilterCandidate(provider),
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    })),
+    ...MEDIA_PROVIDERS.map((provider) => ({
+      key: getProviderSearchResultKey('media', getMediaProviderKey(provider.kind, provider.id)),
+      score: providerCatalogCandidateFilterScore(
+        getMediaProviderFilterCandidate(provider, presets),
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    })),
+  ], normalizedSourceQuery)
+  const isRelevantProviderResult = (catalog: string, id: string) => (
+    mostRelevantProviderKeys?.has(getProviderSearchResultKey(catalog, id)) ?? true
+  )
+  const rankProviderRows = (
+    rows: readonly ProviderCatalogRow[],
+    auth: ProviderAuthFilter,
+    catalog: string,
+    compareWithoutSearch: (left: ProviderCatalogRow, right: ProviderCatalogRow) => number,
+  ) => rows
+    .map((row) => ({
+      row,
+      score: providerCatalogRowFilterScore(
+        row,
+        auth,
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    }))
+    .filter(({ row, score }) => (
+      score > 0 && isRelevantProviderResult(catalog, row.key)
+    ))
+    .sort((left, right) => (
+      normalizedSourceQuery
+        ? right.score - left.score
+        : compareWithoutSearch(left.row, right.row)
+    ))
+    .map(({ row }) => row)
+  const apiKeyProviderRows = rankProviderRows(
+    apiKeyProviderCatalogRows,
+    'api-key',
+    'api-key',
+    (left, right) => compareProviderPopularity(left.preset.id, right.preset.id),
+  )
+  const aggregatorGatewayRows = rankProviderRows(
+    aggregatorGatewayCatalogRows,
+    'aggregator',
+    'aggregator',
+    (left, right) => compareAggregatorGatewayOrder(left.preset.id, right.preset.id),
+  )
+  const noAuthProviderRows = rankProviderRows(
+    noAuthProviderCatalogRows,
+    'no-auth',
+    'no-auth',
+    () => 0,
+  )
+  const localAndCustomProviderRows = rankProviderRows(
+    localAndCustomProviderCatalogRows,
+    'local-custom',
+    'local-custom',
+    () => 0,
+  )
+  const configuredAggregatorGatewayCount = new Set(
+    aggregatorGatewayRows
+      .filter(({ providers: configuredProviders }) => configuredProviders.length > 0)
+      .map(({ catalogId }) => catalogId),
+  ).size
+
+  const toggleSourceFilter = useCallback((
+    group: ProviderCatalogFilterGroup,
+    value: ProviderCatalogFilterValue,
+  ) => {
+    setSourceFilters((current) => {
+      if (group === 'auth') {
+        const filter = value as ProviderAuthFilter
+        return {
+          ...current,
+          auth: current.auth.includes(filter)
+            ? current.auth.filter((item) => item !== filter)
+            : [...current.auth, filter],
+        }
+      }
+      if (group === 'cost') {
+        const filter = value as SourceCostClass
+        return {
+          ...current,
+          cost: current.cost.includes(filter)
+            ? current.cost.filter((item) => item !== filter)
+            : [...current.cost, filter],
+        }
+      }
+
+      const filter = value as ProviderModalityFilter
+      return {
+        ...current,
+        modality: current.modality.includes(filter)
+          ? current.modality.filter((item) => item !== filter)
+          : [...current.modality, filter],
+      }
+    })
+  }, [])
+
+  const clearSourceFilters = useCallback(() => {
+    setSourceFilters({ auth: [], cost: [], modality: [] })
+  }, [])
+
+  const resetSourceSearchAndFilters = useCallback(() => {
+    setSourceQuery('')
+    setSourceFilters({ auth: [], cost: [], modality: [] })
+  }, [])
+
   const handleDelete = async (provider: SavedProvider) => {
     if (activeId === provider.id) return
     setPendingDeleteProvider(provider)
@@ -375,17 +615,171 @@ export function ProviderSettings() {
     ),
     [providerOAuthCatalog.statuses],
   )
-  const connectedOAuthCount = connectedOAuthProviderIds.size + (
-    claudeOAuthStatus?.loggedIn ? 1 : 0
-  )
 
   const handleProviderOAuthChanged = useCallback(async () => {
     await Promise.all([
-      fetchProviderOAuthCatalog(),
-      fetchProviders(),
+      fetchProviderOAuthCatalog(true),
+      fetchProviders({ force: true, quiet: true }),
     ])
     await fetchRoutingDashboard({ quiet: true })
   }, [fetchProviderOAuthCatalog, fetchProviders, fetchRoutingDashboard])
+
+  const webSessionStatuses = useMemo(
+    () => new Map(
+      webSessionCatalog.statuses.map((status) => [status.providerId, status]),
+    ),
+    [webSessionCatalog.statuses],
+  )
+
+  const handleWebSessionChanged = useCallback(async () => {
+    await Promise.all([
+      fetchWebSessionCatalog(true),
+      fetchProviders({ force: true, quiet: true }),
+    ])
+    await Promise.all([
+      fetchSettings(),
+      fetchRoutingDashboard({ quiet: true }),
+    ])
+  }, [
+    fetchProviders,
+    fetchRoutingDashboard,
+    fetchSettings,
+    fetchWebSessionCatalog,
+  ])
+
+  const handleWebSessionTestResult = useCallback(
+    (result: WebSessionProviderTestResult) => {
+      setWebSessionTestResults((current) => {
+        const next = new Map(current)
+        next.set(result.providerId, result)
+        return next
+      })
+    },
+    [],
+  )
+
+  const handleTestAllWebSessions = useCallback(async () => {
+    const configuredIds = webSessionCatalog.statuses
+      .filter((status) => status.connected)
+      .map((status) => status.providerId)
+    if (configuredIds.length === 0) return
+
+    setIsTestingAllWebSessions(true)
+    setTestingWebSessionProviderIds(new Set(configuredIds))
+    try {
+      const { results } = await webSessionProvidersApi.testAll()
+      setWebSessionTestResults((current) => {
+        const next = new Map(current)
+        for (const result of results) next.set(result.providerId, result)
+        return next
+      })
+    } catch (error) {
+      console.warn('[ProviderSettings] Web Cookie provider tests failed:', error)
+    } finally {
+      setTestingWebSessionProviderIds(new Set())
+      setIsTestingAllWebSessions(false)
+    }
+  }, [webSessionCatalog.statuses])
+
+  const mediaStatuses = useMemo(
+    () => new Map(mediaCatalog.statuses.map((status) => [status.key, status])),
+    [mediaCatalog.statuses],
+  )
+
+  const filteredOAuthProviders = OAUTH_PROVIDER_CATALOG
+    .map((provider) => ({
+      provider,
+      score: providerCatalogCandidateFilterScore(
+        getOAuthProviderFilterCandidate(provider),
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    }))
+    .filter(({ provider, score }) => (
+      score > 0 && isRelevantProviderResult('oauth', provider.id)
+    ))
+    .sort((left, right) => (
+      normalizedSourceQuery ? right.score - left.score : 0
+    ))
+    .map(({ provider }) => provider)
+  const filteredWebSessionProviders = WEB_SESSION_PROVIDERS
+    .map((provider) => ({
+      provider,
+      score: providerCatalogCandidateFilterScore(
+        getWebSessionProviderFilterCandidate(provider),
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    }))
+    .filter(({ provider, score }) => (
+      score > 0 && isRelevantProviderResult('web-session', provider.id)
+    ))
+    .sort((left, right) => (
+      normalizedSourceQuery ? right.score - left.score : 0
+    ))
+    .map(({ provider }) => provider)
+  const filteredMediaProviders = MEDIA_PROVIDERS
+    .map((provider) => ({
+      provider,
+      score: providerCatalogCandidateFilterScore(
+        getMediaProviderFilterCandidate(provider, presets),
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    }))
+    .filter(({ provider, score }) => (
+      score > 0 &&
+      isRelevantProviderResult('media', getMediaProviderKey(provider.kind, provider.id))
+    ))
+    .sort((left, right) => (
+      normalizedSourceQuery ? right.score - left.score : 0
+    ))
+    .map(({ provider }) => provider)
+
+  useEffect(() => {
+    if (
+      filteredMediaProviders.length === 0 ||
+      filteredMediaProviders.some((provider) => provider.kind === activeMediaKind)
+    ) {
+      return
+    }
+    const nextKind = filteredMediaProviders[0]?.kind
+    if (nextKind) setActiveMediaKind(nextKind)
+  }, [activeMediaKind, filteredMediaProviders])
+
+  const connectedOAuthCount = filteredOAuthProviders.filter((provider) => (
+    provider.id === 'claude'
+      ? claudeOAuthStatus?.loggedIn === true
+      : connectedOAuthProviderIds.has(provider.id)
+  )).length
+  const activeSourceFilterCount = countProviderCatalogFilters(sourceFilters)
+  const hasSourceCriteria = normalizedSourceQuery.length > 0 || activeSourceFilterCount > 0
+  const visibleProviderCount = (
+    apiKeyProviderRows.length +
+    aggregatorGatewayRows.length +
+    filteredOAuthProviders.length +
+    noAuthProviderRows.length +
+    localAndCustomProviderRows.length +
+    filteredWebSessionProviders.length +
+    filteredMediaProviders.length
+  )
+
+  const handleMediaProviderChanged = useCallback(async () => {
+    await fetchMediaCatalog(true)
+  }, [fetchMediaCatalog])
+
+  const handleMediaTestResult = useCallback((result: MediaProviderTestResult) => {
+    setMediaTestResults((current) => {
+      const next = new Map(current)
+      next.set(result.key, result)
+      return next
+    })
+    setTestingMediaKeys((current) => {
+      const next = new Set(current)
+      next.delete(result.key)
+      return next
+    })
+  }, [])
 
   const renderProviderRow = (row: ProviderCatalogRow) => {
     const { key, preset, providers: configuredProviders, variants } = row
@@ -500,7 +894,7 @@ export function ProviderSettings() {
 
   return (
     <SettingsPage layout="workspace">
-      <div className="grid min-h-0 gap-[24px] lg:grid-cols-[200px_minmax(0,1fr)]">
+      <div className="provider-settings-layout grid min-h-0 gap-[24px] lg:grid-cols-[200px_minmax(0,1fr)]">
         <aside
           aria-label={t('settings.routing.centerTabs')}
           className="min-w-0 lg:sticky lg:top-0 lg:self-start lg:border-r lg:border-[var(--color-border-separator)] lg:pr-[18px]"
@@ -509,9 +903,9 @@ export function ProviderSettings() {
             role="tablist"
             aria-orientation="vertical"
             aria-label={t('settings.routing.centerTabs')}
-            className="grid grid-cols-3 gap-[6px] lg:flex lg:flex-col"
+            className="provider-settings-nav grid grid-cols-2 gap-[6px] lg:flex lg:flex-col"
           >
-            {(['sources', 'routing', 'status'] as const).map((view) => (
+            {(['sources', 'routing', 'node', 'status'] as const).map((view) => (
               <button
                 key={view}
                 type="button"
@@ -537,66 +931,79 @@ export function ProviderSettings() {
             </div>
           ) : (
             <div className="flex flex-col gap-[18px]">
-              <OAuthProviderCatalog
-                claudeConnected={claudeOAuthStatus?.loggedIn === true}
-                connectedProviderIds={connectedOAuthProviderIds}
-                capabilities={providerOAuthCapabilities}
-                onSelectProvider={setSelectedOAuthProvider}
-                labels={{
-                  title: t('settings.routing.oauthProviders.title'),
-                  description: t('settings.routing.oauthProviders.description'),
-                  connectedCount: t('settings.routing.oauthProviders.connectedCount', {
-                    connected: String(connectedOAuthCount),
-                    total: String(OAUTH_PROVIDER_CATALOG.length),
-                  }),
-                  connected: t('settings.routing.oauthProviders.connected'),
-                  nativeReady: t('settings.routing.oauthProviders.nativeReady'),
-                  pending: t('settings.routing.oauthProviders.pending'),
-                  openLogin: t('settings.routing.oauthProviders.openClaudeLogin'),
-                }}
-              />
+              <div className="sticky top-0 z-[60] rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-lowest)] p-[12px] shadow-[0_8px_24px_rgba(15,23,42,0.05)]">
+                <ProviderCatalogFilterBar
+                  query={sourceQuery}
+                  filters={sourceFilters}
+                  resultCount={visibleProviderCount}
+                  onQueryChange={setSourceQuery}
+                  onToggle={toggleSourceFilter}
+                  onClear={clearSourceFilters}
+                  labels={{
+                    searchPlaceholder: t('settings.routing.providerSearch.placeholder'),
+                    clearSearch: t('settings.routing.providerSearch.clearSearch'),
+                    filter: t('settings.routing.providerSearch.filter'),
+                    filterTitle: t('settings.routing.providerSearch.filterTitle'),
+                    clearFilters: t('settings.routing.providerSearch.clearFilters'),
+                    resultCount: t('settings.routing.providerSearch.resultCount'),
+                    auth: t('settings.routing.providerSearch.auth'),
+                    cost: t('settings.routing.providerSearch.cost'),
+                    modality: t('settings.routing.providerSearch.modality'),
+                    authOptions: {
+                      'api-key': t('settings.routing.providerSearch.auth.apiKey'),
+                      oauth: t('settings.routing.providerSearch.auth.oauth'),
+                      aggregator: t('settings.routing.providerSearch.auth.aggregator'),
+                      'no-auth': t('settings.routing.providerSearch.auth.noAuth'),
+                      'web-session': t('settings.routing.providerSearch.auth.webSession'),
+                      'local-custom': t('settings.routing.providerSearch.auth.localCustom'),
+                    },
+                    costOptions: {
+                      paid: t('settings.routing.providerSearch.cost.paid'),
+                      uncapped: t('settings.routing.providerSearch.cost.free'),
+                      'recurring-free': t('settings.routing.providerSearch.cost.recurringFree'),
+                      'signup-credit': t('settings.routing.providerSearch.cost.signupCredit'),
+                      mixed: t('settings.routing.providerSearch.cost.mixed'),
+                      unknown: t('settings.routing.providerSearch.cost.unknown'),
+                    },
+                    modalityOptions: {
+                      language: t('settings.routing.providerSearch.modality.language'),
+                      multimodal: t('settings.routing.providerSearch.modality.multimodal'),
+                      image: t('settings.routing.providerSearch.modality.image'),
+                      video: t('settings.routing.providerSearch.modality.video'),
+                      audio: t('settings.routing.providerSearch.modality.audio'),
+                    },
+                  }}
+                />
+              </div>
 
-              <section
-                aria-labelledby="no-auth-provider-catalog-title"
-                className="border-t border-[var(--color-border-separator)] pt-[18px]"
-              >
-                <div className="mb-[12px] min-w-0">
-                  <div className="flex items-center gap-[7px]">
-                    <h2
-                      id="no-auth-provider-catalog-title"
-                      className="text-[15px] font-semibold text-[var(--color-text-primary)]"
-                    >
-                      {t('settings.routing.noAuthProviders.title')}
-                    </h2>
-                    <span
-                      aria-hidden="true"
-                      className="h-[8px] w-[8px] shrink-0 rounded-full bg-[#16a34a]"
-                    />
-                    <span className="text-[12px] font-semibold text-[#137333] dark:text-[#86efac]">
-                      {t('settings.routing.noAuthProviders.count', {
-                        count: String(noAuthProviderRows.length),
-                      })}
-                    </span>
-                  </div>
-                  <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
-                    {t('settings.routing.noAuthProviders.description')}
-                  </p>
-                </div>
-
+              {hasSourceCriteria && visibleProviderCount === 0 && (
                 <div
-                  data-provider-catalog="no-auth"
-                  data-provider-catalog-layout="comfortable"
-                  className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                  role="status"
+                  className="flex min-h-[220px] flex-col items-center justify-center rounded-[8px] border border-dashed border-[var(--color-border)] px-[24px] py-[42px] text-center"
                 >
-                  {noAuthProviderRows.map(renderProviderRow)}
+                  <Icon name="search" size={24} className="text-[var(--color-text-tertiary)]" />
+                  <h2 className="mt-[12px] text-[15px] font-semibold text-[var(--color-text-primary)]">
+                    {t('settings.routing.providerSearch.noResultsTitle')}
+                  </h2>
+                  <p className="mt-[4px] max-w-[480px] text-[12px] leading-[1.6] text-[var(--color-text-secondary)]">
+                    {t('settings.routing.providerSearch.noResultsDescription')}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={resetSourceSearchAndFilters}
+                    className="mt-[16px] text-[12px] font-semibold text-[#0b63c9] hover:opacity-75 dark:text-[#8bc0ff]"
+                  >
+                    {t('settings.routing.providerSearch.reset')}
+                  </button>
                 </div>
-              </section>
+              )}
 
+              {(!hasSourceCriteria || apiKeyProviderRows.length > 0) && (
               <section
                 aria-labelledby="api-key-provider-catalog-title"
                 className="border-t border-[var(--color-border-separator)] pt-[18px]"
               >
-                <div className="mb-[12px] flex flex-col gap-[10px] sm:flex-row sm:items-end sm:justify-between">
+                <div className="mb-[12px] min-w-0">
                   <div className="min-w-0">
                     <div className="flex items-center gap-[7px]">
                       <h2
@@ -615,22 +1022,6 @@ export function ProviderSettings() {
                       {t('settings.routing.apiKeyProviders.description')}
                     </p>
                   </div>
-
-                  <div className="relative min-w-0 sm:w-[320px]">
-                    <Icon
-                      name="search"
-                      size={16}
-                      className="pointer-events-none absolute left-[12px] top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
-                    />
-                    <input
-                      type="search"
-                      value={sourceQuery}
-                      onChange={(event) => setSourceQuery(event.target.value)}
-                      placeholder={t('settings.routing.searchApiKeyProviders')}
-                      aria-label={t('settings.routing.searchApiKeyProviders')}
-                      className="h-[40px] w-full rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] pl-[38px] pr-[12px] text-[12px] font-medium text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
-                    />
-                  </div>
                 </div>
 
                 <div
@@ -639,16 +1030,16 @@ export function ProviderSettings() {
                   className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
                 >
                   {apiKeyProviderRows.map(renderProviderRow)}
-                  {apiKeyProviderRows.length === 0 &&
-                    aggregatorGatewayRows.length === 0 &&
-                    noAuthProviderRows.length === 0 && (
+                  {apiKeyProviderRows.length === 0 && (
                     <div className="col-span-full rounded-[8px] border border-[var(--color-border)] px-[20px] py-[36px] text-center text-[13px] text-[var(--color-text-tertiary)]">
                       {t('settings.routing.apiKeyProviders.noMatches')}
                     </div>
                   )}
                 </div>
               </section>
+              )}
 
+              {(!hasSourceCriteria || aggregatorGatewayRows.length > 0) && (
               <section
                 aria-labelledby="aggregator-gateway-catalog-title"
                 className="border-t border-[var(--color-border-separator)] pt-[18px]"
@@ -668,7 +1059,7 @@ export function ProviderSettings() {
                     <span className="text-[12px] font-semibold text-[#b76800] dark:text-[#f6b94d]">
                       {t('settings.routing.aggregators.count', {
                         configured: String(configuredAggregatorGatewayCount),
-                        total: String(aggregatorGatewayProviderIds.length),
+                        total: String(aggregatorGatewayRows.length),
                       })}
                     </span>
                   </div>
@@ -690,44 +1081,167 @@ export function ProviderSettings() {
                   )}
                 </div>
               </section>
+              )}
 
-              <section
-                aria-labelledby="local-provider-catalog-title"
-                className="border-t border-[var(--color-border-separator)] pt-[18px]"
-              >
-                <div className="mb-[12px] min-w-0">
-                  <div className="flex items-center gap-[7px]">
-                    <h2
-                      id="local-provider-catalog-title"
-                      className="text-[15px] font-semibold text-[var(--color-text-primary)]"
-                    >
-                      {t('settings.routing.localProviders.title')}
-                    </h2>
-                    <span className="text-[12px] font-semibold text-[#1473e6] dark:text-[#68adff]">
-                      {t('settings.routing.localProviders.count', {
-                        count: String(localAndCustomProviderRows.length),
-                      })}
-                    </span>
-                  </div>
-                  <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
-                    {t('settings.routing.localProviders.description')}
-                  </p>
-                </div>
+              {(!hasSourceCriteria || filteredOAuthProviders.length > 0) && (
+                <OAuthProviderCatalog
+                  claudeConnected={claudeOAuthStatus?.loggedIn === true}
+                  providers={filteredOAuthProviders}
+                  connectedProviderIds={connectedOAuthProviderIds}
+                  capabilities={providerOAuthCapabilities}
+                  onSelectProvider={setSelectedOAuthProvider}
+                  labels={{
+                    title: t('settings.routing.oauthProviders.title'),
+                    description: t('settings.routing.oauthProviders.description'),
+                    connectedCount: t('settings.routing.oauthProviders.connectedCount', {
+                      connected: String(connectedOAuthCount),
+                      total: String(filteredOAuthProviders.length),
+                    }),
+                    connected: t('settings.routing.oauthProviders.connected'),
+                    nativeReady: t('settings.routing.oauthProviders.nativeReady'),
+                    pending: t('settings.routing.oauthProviders.pending'),
+                    openLogin: t('settings.routing.oauthProviders.openClaudeLogin'),
+                  }}
+                />
+              )}
 
-                <div
-                  data-provider-catalog="local-custom"
-                  data-provider-catalog-layout="comfortable"
-                  className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+              {(!hasSourceCriteria || noAuthProviderRows.length > 0) && (
+                <section
+                  aria-labelledby="no-auth-provider-catalog-title"
+                  className="border-t border-[var(--color-border-separator)] pt-[18px]"
                 >
-                  {localAndCustomProviderRows.map(renderProviderRow)}
-                </div>
-              </section>
+                  <div className="mb-[12px] min-w-0">
+                    <div className="flex items-center gap-[7px]">
+                      <h2
+                        id="no-auth-provider-catalog-title"
+                        className="text-[15px] font-semibold text-[var(--color-text-primary)]"
+                      >
+                        {t('settings.routing.noAuthProviders.title')}
+                      </h2>
+                      <span
+                        aria-hidden="true"
+                        className="h-[8px] w-[8px] shrink-0 rounded-full bg-[#16a34a]"
+                      />
+                      <span className="text-[12px] font-semibold text-[#137333] dark:text-[#86efac]">
+                        {t('settings.routing.noAuthProviders.count', {
+                          count: String(noAuthProviderRows.length),
+                        })}
+                      </span>
+                    </div>
+                    <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
+                      {t('settings.routing.noAuthProviders.description')}
+                    </p>
+                  </div>
+
+                  <div
+                    data-provider-catalog="no-auth"
+                    data-provider-catalog-layout="comfortable"
+                    className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                  >
+                    {noAuthProviderRows.map(renderProviderRow)}
+                  </div>
+                </section>
+              )}
+
+              {(!hasSourceCriteria || localAndCustomProviderRows.length > 0) && (
+                <section
+                  aria-labelledby="local-provider-catalog-title"
+                  className="border-t border-[var(--color-border-separator)] pt-[18px]"
+                >
+                  <div className="mb-[12px] min-w-0">
+                    <div className="flex items-center gap-[7px]">
+                      <h2
+                        id="local-provider-catalog-title"
+                        className="text-[15px] font-semibold text-[var(--color-text-primary)]"
+                      >
+                        {t('settings.routing.localProviders.title')}
+                      </h2>
+                      <span className="text-[12px] font-semibold text-[#1473e6] dark:text-[#68adff]">
+                        {t('settings.routing.localProviders.count', {
+                          count: String(localAndCustomProviderRows.length),
+                        })}
+                      </span>
+                    </div>
+                    <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
+                      {t('settings.routing.localProviders.description')}
+                    </p>
+                  </div>
+
+                  <div
+                    data-provider-catalog="local-custom"
+                    data-provider-catalog-layout="comfortable"
+                    className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                  >
+                    {localAndCustomProviderRows.map(renderProviderRow)}
+                  </div>
+                </section>
+              )}
+
+              {(!hasSourceCriteria || filteredWebSessionProviders.length > 0) && (
+                <WebSessionProviderCatalog
+                  locale={locale}
+                  providers={filteredWebSessionProviders}
+                  statuses={webSessionStatuses}
+                  testResults={webSessionTestResults}
+                  testingProviderIds={testingWebSessionProviderIds}
+                  isTestingAll={isTestingAllWebSessions}
+                  onSelectProvider={setSelectedWebSessionProvider}
+                  onTestAll={() => {
+                    void handleTestAllWebSessions()
+                  }}
+                  labels={{
+                    title: t('settings.routing.webSessionProviders.title'),
+                    description: t('settings.routing.webSessionProviders.description'),
+                    configuredCount: t('settings.routing.webSessionProviders.configuredCount'),
+                    testAll: t('settings.routing.webSessionProviders.testAll'),
+                    connected: t('settings.routing.webSessionProviders.connected'),
+                    active: t('settings.routing.webSessionProviders.active'),
+                    notConfigured: t('settings.routing.webSessionProviders.notConfigured'),
+                    testing: t('settings.routing.webSessionProviders.testing'),
+                    testPassed: t('settings.routing.webSessionProviders.testPassed'),
+                    testFailed: t('settings.routing.webSessionProviders.testFailed'),
+                    free: t('settings.routing.webSessionProviders.free'),
+                  }}
+                />
+              )}
+
+              {(!hasSourceCriteria || filteredMediaProviders.length > 0) && (
+                <MediaProviderCatalog
+                  locale={locale}
+                  providers={filteredMediaProviders}
+                  activeKind={activeMediaKind}
+                  onKindChange={setActiveMediaKind}
+                  statuses={mediaStatuses}
+                  testResults={mediaTestResults}
+                  testingKeys={testingMediaKeys}
+                  onSelectProvider={setSelectedMediaProvider}
+                  labels={{
+                    title: t('settings.routing.mediaProviders.title'),
+                    description: t('settings.routing.mediaProviders.description'),
+                    configuredCount: t('settings.routing.mediaProviders.configuredCount'),
+                    image: t('settings.routing.mediaProviders.image'),
+                    video: t('settings.routing.mediaProviders.video'),
+                    audio: t('settings.routing.mediaProviders.audio'),
+                    connectedWithModel: t('settings.routing.mediaProviders.connectedWithModel'),
+                    inheritedWithModel: t('settings.routing.mediaProviders.inheritedWithModel'),
+                    localWithModel: t('settings.routing.mediaProviders.localWithModel'),
+                    noAuthWithModel: t('settings.routing.mediaProviders.noAuthWithModel'),
+                    notConfiguredWithModel: t('settings.routing.mediaProviders.notConfiguredWithModel'),
+                    testing: t('settings.routing.mediaProviders.testing'),
+                    testPassed: t('settings.routing.mediaProviders.testPassed'),
+                    reachabilityPassed: t('settings.routing.mediaProviders.reachabilityPassed'),
+                    testFailed: t('settings.routing.mediaProviders.testFailed'),
+                    chinaFirst: t('settings.routing.mediaProviders.chinaFirst'),
+                  }}
+                />
+              )}
             </div>
           ))}
 
           {providerView === 'routing' && (
             <SmartRoutingPanel onOpenSources={() => setProviderView('sources')} />
           )}
+          {providerView === 'node' && <GatewayNodePanel />}
           {providerView === 'status' && <RoutingStatusPanel />}
         </main>
       </div>
@@ -796,6 +1310,73 @@ export function ProviderSettings() {
         onChanged={handleProviderOAuthChanged}
       />
 
+      <WebSessionProviderDialog
+        provider={selectedWebSessionProvider}
+        status={selectedWebSessionProvider
+          ? webSessionStatuses.get(selectedWebSessionProvider.id)
+          : undefined}
+        onClose={() => setSelectedWebSessionProvider(null)}
+        onChanged={handleWebSessionChanged}
+        onTestResult={handleWebSessionTestResult}
+        labels={{
+          connected: t('settings.routing.webSessionProviders.connected'),
+          notConfigured: t('settings.routing.webSessionProviders.notConfigured'),
+          credential: t('settings.routing.webSessionDialog.credential'),
+          credentialSaved: t('settings.routing.webSessionDialog.credentialSaved'),
+          model: t('settings.routing.webSessionDialog.model'),
+          openWebsite: t('settings.routing.webSessionDialog.openWebsite'),
+          save: t('settings.routing.webSessionDialog.save'),
+          test: t('settings.routing.webSessionProviders.test'),
+          setDefault: t('settings.routing.webSessionDialog.setDefault'),
+          defaultProvider: t('settings.routing.webSessionDialog.defaultProvider'),
+          disconnect: t('settings.routing.webSessionDialog.disconnect'),
+          riskTitle: t('settings.routing.webSessionDialog.riskTitle'),
+          riskBody: t('settings.routing.webSessionDialog.riskBody'),
+          compatibilityNote: t('settings.routing.webSessionDialog.compatibilityNote'),
+          saveFailed: t('settings.routing.webSessionDialog.saveFailed'),
+          testPassed: t('settings.routing.webSessionProviders.testPassed'),
+        }}
+      />
+
+      <MediaProviderDialog
+        provider={selectedMediaProvider}
+        status={selectedMediaProvider
+          ? mediaStatuses.get(getMediaProviderKey(
+              selectedMediaProvider.kind,
+              selectedMediaProvider.id,
+            ))
+          : undefined}
+        onClose={() => setSelectedMediaProvider(null)}
+        onChanged={handleMediaProviderChanged}
+        onTestResult={handleMediaTestResult}
+        labels={{
+          connected: t('settings.routing.mediaDialog.connected'),
+          inherited: t('settings.routing.mediaDialog.inherited'),
+          localReady: t('settings.routing.mediaDialog.localReady'),
+          noAuthReady: t('settings.routing.mediaDialog.noAuthReady'),
+          notConfigured: t('settings.routing.mediaDialog.notConfigured'),
+          model: t('settings.routing.mediaDialog.model'),
+          openWebsite: t('settings.routing.mediaDialog.openWebsite'),
+          save: t('settings.routing.mediaDialog.save'),
+          test: t('settings.routing.mediaDialog.test'),
+          disconnect: t('settings.routing.mediaDialog.disconnect'),
+          credentialSaved: t('settings.routing.mediaDialog.credentialSaved'),
+          connectionNote: t('settings.routing.mediaDialog.connectionNote'),
+          inheritedNote: t('settings.routing.mediaDialog.inheritedNote'),
+          localNote: t('settings.routing.mediaDialog.localNote'),
+          noAuthNote: t('settings.routing.mediaDialog.noAuthNote'),
+          saveFailed: t('settings.routing.mediaDialog.saveFailed'),
+          testPassed: t('settings.routing.mediaProviders.testPassed'),
+          reachabilityPassed: t('settings.routing.mediaProviders.reachabilityPassed'),
+          imageGeneration: t('settings.routing.mediaDialog.service.imageGeneration'),
+          imageEdit: t('settings.routing.mediaDialog.service.imageEdit'),
+          videoGeneration: t('settings.routing.mediaDialog.service.videoGeneration'),
+          speechToText: t('settings.routing.mediaDialog.service.speechToText'),
+          textToSpeech: t('settings.routing.mediaDialog.service.textToSpeech'),
+          musicGeneration: t('settings.routing.mediaDialog.service.musicGeneration'),
+        }}
+      />
+
       <ConfirmDialog
         open={pendingDeleteProvider !== null}
         onClose={() => {
@@ -826,6 +1407,251 @@ type ProviderCatalogRow = {
   preset: ProviderPreset
   variants: ProviderCatalogVariant[]
   providers: SavedProvider[]
+}
+
+const OAUTH_PROVIDER_COSTS: Partial<Record<string, SourceCostClass>> = {
+  codex: 'paid',
+  claude: 'paid',
+  'kimi-coding': 'paid',
+  'gemini-cli': 'recurring-free',
+  github: 'mixed',
+  cursor: 'mixed',
+  kilocode: 'mixed',
+  cline: 'mixed',
+  qoder: 'mixed',
+  windsurf: 'mixed',
+  'gitlab-duo': 'paid',
+  'amazon-q': 'mixed',
+  trae: 'mixed',
+  'grok-cli': 'paid',
+  'codebuddy-cn': 'mixed',
+}
+
+const OAUTH_MULTIMODAL_PROVIDER_IDS = new Set([
+  'codex',
+  'claude',
+  'gemini-cli',
+  'github',
+  'cursor',
+  'cline',
+  'qoder',
+  'windsurf',
+  'amazon-q',
+  'trae',
+])
+
+const OAUTH_PROVIDER_SEARCH_ALIASES: Partial<Record<string, readonly string[]>> = {
+  codex: ['OpenAI', 'ChatGPT', '开放人工智能'],
+  claude: ['Anthropic', 'Claude'],
+  'kimi-coding': ['Kimi', 'Moonshot AI', '月之暗面'],
+  'gemini-cli': ['Google Gemini', 'Google', '谷歌'],
+  github: ['GitHub Copilot', 'Microsoft', '微软'],
+  cursor: ['Cursor AI'],
+  qoder: ['Alibaba', '阿里巴巴'],
+  trae: ['ByteDance', '字节跳动'],
+  'codebuddy-cn': ['Tencent CodeBuddy', '腾讯'],
+}
+
+const WEB_SESSION_MULTIMODAL_PROVIDER_IDS = new Set([
+  'chatgpt-web',
+  'claude-web',
+  'gemini-web',
+  'grok-web',
+  'perplexity-web',
+  'copilot-web',
+  'kimi-web',
+  'qwen-web',
+  'yuanbao-web',
+  'poe-web',
+  'lmarena',
+  'v0-vercel-web',
+  'doubao-web',
+  'gemini-business',
+  'copilot-m365-web',
+])
+
+function providerSupportsImageInput(
+  preset: ProviderPreset,
+  configuredProviders: readonly SavedProvider[],
+): boolean {
+  if (
+    preset.supportsImages === true ||
+    preset.modelOptions?.some((model) => model.supportsImages === true)
+  ) {
+    return true
+  }
+
+  return configuredProviders.some((provider) => (
+    provider.imageSupportMode === 'enabled' ||
+    (
+      provider.imageSupportMode !== 'disabled' &&
+      (
+        provider.supportsImages === true ||
+        provider.modelCatalog?.some((model) => model.supportsImages === true)
+      )
+    )
+  ))
+}
+
+function getProviderCatalogVariantFilterCandidate(
+  row: ProviderCatalogRow,
+  variant: ProviderCatalogVariant,
+  auth: ProviderAuthFilter,
+): ProviderCatalogFilterCandidate {
+  const { preset, providers: configuredProviders } = variant
+  const modalities: ProviderModalityFilter[] = ['language']
+  if (providerSupportsImageInput(preset, configuredProviders)) {
+    modalities.push('multimodal')
+  }
+
+  return {
+    primarySearchTerms: [
+      row.groupName,
+      preset.id,
+      preset.name,
+      getProviderCatalogDisplayName(
+        preset.id,
+        preset.name,
+        (key) => translate('en', key),
+      ),
+      getProviderCatalogDisplayName(
+        preset.id,
+        preset.name,
+        (key) => translate('zh', key),
+      ),
+      ...configuredProviders.map((provider) => provider.name),
+    ],
+    searchTerms: [
+      ...Object.values(preset.defaultModels),
+      ...(preset.modelOptions ?? []).flatMap((model) => [model.id, model.label]),
+      ...configuredProviders.flatMap((provider) => [
+        ...Object.values(provider.models),
+        ...(provider.modelCatalog ?? []).flatMap((model) => [model.id, model.label]),
+      ]),
+    ],
+    endpointSearchTerms: [
+      preset.baseUrl,
+      preset.websiteUrl,
+      ...configuredProviders.map((provider) => provider.baseUrl),
+    ],
+    auth: [auth],
+    costs: [preset.cost ?? 'unknown'],
+    modalities,
+  }
+}
+
+function providerCatalogCandidateFilterScore(
+  candidate: ProviderCatalogFilterCandidate,
+  normalizedQuery: string,
+  filters: ProviderCatalogFilterState,
+): number {
+  if (!matchesProviderCatalogCandidate(candidate, normalizedQuery, filters)) return 0
+  return scoreProviderCatalogCandidate(candidate, normalizedQuery)
+}
+
+function providerCatalogRowFilterScore(
+  row: ProviderCatalogRow,
+  auth: ProviderAuthFilter,
+  normalizedQuery: string,
+  filters: ProviderCatalogFilterState,
+): number {
+  return row.variants.reduce((bestScore, variant) => (
+    Math.max(
+      bestScore,
+      providerCatalogCandidateFilterScore(
+        getProviderCatalogVariantFilterCandidate(row, variant, auth),
+        normalizedQuery,
+        filters,
+      ),
+    )
+  ), 0)
+}
+
+function getProviderSearchResultKey(catalog: string, id: string): string {
+  return `${catalog}:${id}`
+}
+
+function getOAuthProviderFilterCandidate(
+  provider: OAuthProviderCatalogItem,
+): ProviderCatalogFilterCandidate {
+  return {
+    primarySearchTerms: [
+      provider.id,
+      provider.name,
+      ...(OAUTH_PROVIDER_SEARCH_ALIASES[provider.id] ?? []),
+    ],
+    searchTerms: [],
+    auth: ['oauth'],
+    costs: [OAUTH_PROVIDER_COSTS[provider.id] ?? 'unknown'],
+    modalities: OAUTH_MULTIMODAL_PROVIDER_IDS.has(provider.id)
+      ? ['language', 'multimodal']
+      : ['language'],
+  }
+}
+
+function getWebSessionProviderFilterCandidate(
+  provider: WebSessionProviderDefinition,
+): ProviderCatalogFilterCandidate {
+  return {
+    primarySearchTerms: [
+      provider.id,
+      provider.logoProviderId,
+      ...Object.values(provider.names),
+    ],
+    searchTerms: [
+      provider.defaultModel,
+      ...provider.models.flatMap((model) => [model.id, model.label]),
+    ],
+    endpointSearchTerms: [provider.website],
+    auth: ['web-session'],
+    costs: [provider.freeTier ? 'recurring-free' : 'paid'],
+    modalities: WEB_SESSION_MULTIMODAL_PROVIDER_IDS.has(provider.id)
+      ? ['language', 'multimodal']
+      : ['language'],
+  }
+}
+
+function getMediaProviderFilterCandidate(
+  provider: MediaProviderDefinition,
+  presets: readonly ProviderPreset[],
+): ProviderCatalogFilterCandidate {
+  const presetById = new Map(presets.map((preset) => [preset.id, preset]))
+  const sharedCosts = provider.sharedPresetIds.flatMap((presetId) => {
+    const cost = presetById.get(presetId)?.cost
+    return cost ? [cost] : []
+  })
+  const auth: ProviderAuthFilter = provider.connectionMode === 'none'
+    ? 'no-auth'
+    : provider.connectionMode === 'local'
+      ? 'local-custom'
+      : 'api-key'
+  const fallbackCost: SourceCostClass = (
+    provider.connectionMode === 'none' || provider.connectionMode === 'local'
+  )
+    ? 'uncapped'
+    : 'unknown'
+
+  return {
+    primarySearchTerms: [
+      provider.id,
+      provider.runtimeProviderId,
+      provider.logoProviderId,
+      ...Object.values(provider.names),
+    ],
+    searchTerms: [
+      provider.kind,
+      provider.defaultModel,
+      ...provider.models.flatMap((model) => [
+        model.id,
+        model.label,
+        model.service,
+      ]),
+    ],
+    endpointSearchTerms: [provider.website, provider.baseUrl],
+    auth: [auth],
+    costs: sharedCosts.length > 0 ? sharedCosts : [fallbackCost],
+    modalities: [provider.kind],
+  }
 }
 
 function isRemoteCustomProvider(
@@ -1270,6 +2096,7 @@ function openExternalUrl(url: string) {
 }
 
 const MASKED_API_KEYS = new Set(['***', '••••••••'])
+const PUBLIC_PROVIDER_ALIAS_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 
 function createContextWindowInputs(
   models: ModelMapping,
@@ -1380,6 +2207,7 @@ function ModelIdInput({
   placeholder,
   options = [],
   selectLabel,
+  noMatchesLabel,
 }: {
   label: string
   required?: boolean
@@ -1389,11 +2217,23 @@ function ModelIdInput({
   placeholder?: string
   options?: ProviderModelOption[]
   selectLabel: string
+  noMatchesLabel: string
 }) {
   const [open, setOpen] = useState(false)
+  const [filterQuery, setFilterQuery] = useState('')
   const wrapperRef = useRef<HTMLDivElement>(null)
   const inputId = label.toLowerCase().replace(/\s+/g, '-')
   const hasOptions = options.length > 0
+  const normalizedFilterQuery = filterQuery.trim().toLocaleLowerCase()
+  const visibleOptions = useMemo(
+    () => normalizedFilterQuery
+      ? options.filter((option) => (
+          option.id.toLocaleLowerCase().includes(normalizedFilterQuery) ||
+          option.label?.toLocaleLowerCase().includes(normalizedFilterQuery)
+        ))
+      : options,
+    [normalizedFilterQuery, options],
+  )
 
   useEffect(() => {
     if (!open) return
@@ -1423,34 +2263,50 @@ function ModelIdInput({
         <input
           id={inputId}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          onChange={(event) => {
+            const nextValue = event.target.value
+            onChange(nextValue)
+            setFilterQuery(nextValue)
+            if (hasOptions) setOpen(true)
+          }}
           onKeyDown={(event) => {
             if (hasOptions && (event.key === 'ArrowDown' || event.key === 'Enter')) {
+              if (!open) setFilterQuery('')
               setOpen(true)
             }
           }}
           placeholder={placeholder}
           className={`
-            h-[40px] w-full rounded-[10px] border border-[var(--color-border)] bg-white px-[14px] text-[13px] font-medium
+            h-[42px] w-full rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-[12px] text-[13px] font-medium
             text-[var(--color-text-primary)] outline-none transition-all duration-200
             placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]
-            dark:bg-[var(--color-surface-container-low)]
             ${hasOptions ? 'pr-[42px]' : ''}
           `}
         />
         {hasOptions && (
           <button
             type="button"
-            onClick={() => setOpen((next) => !next)}
+            onClick={() => {
+              setOpen((current) => {
+                if (!current) setFilterQuery('')
+                return !current
+              })
+            }}
             aria-label={`${selectLabel}: ${label}`}
-            className="absolute right-[6px] top-1/2 flex h-[28px] w-[28px] -translate-y-1/2 items-center justify-center rounded-full text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
+            className="absolute right-[6px] top-1/2 flex h-[29px] w-[29px] -translate-y-1/2 items-center justify-center rounded-[6px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
           >
             <Icon name="expand_more" size={16} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
           </button>
         )}
         {hasOptions && open && (
-          <div className="absolute left-0 right-0 z-50 mt-1.5 max-h-[260px] overflow-y-auto rounded-[10px] border border-[var(--color-border-separator)] bg-[var(--color-background)] py-1 shadow-[var(--shadow-dropdown)] animate-slide-down">
-            {options.map((option) => {
+          <div
+            role="listbox"
+            className="absolute left-0 right-0 z-50 mt-1.5 max-h-[272px] overflow-y-auto rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-background)] py-1 shadow-[var(--shadow-dropdown)] animate-slide-down"
+          >
+            {visibleOptions.map((option) => {
               const selected = option.id === value
               const contextLabel = formatContextWindowInput(option.contextWindow)
               return (
@@ -1461,6 +2317,7 @@ function ModelIdInput({
                   onClick={() => {
                     if (onSelectOption) onSelectOption(option)
                     else onChange(option.id)
+                    setFilterQuery('')
                     setOpen(false)
                   }}
                   className={`
@@ -1488,6 +2345,11 @@ function ModelIdInput({
                 </button>
               )
             })}
+            {visibleOptions.length === 0 && (
+              <div className="px-[14px] py-[18px] text-center text-[11px] leading-[17px] text-[var(--color-text-tertiary)]">
+                {noMatchesLabel}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1506,7 +2368,13 @@ function normalizedProviderModels(models: ModelMapping): ModelMapping {
 }
 
 function ProviderFormModal({ open, onClose, mode, provider, presets, initialPresetId }: ProviderFormProps) {
-  const { createProvider, updateProvider, testConfig } = useProviderStore()
+  const {
+    createProvider,
+    updateProvider,
+    testConfig,
+    syncProviderModels,
+    setProviderModelAutoSync,
+  } = useProviderStore()
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
   const t = useTranslation()
 
@@ -1539,6 +2407,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const initialBaseUrl = provider?.baseUrl ?? initialPreset.baseUrl
   const isCloudflareWorkersAi = selectedPreset.id === 'cloudflare-ai'
   const [name, setName] = useState(provider?.name ?? selectedPresetName)
+  const [publicAlias, setPublicAlias] = useState(provider?.publicAlias ?? '')
   const [baseUrl, setBaseUrl] = useState(initialBaseUrl)
   const [cloudflareAccountId, setCloudflareAccountId] = useState(() =>
     isCloudflareWorkersAi ? extractCloudflareAccountId(initialBaseUrl) : '',
@@ -1551,6 +2420,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const [notes, setNotes] = useState(provider?.notes ?? '')
   const [models, setModels] = useState<ModelMapping>(provider?.models ?? { ...initialPreset.defaultModels })
   const [modelCatalog, setModelCatalog] = useState<ProviderModelInfo[]>(provider?.modelCatalog ?? [])
+  const [modelSync, setModelSync] = useState<ProviderModelSyncState | undefined>(
+    provider?.modelSync,
+  )
   const [imageSupportMode, setImageSupportMode] = useState<ImageSupportMode>(
     provider?.imageSupportMode ?? 'auto',
   )
@@ -1564,7 +2436,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null)
   const [isTesting, setIsTesting] = useState(false)
   const [isDiscoveringModels, setIsDiscoveringModels] = useState(false)
+  const [isUpdatingModelSync, setIsUpdatingModelSync] = useState(false)
   const [modelDiscoveryMessage, setModelDiscoveryMessage] = useState<string | null>(null)
+  const [modelDiscoveryFailed, setModelDiscoveryFailed] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(initialPreset.id === 'custom')
   const parsedContextWindows = useMemo(
     () => parseContextWindowInputs(contextWindowInputs),
@@ -1572,12 +2446,17 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   )
   const availableModelOptions = useMemo(() => {
     const options = new Map<string, ProviderModelInfo>()
-    for (const option of selectedPreset.modelOptions ?? []) {
-      options.set(option.id.toLowerCase(), option)
-    }
     for (const model of modelCatalog) {
       const key = model.id.toLowerCase()
-      options.set(key, { ...options.get(key), ...model })
+      options.set(key, model)
+    }
+    for (const option of selectedPreset.modelOptions ?? []) {
+      const key = option.id.toLowerCase()
+      const discovered = options.get(key)
+      options.set(key, {
+        ...option,
+        ...discovered,
+      })
     }
     return [...options.values()]
   }, [modelCatalog, selectedPreset.modelOptions])
@@ -1623,10 +2502,25 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   const cloudflareAccountIdIsValid =
     !isCloudflareWorkersAi || isValidCloudflareAccountId(cloudflareAccountId)
   const connectionLocationIsValid = Boolean(baseUrl.trim()) && cloudflareAccountIdIsValid
+  const canSynchronizeSavedConnection = Boolean(
+    mode === 'edit' &&
+    provider &&
+    !apiKey.trim() &&
+    baseUrl.trim().replace(/\/+$/, '') === provider.baseUrl.trim().replace(/\/+$/, '') &&
+    apiFormat === provider.apiFormat &&
+    selectedPreset.id === provider.presetId,
+  )
+  const modelSyncSupported = provider?.modelSync?.supported !== false
   const hasContextWindowError = MODEL_ROLES.some((role) =>
     contextWindowInputs[role].trim() && !parseContextWindowInput(contextWindowInputs[role]),
   )
-  const canSubmit = name.trim() && connectionLocationIsValid && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && !hasContextWindowError
+  const normalizedPublicAlias = publicAlias.trim().toLowerCase()
+  const publicAliasIsValid = normalizedPublicAlias
+    ? normalizedPublicAlias.length >= 2 &&
+      normalizedPublicAlias.length <= 64 &&
+      PUBLIC_PROVIDER_ALIAS_PATTERN.test(normalizedPublicAlias)
+    : true
+  const canSubmit = name.trim() && connectionLocationIsValid && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && !hasContextWindowError && publicAliasIsValid
   const apiKeyUrl = selectedPreset.apiKeyUrl?.trim()
   const promoText = selectedPreset.promoText?.trim()
   const apiFormatItems = [
@@ -1676,10 +2570,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     setIsSubmitting(true)
     try {
       const resolvedModels = normalizedProviderModels(models)
+      let savedProvider: SavedProvider | undefined
 
       if (mode === 'create') {
-        await createProvider({
+        savedProvider = await createProvider({
           presetId: selectedPreset.id,
+          ...(normalizedPublicAlias && { publicAlias: normalizedPublicAlias }),
           name: name.trim(),
           apiKey: apiKey.trim(),
           baseUrl: baseUrl.trim(),
@@ -1695,6 +2591,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           ...(selectedPreset.id !== provider.presetId && {
             presetId: selectedPreset.id,
           }),
+          ...(normalizedPublicAlias && { publicAlias: normalizedPublicAlias }),
           name: name.trim(),
           baseUrl: baseUrl.trim(),
           apiFormat,
@@ -1705,7 +2602,20 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           notes: notes.trim() || undefined,
         }
         if (apiKey.trim()) input.apiKey = apiKey.trim()
-        await updateProvider(provider.id, input)
+        savedProvider = await updateProvider(provider.id, input)
+      }
+      if (
+        savedProvider?.modelSync?.enabled &&
+        savedProvider.modelSync.supported !== false
+      ) {
+        try {
+          await syncProviderModels(savedProvider.id)
+        } catch (error) {
+          console.warn(
+            `Saved ${savedProvider.name}, but its model catalog could not be refreshed:`,
+            error,
+          )
+        }
       }
       await fetchSettings()
       onClose()
@@ -1717,24 +2627,50 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   }
 
   const handleDiscoverModels = async () => {
-    if (!connectionLocationIsValid || (requiresApiKey && mode === 'create' && !apiKey.trim())) return
+    if (!connectionLocationIsValid) return
+    if (requiresApiKey && mode === 'create' && !apiKey.trim()) {
+      setModelDiscoveryFailed(true)
+      setModelDiscoveryMessage(t('settings.providers.modelDiscoveryNeedsApiKey'))
+      return
+    }
     setIsDiscoveringModels(true)
+    setModelDiscoveryFailed(false)
     setModelDiscoveryMessage(null)
     try {
-      const { providersApi } = await import('../api/providers')
-      const { result } = await providersApi.discoverModels({
-        ...(mode === 'edit' && provider ? { providerId: provider.id } : {}),
-        presetId: selectedPreset.id,
-        baseUrl: baseUrl.trim(),
-        apiKey: apiKey.trim() || undefined,
-        apiFormat,
-        force: true,
-      })
-      setModelCatalog(result.models)
-      setModelDiscoveryMessage(
-        t('settings.providers.modelsDiscovered', { count: result.models.length }),
-      )
+      if (provider && canSynchronizeSavedConnection && modelSyncSupported) {
+        const response = await syncProviderModels(provider.id)
+        setModelCatalog(response.provider.modelCatalog ?? [])
+        setModelSync(response.provider.modelSync)
+        setModelDiscoveryMessage(
+          t('settings.providers.modelsSynchronized', {
+            count: response.result.total,
+            added: response.result.added,
+          }),
+        )
+      } else {
+        const { providersApi } = await import('../api/providers')
+        const { result } = await providersApi.discoverModels({
+          ...(mode === 'edit' && provider ? { providerId: provider.id } : {}),
+          presetId: selectedPreset.id,
+          baseUrl: baseUrl.trim(),
+          apiKey: apiKey.trim() || undefined,
+          apiFormat,
+          force: true,
+        })
+        const merged = new Map(
+          modelCatalog.map((model) => [model.id.trim().toLowerCase(), model]),
+        )
+        for (const model of result.models) {
+          const key = model.id.trim().toLowerCase()
+          merged.set(key, { ...merged.get(key), ...model })
+        }
+        setModelCatalog([...merged.values()])
+        setModelDiscoveryMessage(
+          t('settings.providers.modelsImported', { count: result.models.length }),
+        )
+      }
     } catch (error) {
+      setModelDiscoveryFailed(true)
       setModelDiscoveryMessage(
         t('settings.providers.modelDiscoveryFailed', {
           error: error instanceof Error ? error.message : t('settings.providers.requestFailed'),
@@ -1742,6 +2678,36 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       )
     } finally {
       setIsDiscoveringModels(false)
+    }
+  }
+
+  const handleModelAutoSyncChange = async (enabled: boolean) => {
+    if (!provider || !canSynchronizeSavedConnection || !modelSyncSupported) return
+    setIsUpdatingModelSync(true)
+    setModelDiscoveryFailed(false)
+    setModelDiscoveryMessage(null)
+    try {
+      const response = await setProviderModelAutoSync(provider.id, enabled)
+      setModelCatalog(response.provider.modelCatalog ?? [])
+      setModelSync(response.provider.modelSync)
+      setModelDiscoveryMessage(
+        response.warning
+          ? t('settings.providers.modelAutoSyncEnabledWithWarning', {
+              error: response.warning,
+            })
+          : enabled
+            ? t('settings.providers.modelAutoSyncEnabled')
+            : t('settings.providers.modelAutoSyncDisabled'),
+      )
+    } catch (error) {
+      setModelDiscoveryFailed(true)
+      setModelDiscoveryMessage(
+        t('settings.providers.modelAutoSyncFailed', {
+          error: error instanceof Error ? error.message : t('settings.providers.requestFailed'),
+        }),
+      )
+    } finally {
+      setIsUpdatingModelSync(false)
     }
   }
 
@@ -1824,7 +2790,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           )}
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_128px]">
+        <div className="provider-form-primary-grid grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_128px]">
           {isCloudflareWorkersAi ? (
             <Input
               label={t('settings.providers.cloudflareAccountId')}
@@ -1850,6 +2816,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             placeholder="Model ID"
             options={availableModelOptions}
             selectLabel={t('model.selectModel')}
+            noMatchesLabel={t('model.noMatches')}
           />
           <Input
             label={t('settings.providers.contextWindow')}
@@ -1860,7 +2827,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           />
         </div>
 
-        <div className="flex min-h-[32px] items-center justify-between gap-3">
+        <div className="flex min-h-[42px] flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[8px] py-[5px]">
           <button
             type="button"
             onClick={handleDiscoverModels}
@@ -1868,10 +2835,50 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             className="inline-flex h-[32px] items-center gap-1.5 rounded-[8px] px-2.5 text-[12px] font-semibold text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)] disabled:opacity-40"
           >
             <Icon name="refresh" size={15} className={isDiscoveringModels ? 'animate-spin' : ''} />
-            {t('settings.providers.discoverModels')}
+            {canSynchronizeSavedConnection
+              ? t('settings.providers.syncModels')
+              : t('settings.providers.importModels')}
           </button>
+          {mode === 'edit' && modelSyncSupported && (
+            <div className="ml-auto flex items-center gap-[8px]">
+              <div className="text-right">
+                <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
+                  {t('settings.providers.modelAutoSync')}
+                </div>
+                <div className="text-[10px] text-[var(--color-text-tertiary)]">
+                  {modelSync?.lastSyncedAt
+                    ? t('settings.providers.modelLastSynced', {
+                        time: new Date(modelSync.lastSyncedAt).toLocaleString(),
+                      })
+                    : canSynchronizeSavedConnection
+                      ? t('settings.providers.modelAutoSyncInterval')
+                      : t('settings.providers.modelAutoSyncSaveFirst')}
+                </div>
+              </div>
+              <Switch
+                checked={modelSync?.enabled ?? false}
+                disabled={
+                  isDiscoveringModels ||
+                  isUpdatingModelSync ||
+                  !canSynchronizeSavedConnection
+                }
+                accent
+                ariaLabel={t('settings.providers.modelAutoSync')}
+                onChange={(enabled) => {
+                  void handleModelAutoSyncChange(enabled)
+                }}
+              />
+            </div>
+          )}
           {modelDiscoveryMessage && (
-            <span className="min-w-0 truncate text-[11px] text-[var(--color-text-tertiary)]">
+            <span
+              role={modelDiscoveryFailed ? 'alert' : 'status'}
+              className={`basis-full px-[2px] text-[11px] leading-4 ${
+                modelDiscoveryFailed
+                  ? 'text-[var(--color-error)]'
+                  : 'text-[var(--color-text-tertiary)]'
+              }`}
+            >
               {modelDiscoveryMessage}
             </span>
           )}
@@ -1899,7 +2906,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                 {t('settings.providers.apiKey')}
                 {mode === 'create' && requiresApiKey && <span className="text-[var(--color-error)] ml-0.5">*</span>}
               </label>
-              <div className="flex items-center gap-2">
+              <div className="provider-credential-row flex items-center gap-2">
                 <div className="relative flex-1">
                   <input
                     id="provider-api-key"
@@ -1980,6 +2987,24 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
             <div className="mt-3 flex flex-col gap-4">
               <Input label={t('settings.providers.name')} required value={name} onChange={(e) => setName(e.target.value)} placeholder={t('settings.providers.namePlaceholder')} />
 
+              <div>
+                <Input
+                  label={t('settings.providers.publicAlias')}
+                  value={publicAlias}
+                  maxLength={64}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(event) => setPublicAlias(event.target.value)}
+                  placeholder={t('settings.providers.publicAliasPlaceholder')}
+                  error={!publicAliasIsValid
+                    ? t('settings.providers.publicAliasError')
+                    : undefined}
+                />
+                <p className="mt-1 text-[11px] leading-[16px] text-[var(--color-text-tertiary)]">
+                  {t('settings.providers.publicAliasHint')}
+                </p>
+              </div>
+
               <Input label={t('settings.providers.notes')} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t('settings.providers.notesPlaceholder')} />
 
               {/* API Format */}
@@ -2015,7 +3040,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                 </div>
               ) : null}
 
-              <div className="flex min-h-[56px] items-center justify-between gap-4 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[14px] py-[10px]">
+              <div className="provider-image-support-row flex min-h-[56px] items-center justify-between gap-4 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[14px] py-[10px]">
                 <div className="min-w-0">
                   <div className="text-[13px] font-bold text-[var(--color-text-primary)]">
                     {t('settings.providers.supportsImages')}
@@ -2032,7 +3057,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                 <label className="text-[14px] font-medium text-[var(--color-text-primary)] mb-2 block">{t('settings.providers.modelMapping')}</label>
                 <div className="grid grid-cols-1 gap-2">
                   {MODEL_ROLES.filter((role) => role !== 'main').map((role) => (
-                    <div key={role} className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_128px]">
+                    <div key={role} className="provider-model-mapping-row grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_128px]">
                       <ModelIdInput
                         label={role === 'haiku'
                           ? t('settings.providers.haikuModel')
@@ -2045,6 +3070,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
                         placeholder={t('settings.providers.sameAsMain')}
                         options={availableModelOptions}
                         selectLabel={t('model.selectModel')}
+                        noMatchesLabel={t('model.noMatches')}
                       />
                       <Input
                         label={t('settings.providers.contextWindow')}

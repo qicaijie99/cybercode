@@ -37,6 +37,11 @@ import {
 } from './codexResponses.js'
 import { prepareGrokBuildResponsesRequest } from './grokBuildResponses.js'
 import { executeNativeOAuthChat } from './nativeOAuth/index.js'
+import {
+  handleWebSessionRequest,
+  isWebSessionProvider,
+} from './webSession/handler.js'
+import { sanitizeErrorMessage } from './webSession/vendor/omniroute/open-sse/utils/error.js'
 
 const providerService = new ProviderService()
 
@@ -91,7 +96,25 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
     )
   }
 
-  if (config.apiFormat === 'anthropic') {
+  if (isWebSessionProvider(config)) {
+    try {
+      return await handleWebSessionRequest(config, body, req.signal)
+    } catch (err) {
+      if (req.signal.aborted) return clientCancelledResponse()
+      return Response.json(
+        {
+          type: 'error',
+          error: {
+            type: 'api_error',
+            message: sanitizeErrorMessage(err),
+          },
+        },
+        { status: 502 },
+      )
+    }
+  }
+
+  if (config.apiFormat === 'anthropic' && !providerId) {
     return Response.json(
       {
         type: 'error',
@@ -137,7 +160,15 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
   const runtimeHeaders = runtimeAuth?.headers
 
   try {
-    if (config.apiFormat === 'openai_chat') {
+    if (config.apiFormat === 'anthropic') {
+      return await forwardAnthropic(
+        req,
+        config,
+        body,
+        apiKey,
+        runtimeHeaders,
+      )
+    } else if (config.apiFormat === 'openai_chat') {
       return await handleOpenaiChat(
         body,
         baseUrl,
@@ -313,6 +344,9 @@ async function forwardToTarget(
   body: AnthropicRequest,
 ): Promise<Response> {
   const provider = target.provider
+  if (isWebSessionProvider(provider)) {
+    return handleWebSessionRequest(provider, body, req.signal)
+  }
   if (
     provider.oauthProviderId &&
     !providerOAuthService.matchesRuntimeTarget(

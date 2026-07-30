@@ -77,6 +77,7 @@ export function ProviderLogo({
           aria-hidden={decorative ? true : undefined}
           className="relative z-[1] block select-none"
           decoding="async"
+          loading="lazy"
           draggable={false}
           onError={() => setAssetFailed(true)}
           style={{

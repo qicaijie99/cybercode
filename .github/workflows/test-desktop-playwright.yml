@@ -1,0 +1,75 @@
+name: Test Desktop Playwright
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'adapters/**'
+      - 'src/server/**'
+      - 'src/utils/envUtils.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/test-desktop-playwright.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'adapters/**'
+      - 'src/server/**'
+      - 'src/utils/envUtils.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/test-desktop-playwright.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-desktop-playwright-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Chromium E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Install adapter dependencies
+        working-directory: adapters
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: desktop
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        working-directory: desktop
+        run: bun run test:e2e
+
+      - name: Upload Playwright report
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-playwright-report
+          path: |
+            desktop/playwright-report
+            desktop/test-results
+          if-no-files-found: ignore
+          retention-days: 14

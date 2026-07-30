@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from '../../i18n'
+import { subscribeToViewportChanges } from '../../lib/viewportEvents'
 import { NewSessionChooser, type CurrentProject } from './NewSessionChooser'
 import type { CreateSessionInput } from '../../types/session'
 
@@ -9,6 +10,7 @@ type MenuPosition = {
   left: number
   width: number
   maxHeight: number
+  direction: 'up' | 'down'
 }
 
 type NewSessionMenuProps = {
@@ -52,30 +54,28 @@ export function NewSessionMenu({
     const width = Math.min(MENU_WIDTH, Math.max(260, window.innerWidth - VIEWPORT_MARGIN * 2))
     const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN)
     const minLeft = Math.min(railWidth + VIEWPORT_MARGIN, maxLeft)
-    const top = rect.bottom + 8
-    const availableBelow = window.innerHeight - top - VIEWPORT_MARGIN
-    const maxHeight = Math.min(
-      MENU_MAX_HEIGHT,
-      Math.max(MENU_MIN_HEIGHT, availableBelow),
-    )
+    const menuGap = 8
+    const spaceBelow = window.innerHeight - rect.bottom - menuGap - VIEWPORT_MARGIN
+    const spaceAbove = rect.top - menuGap - VIEWPORT_MARGIN
+    const direction = (
+      spaceBelow >= MENU_MIN_HEIGHT ||
+      spaceBelow >= spaceAbove
+    ) ? 'down' : 'up'
+    const availableHeight = direction === 'down' ? spaceBelow : spaceAbove
 
     setPosition({
-      top,
+      top: direction === 'down' ? rect.bottom + menuGap : rect.top - menuGap,
       left: Math.min(Math.max(rect.right - width, minLeft), maxLeft),
       width,
-      maxHeight,
+      maxHeight: Math.max(48, Math.min(MENU_MAX_HEIGHT, availableHeight)),
+      direction,
     })
   }, [anchorRef])
 
   useLayoutEffect(() => {
     if (!open) return
     updatePosition()
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
-    return () => {
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
-    }
+    return subscribeToViewportChanges(updatePosition)
   }, [open, updatePosition])
 
   useEffect(() => {
@@ -106,11 +106,13 @@ export function NewSessionMenu({
       aria-label={t('newSession.title')}
       className="fixed z-[9999] flex flex-col overflow-hidden rounded-[12px] border border-[var(--color-border-separator)] bg-[var(--color-background)] shadow-[var(--shadow-dropdown)]"
       style={{
-        top: position.top,
         left: position.left,
         width: position.width,
         height: Math.min(position.maxHeight, MENU_PANEL_HEIGHT),
         maxHeight: position.maxHeight,
+        ...(position.direction === 'down'
+          ? { top: position.top }
+          : { top: undefined, bottom: window.innerHeight - position.top }),
       }}
     >
       <NewSessionChooser

@@ -82,6 +82,9 @@ class UsageAnalyticsTest(unittest.TestCase):
             result["trend"][-1],
             {"day": "2026-07-18", "active": 2, "new": 1, "cumulative": 2},
         )
+        self.assertEqual(result["trend"][-1]["active"], result["todayActive"])
+        self.assertEqual(result["trend"][-1]["new"], result["newToday"])
+        self.assertEqual(result["trend"][-1]["cumulative"], result["totalUsers"])
         self.assertEqual(result["trend"][-2]["cumulative"], 1)
 
     def test_growth_periods_and_retention_use_mature_cohorts(self):
@@ -114,6 +117,29 @@ class UsageAnalyticsTest(unittest.TestCase):
         self.assertEqual(result["dauMauRate"], 50.0)
         self.assertEqual(result["wauMauRate"], 75.0)
         self.assertEqual(result["returningRate"], 100.0)
+
+    def test_china_day_boundary_keeps_cards_and_trend_aligned(self):
+        returning_user = validate_payload(payload("5" * 64))
+        new_user = validate_payload(payload("6" * 64))
+        before_midnight = datetime(2026, 7, 18, 15, 59, tzinfo=timezone.utc)
+        after_midnight = datetime(2026, 7, 18, 16, 1, tzinfo=timezone.utc)
+
+        self.store.record(returning_user, before_midnight)
+        self.store.record(returning_user, after_midnight)
+        self.store.record(new_user, after_midnight)
+        self.store.record(new_user, after_midnight)
+
+        result = self.store.summary(after_midnight)
+        self.assertEqual(result["today"], "2026-07-19")
+        self.assertEqual(result["totalUsers"], 2)
+        self.assertEqual(result["todayActive"], 2)
+        self.assertEqual(result["newToday"], 1)
+        self.assertEqual(result["returningToday"], 1)
+        self.assertEqual(result["yesterdayActive"], 1)
+        self.assertEqual(result["trend"][-1]["day"], result["today"])
+        self.assertEqual(result["trend"][-1]["active"], result["todayActive"])
+        self.assertEqual(result["trend"][-1]["new"], result["newToday"])
+        self.assertEqual(result["trend"][-1]["cumulative"], result["totalUsers"])
 
     def test_schema_contains_no_personal_or_network_identity_columns(self):
         with sqlite3.connect(self.database_path) as connection:
@@ -324,6 +350,11 @@ class UsageAnalyticsTest(unittest.TestCase):
             self.assertEqual(headers["Location"], "/cybercode-stats/login")
             self.assertNotIn("WWW-Authenticate", headers)
 
+            status, headers, body = request("HEAD", "/cybercode-stats")
+            self.assertEqual(status, 302)
+            self.assertEqual(headers["Location"], "/cybercode-stats/login")
+            self.assertEqual(body, b"")
+
             status, headers, body = request("GET", "/cybercode-stats/login")
             self.assertEqual(status, 200)
             self.assertIn("CyberCode".encode(), body)
@@ -383,12 +414,38 @@ class UsageAnalyticsTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn(b"dashboard", body)
 
+            status, headers, body = request(
+                "HEAD",
+                "/cybercode-stats",
+                headers={"Cookie": cookie_header},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Content-Length"], str(len(b"<!doctype html><title>dashboard</title>")))
+            self.assertEqual(body, b"")
+
             status, _, _ = request(
                 "GET",
                 "/api/cybercode-usage/summary",
                 headers={"Cookie": cookie_header},
             )
             self.assertEqual(status, 200)
+
+            class FailingSummaryStore:
+                def summary(self):
+                    raise sqlite3.OperationalError("database is temporarily busy")
+
+            UsageRequestHandler.store = FailingSummaryStore()
+            status, _, body = request(
+                "GET",
+                "/api/cybercode-usage/summary",
+                headers={"Cookie": cookie_header},
+            )
+            self.assertEqual(status, 503)
+            self.assertEqual(
+                json.loads(body),
+                {"error": "Storage unavailable"},
+            )
+            UsageRequestHandler.store = self.store
 
             basic = base64.b64encode(
                 "cybercode:{0}".format(password).encode()
@@ -432,6 +489,15 @@ class UsageAnalyticsTest(unittest.TestCase):
         self.assertFalse(hasattr(location, "city"))
         self.assertFalse(hasattr(location, "latitude"))
 
+        class BrokenReader:
+            def get(self, _address):
+                raise RuntimeError("corrupted database")
+
+        self.assertEqual(
+            GeoResolver("unused", reader=BrokenReader()).lookup("8.8.8.8"),
+            GeoLocation(),
+        )
+
     def test_dashboard_dependencies_are_local_and_available(self):
         root = Path(__file__).parent
         dashboard = (root / "dashboard.html").read_text(encoding="utf-8")
@@ -465,7 +531,21 @@ class UsageAnalyticsTest(unittest.TestCase):
         self.assertIn("name: '日活用户'", dashboard)
         self.assertIn("name: '新增用户'", dashboard)
         self.assertIn("name: '累计用户'", dashboard)
+        self.assertIn("position: 'left'", dashboard)
+        self.assertIn("position: 'right'", dashboard)
+        self.assertIn("name: compact ? '' : '活跃 / 新增'", dashboard)
+        self.assertIn("name: compact ? '' : '累计'", dashboard)
+        self.assertGreaterEqual(dashboard.count("yAxisIndex: 0"), 2)
         self.assertIn("yAxisIndex: 1", dashboard)
+        self.assertGreaterEqual(dashboard.count("smooth: false"), 3)
+        self.assertIn("validateSummary(await response.json())", dashboard)
+        self.assertIn("`${point.seriesName}（左轴）`", dashboard)
+        self.assertIn("累计用户（右轴）", dashboard)
+        self.assertIn("setTrend(previousSummary.trend || [], false)", dashboard)
+        self.assertIn(
+            "setChinaGeoMap(previousSummary.chinaProvinces || [])",
+            dashboard,
+        )
         self.assertIn("type: 'line'", dashboard)
         china_map = json.loads(
             (root / "assets" / "china.geojson").read_text(encoding="utf-8")

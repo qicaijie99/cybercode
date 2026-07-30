@@ -32,6 +32,7 @@ import installSlackApp from './commands/install-slack-app/index.js'
 import breakCache from './commands/break-cache/index.js'
 import mcp from './commands/mcp/index.js'
 import mobile from './commands/mobile/index.js'
+import node from './commands/node/index.js'
 import onboarding from './commands/onboarding/index.js'
 import pr_comments from './commands/pr_comments/index.js'
 import releaseNotes from './commands/release-notes/index.js'
@@ -173,6 +174,7 @@ import exit from './commands/exit/index.js'
 import exportCommand from './commands/export/index.js'
 import model from './commands/model/index.js'
 import provider from './commands/provider/index.js'
+import routing from './commands/routing/index.js'
 import tag from './commands/tag/index.js'
 import outputStyle from './commands/output-style/index.js'
 import remoteEnv from './commands/remote-env/index.js'
@@ -288,7 +290,9 @@ const COMMANDS = memoize((): Command[] => [
   memory,
   mobile,
   model,
+  node,
   provider,
+  routing,
   outputStyle,
   remoteEnv,
   plugin,
