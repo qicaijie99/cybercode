@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useTabStore } from './tabStore'
+import { getTabKey, useTabStore } from './tabStore'
 import { sessionsApi } from '../api/sessions'
 
 vi.mock('../api/sessions', () => ({
@@ -11,7 +11,7 @@ vi.mock('../api/sessions', () => ({
 describe('tabStore', () => {
   beforeEach(() => {
     localStorage.clear()
-    useTabStore.setState({ tabs: [], activeTabId: null, recentSessionIds: [] })
+    useTabStore.setState({ tabs: [], activeTabId: null, activeTabKey: null, recentSessionIds: [], recentSessionKeys: [] })
   })
 
   it('opens tabs without replacing existing tabs', () => {
@@ -115,5 +115,22 @@ describe('tabStore', () => {
       'Renamed A',
       'Project B',
     ])
+  })
+
+  it('keeps duplicate session ids separate by project locator when opening and activating', () => {
+    useTabStore.getState().openTab('session-dup', 'Project A', 'session', '-project-a')
+    useTabStore.getState().openTab('session-dup', 'Project B', 'session', '-project-b')
+
+    expect(useTabStore.getState().tabs).toMatchObject([
+      { sessionId: 'session-dup', projectPath: '-project-a', title: 'Project A' },
+      { sessionId: 'session-dup', projectPath: '-project-b', title: 'Project B' },
+    ])
+    expect(useTabStore.getState().activeTabId).toBe('session-dup')
+    expect(useTabStore.getState().activeTabKey).toBe('session-dup\u0000-project-b')
+
+    useTabStore.getState().setActiveTab('session-dup', '-project-a')
+
+    const active = useTabStore.getState().tabs.find((tab) => getTabKey(tab) === useTabStore.getState().activeTabKey)
+    expect(active).toMatchObject({ title: 'Project A', projectPath: '-project-a' })
   })
 })

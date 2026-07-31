@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { sessionsApi, type RecentProject } from '../../api/sessions'
+import type { RecentProject } from '../../api/sessions'
 import { useTranslation } from '../../i18n'
+import {
+  loadRecentProjects,
+  mergeRecentProjects,
+  peekRecentProjects,
+  recentProjectsFromSessions,
+} from '../../lib/recentProjects'
+import { basenameForDisplay, compactPathForDisplay } from '../../lib/pathDisplay'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import type { CreateSessionInput, SessionListItem } from '../../types/session'
@@ -19,20 +26,8 @@ type NewSessionChooserProps = {
   onCreateProject: () => void
 }
 
-let cachedRecentProjects: RecentProject[] | null = null
-
-function basename(path: string) {
-  return path.split('/').filter(Boolean).pop() || path
-}
-
 function projectTitle(project: RecentProject): string {
-  return project.repoName || project.projectName || basename(project.realPath)
-}
-
-function compactPath(path: string): string {
-  const parts = path.split('/').filter(Boolean)
-  if (parts.length <= 2) return path
-  return `.../${parts.slice(-2).join('/')}`
+  return project.repoName || project.projectName || basenameForDisplay(project.realPath)
 }
 
 async function chooseFolder(title: string): Promise<string | null> {
@@ -65,7 +60,7 @@ export function resolveCurrentProject(
   return {
     projectPath,
     workDir: latestSession.workDir,
-    title: basename(latestSession.workDir),
+    title: basenameForDisplay(latestSession.workDir),
   }
 }
 
@@ -77,28 +72,32 @@ export function NewSessionChooser({
 }: NewSessionChooserProps) {
   const t = useTranslation()
   const addToast = useUIStore((state) => state.addToast)
+  const sessions = useSessionStore((state) => state.sessions)
   const projectDisplayNames = useSessionStore((state) => state.projectDisplayNames)
-  const [projects, setProjects] = useState<RecentProject[]>(() => cachedRecentProjects ?? [])
-  const [isLoading, setIsLoading] = useState(() => cachedRecentProjects === null)
+  const localProjects = useMemo(
+    () => recentProjectsFromSessions(sessions, 8),
+    [sessions],
+  )
+  const [projects, setProjects] = useState<RecentProject[]>(() =>
+    mergeRecentProjects([peekRecentProjects(8), localProjects], 8),
+  )
+  const [isLoading, setIsLoading] = useState(() => projects.length === 0)
   const [creatingKey, setCreatingKey] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
+    const immediateProjects = mergeRecentProjects(
+      [peekRecentProjects(8), localProjects],
+      8,
+    )
+    setProjects(immediateProjects)
+    setIsLoading(immediateProjects.length === 0)
 
-    if (cachedRecentProjects) {
-      setProjects(cachedRecentProjects)
-      setIsLoading(false)
-    } else {
-      setIsLoading(true)
-    }
-
-    sessionsApi.getRecentProjects(8)
-      .then(({ projects: nextProjects }) => {
-        cachedRecentProjects = nextProjects
-        if (alive) setProjects(nextProjects)
-      })
-      .catch(() => {
-        if (alive) setProjects([])
+    loadRecentProjects(8)
+      .then((nextProjects) => {
+        if (alive) {
+          setProjects(mergeRecentProjects([nextProjects, localProjects], 8))
+        }
       })
       .finally(() => {
         if (alive) setIsLoading(false)
@@ -107,7 +106,7 @@ export function NewSessionChooser({
     return () => {
       alive = false
     }
-  }, [])
+  }, [localProjects])
 
   const recentProjects = useMemo(() => {
     if (!currentProject) return projects
@@ -160,7 +159,7 @@ export function NewSessionChooser({
             </div>
             <ProjectMenuItem
               title={currentProject.title}
-              subtitle={compactPath(currentProject.workDir)}
+              subtitle={compactPathForDisplay(currentProject.workDir)}
               icon="folder_open"
               loading={creatingKey === `current:${currentProject.projectPath}`}
               disabled={!!creatingKey}
@@ -181,7 +180,7 @@ export function NewSessionChooser({
               <ProjectMenuItem
                 key={`${project.projectPath}:${project.realPath}`}
                 title={projectDisplayNames[project.projectPath] || projectTitle(project)}
-                subtitle={`${compactPath(project.realPath)}${project.branch ? ` · ${project.branch}` : ''}`}
+                subtitle={`${compactPathForDisplay(project.realPath)}${project.branch ? ` · ${project.branch}` : ''}`}
                 meta={t('newSession.sessionCount', { count: project.sessionCount })}
                 icon={project.isGit ? 'source' : 'folder'}
                 loading={creatingKey === project.realPath}

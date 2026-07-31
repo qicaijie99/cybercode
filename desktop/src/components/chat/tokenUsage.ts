@@ -82,13 +82,17 @@ export function resolveTokenUsageValues({
   const effectiveTurnUsage = shouldUseLiveTurn ? liveTurnUsage : persistedTurnUsage
   const turnTotal = shouldUseLiveTurn ? liveTurnTotal : persistedTurnTotal
   const sessionTotal = getSessionTokenTotal(persistedUsage) + (includesUnpersistedTurn ? turnTotal : 0)
-  const liveContextTokens = getContextTokenTotal(liveTurnUsage)
-  const contextTokens = includesUnpersistedTurn && liveContextTokens > 0
-    ? liveContextTokens
-    : persistedContext?.usedTokens ?? liveContextTokens
+  // SDK result usage is cumulative across every model request in a turn. It is
+  // valid for turn/cost totals, but it is not the number of tokens occupying
+  // the model's current context. Agentic turns with several tool calls can
+  // easily accumulate beyond the context window and would briefly show 100%.
+  // The transcript context snapshot is based on the latest main request, which
+  // is the only compatible numerator for the context-window percentage.
+  const contextTokens = persistedContext?.usedTokens ?? 0
   const contextWindow = contextWindowOverride ?? persistedContext?.contextWindow ?? 0
+  const contextIsPending = !persistedContext && liveTurnTotal > 0
   const contextPercentage = contextTokens === 0
-    ? 0
+    ? contextIsPending ? null : 0
     : calculateContextUsagePercent(contextTokens, contextWindow)
 
   return {

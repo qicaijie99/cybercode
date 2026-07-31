@@ -1,4 +1,4 @@
-import { useTabStore } from '../../stores/tabStore'
+import { findActiveTab, useTabStore } from '../../stores/tabStore'
 import { WindowControls } from './WindowControls'
 
 const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
@@ -6,7 +6,8 @@ const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in windo
 export function TabBar() {
   const tabs = useTabStore((s) => s.tabs)
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const activeTab = tabs.find((t) => t.sessionId === activeTabId)
+  const activeTabKey = useTabStore((s) => s.activeTabKey)
+  const activeTab = findActiveTab(tabs, activeTabKey, activeTabId)
   const isSession = activeTab?.type === 'session'
 
   return (

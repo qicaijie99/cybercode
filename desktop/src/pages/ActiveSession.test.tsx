@@ -46,12 +46,13 @@ import { useTabStore } from '../stores/tabStore'
 import { useTeamStore } from '../stores/teamStore'
 
 const originalEnsureSessionReady = useChatStore.getState().ensureSessionReady
+const originalLoadHistory = useChatStore.getState().loadHistory
 
 afterEach(() => {
   vi.useRealTimers()
-  useTabStore.setState({ tabs: [], activeTabId: null })
+  useTabStore.setState({ tabs: [], activeTabId: null, activeTabKey: null, recentSessionIds: [], recentSessionKeys: [] })
   useSessionStore.setState({ sessions: [], activeSessionId: null, isLoading: false, error: null })
-  useChatStore.setState({ sessions: {}, ensureSessionReady: originalEnsureSessionReady })
+  useChatStore.setState({ sessions: {}, ensureSessionReady: originalEnsureSessionReady, loadHistory: originalLoadHistory })
   useTeamStore.setState({ teams: [], activeTeam: null, memberColors: new Map(), error: null })
 })
 
@@ -163,6 +164,36 @@ describe('ActiveSession task polling', () => {
     const { unmount } = render(<ActiveSession sessionId={sessionId} isActive={true} />)
 
     expect(ensureSessionReady).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('retries a failed empty history load when a warm session becomes active again', () => {
+    const sessionId = 'history-error-retry-session'
+    const loadHistory = vi.fn().mockResolvedValue(undefined)
+    const defaultSession = useChatStore.getState().getSession(sessionId)
+
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'History Error', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+      activeTabKey: sessionId,
+    })
+    useChatStore.setState({
+      loadHistory,
+      sessions: {
+        [sessionId]: {
+          ...defaultSession,
+          connectionState: 'connected',
+          historyLoadState: 'error',
+        },
+      },
+    })
+
+    const { rerender, unmount } = render(<ActiveSession sessionId={sessionId} isActive={false} />)
+    expect(loadHistory).not.toHaveBeenCalled()
+
+    rerender(<ActiveSession sessionId={sessionId} isActive={true} />)
+
+    expect(loadHistory).toHaveBeenCalledWith(sessionId, undefined)
     unmount()
   })
 

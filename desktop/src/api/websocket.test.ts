@@ -15,6 +15,7 @@ class FakeWebSocket {
   static readonly CLOSING = 2
   static readonly CLOSED = 3
   static instances: FakeWebSocket[] = []
+  static deferCloseEvents = false
 
   readonly url: string
   readyState = FakeWebSocket.CONNECTING
@@ -35,6 +36,10 @@ class FakeWebSocket {
 
   close() {
     this.readyState = FakeWebSocket.CLOSED
+    if (!FakeWebSocket.deferCloseEvents) this.finishClose()
+  }
+
+  finishClose() {
     ;(this.onclose as (() => void) | null)?.()
   }
 
@@ -55,6 +60,7 @@ describe('wsManager reconnect buffering', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     FakeWebSocket.instances = []
+    FakeWebSocket.deferCloseEvents = false
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     wsManager.disconnectAll()
   })
@@ -90,5 +96,31 @@ describe('wsManager reconnect buffering', () => {
     expect(secondSocket!.sent).toEqual([
       JSON.stringify({ type: 'user_message', content: 'queued while offline' }),
     ])
+  })
+
+  it('ignores delayed events from a socket that was replaced', () => {
+    FakeWebSocket.deferCloseEvents = true
+    const staleStates: string[] = []
+
+    wsManager.connect('session-fast-switch')
+    const staleSocket = FakeWebSocket.instances[0]!
+    wsManager.onStateChange('session-fast-switch', (state) => staleStates.push(state))
+    staleSocket.open()
+
+    wsManager.disconnect('session-fast-switch')
+    expect(staleStates).toEqual(['open', 'closed'])
+
+    wsManager.connect('session-fast-switch')
+    const currentSocket = FakeWebSocket.instances[1]!
+    const currentStates: string[] = []
+    wsManager.onStateChange('session-fast-switch', (state) => currentStates.push(state))
+    currentSocket.open()
+
+    staleSocket.finishClose()
+    staleSocket.open()
+
+    expect(staleStates).toEqual(['open', 'closed'])
+    expect(currentStates).toEqual(['open'])
+    expect(wsManager.isConnected('session-fast-switch')).toBe(true)
   })
 })

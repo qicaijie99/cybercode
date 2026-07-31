@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { memo, useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import {
   ChevronDown,
   Folder,
@@ -15,7 +15,7 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTranslation } from '../../i18n'
 import { ConfirmDialog } from '../shared/ConfirmDialog'
-import { useTabStore } from '../../stores/tabStore'
+import { findActiveTab, useTabStore } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { getSessionDisplayTitle } from '../../utils/sessionTitle'
 import { NewSessionMenu } from './NewSessionMenu'
@@ -29,7 +29,8 @@ import type { SessionListItem } from '../../types/session'
 const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
 const COLLAPSED_PROJECTS_KEY = 'cybercode.sidebar.collapsedProjects.v1'
 const TEMPORARY_GROUP_KEY = '__temporary__'
-const BACKGROUND_HISTORY_PREFETCH_COUNT = 8
+const BACKGROUND_HISTORY_PREFETCH_COUNT = 12
+const BACKGROUND_HISTORY_PREFETCH_WORKERS = 3
 const SIDEBAR_PRIMARY_CONTROL_CLASSES =
   'box-border w-full appearance-none rounded-full border-2 border-[var(--color-sidebar-search-border)] bg-[var(--color-sidebar-search-bg)]'
 
@@ -94,7 +95,7 @@ export function Sidebar() {
   const addToast = useUIStore((s) => s.addToast)
 
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const activeTab = useTabStore((s) => s.tabs.find((tab) => tab.sessionId === s.activeTabId))
+  const activeTab = useTabStore((s) => findActiveTab(s.tabs, s.activeTabKey, s.activeTabId))
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
   const prefetchHistory = useChatStore((s) => s.prefetchHistory)
@@ -133,7 +134,9 @@ export function Sidebar() {
           await prefetchHistory(session.id, session.projectPath)
         }
       }
-      void Promise.all([worker(), worker()])
+      void Promise.all(
+        Array.from({ length: BACKGROUND_HISTORY_PREFETCH_WORKERS }, () => worker()),
+      )
     }, 300)
 
     return () => {
@@ -315,6 +318,20 @@ export function Sidebar() {
       writeCollapsedGroupKeys(next)
       return next
     })
+  }, [])
+
+  const handleCancelRename = useCallback(() => {
+    setRenamingSession(null)
+    setRenameValue('')
+  }, [])
+
+  const handleCancelProjectRename = useCallback(() => {
+    setRenamingProjectPath(null)
+    setProjectRenameValue('')
+  }, [])
+
+  const handleCancelBulkSelection = useCallback(() => {
+    setBulkSelection(null)
   }, [])
 
   const startBulkSelection = useCallback((group: SidebarSessionGroup) => {
@@ -547,7 +564,7 @@ export function Sidebar() {
                 bulkSelectionKeys={bulkSelection?.groupKey === group.key
                   ? bulkSelection.selectedSessionKeys
                   : null}
-                onToggle={() => toggleGroup(group.key)}
+                onToggle={toggleGroup}
                 onOpenSession={openSession}
                 onSessionContextMenu={handleSessionContextMenu}
                 onProjectContextMenu={handleProjectContextMenu}
@@ -556,15 +573,15 @@ export function Sidebar() {
                 onStartProjectRename={handleStartProjectRename}
                 onRenameChange={setRenameValue}
                 onFinishRename={handleFinishRename}
-                onCancelRename={() => { setRenamingSession(null); setRenameValue('') }}
+                onCancelRename={handleCancelRename}
                 onProjectRenameChange={setProjectRenameValue}
                 onFinishProjectRename={handleFinishProjectRename}
-                onCancelProjectRename={() => { setRenamingProjectPath(null); setProjectRenameValue('') }}
-                onStartBulkSelection={() => startBulkSelection(group)}
-                onToggleSessionSelection={(session) => toggleBulkSession(group.key, session)}
-                onToggleAllSelection={() => toggleAllBulkSessions(group)}
+                onCancelProjectRename={handleCancelProjectRename}
+                onStartBulkSelection={startBulkSelection}
+                onToggleSessionSelection={toggleBulkSession}
+                onToggleAllSelection={toggleAllBulkSessions}
                 onRequestBulkDelete={requestBulkDelete}
-                onCancelBulkSelection={() => setBulkSelection(null)}
+                onCancelBulkSelection={handleCancelBulkSelection}
               />
             ))}
 
@@ -582,7 +599,7 @@ export function Sidebar() {
                 bulkSelectionKeys={bulkSelection?.groupKey === groupedSessions.temporaryGroup.key
                   ? bulkSelection.selectedSessionKeys
                   : null}
-                onToggle={() => toggleGroup(TEMPORARY_GROUP_KEY)}
+                onToggle={toggleGroup}
                 onOpenSession={openSession}
                 onSessionContextMenu={handleSessionContextMenu}
                 onDelete={handleDelete}
@@ -590,15 +607,15 @@ export function Sidebar() {
                 onStartProjectRename={handleStartProjectRename}
                 onRenameChange={setRenameValue}
                 onFinishRename={handleFinishRename}
-                onCancelRename={() => { setRenamingSession(null); setRenameValue('') }}
+                onCancelRename={handleCancelRename}
                 onProjectRenameChange={setProjectRenameValue}
                 onFinishProjectRename={handleFinishProjectRename}
-                onCancelProjectRename={() => { setRenamingProjectPath(null); setProjectRenameValue('') }}
-                onStartBulkSelection={() => startBulkSelection(groupedSessions.temporaryGroup!)}
-                onToggleSessionSelection={(session) => toggleBulkSession(TEMPORARY_GROUP_KEY, session)}
-                onToggleAllSelection={() => toggleAllBulkSessions(groupedSessions.temporaryGroup!)}
+                onCancelProjectRename={handleCancelProjectRename}
+                onStartBulkSelection={startBulkSelection}
+                onToggleSessionSelection={toggleBulkSession}
+                onToggleAllSelection={toggleAllBulkSessions}
                 onRequestBulkDelete={requestBulkDelete}
-                onCancelBulkSelection={() => setBulkSelection(null)}
+                onCancelBulkSelection={handleCancelBulkSelection}
               />
             )}
           </div>
@@ -698,7 +715,7 @@ export function Sidebar() {
   )
 }
 
-function SessionProjectGroup({
+const SessionProjectGroup = memo(function SessionProjectGroup({
   group,
   expanded,
   activeKey,
@@ -738,7 +755,7 @@ function SessionProjectGroup({
   projectRenameValue: string
   projectRenameInputRef: React.RefObject<HTMLInputElement>
   bulkSelectionKeys?: ReadonlySet<string> | null
-  onToggle: () => void
+  onToggle: (groupKey: string) => void
   onOpenSession: (session: SessionListItem, displayTitle: string) => void
   onSessionContextMenu: (event: React.MouseEvent, session: SessionRef) => void
   onProjectContextMenu?: (event: React.MouseEvent, group: SidebarSessionGroup) => void
@@ -751,9 +768,9 @@ function SessionProjectGroup({
   onProjectRenameChange: (value: string) => void
   onFinishProjectRename: () => void
   onCancelProjectRename: () => void
-  onStartBulkSelection?: () => void
-  onToggleSessionSelection?: (session: SessionListItem) => void
-  onToggleAllSelection?: () => void
+  onStartBulkSelection?: (group: SidebarSessionGroup) => void
+  onToggleSessionSelection?: (groupKey: string, session: SessionListItem) => void
+  onToggleAllSelection?: (group: SidebarSessionGroup) => void
   onRequestBulkDelete?: () => void
   onCancelBulkSelection?: () => void
 }) {
@@ -791,7 +808,7 @@ function SessionProjectGroup({
               aria-expanded={expanded}
               aria-disabled={selectionMode || undefined}
               title={group.path ?? undefined}
-              onClick={selectionMode ? undefined : onToggle}
+              onClick={selectionMode ? undefined : () => onToggle(group.key)}
               onContextMenu={group.isTemporary || selectionMode
                 ? undefined
                 : (event) => onProjectContextMenu?.(event, group)}
@@ -823,7 +840,7 @@ function SessionProjectGroup({
                 title={t('sidebar.selectProjectSessions', { project: group.title })}
                 onClick={(event) => {
                   event.stopPropagation()
-                  onStartBulkSelection?.()
+                  onStartBulkSelection?.(group)
                 }}
                 className={`absolute ${canRenameProject ? 'right-[57px]' : 'right-[31px]'} top-[8px] flex h-[24px] w-[24px] items-center justify-center rounded-[6px] text-[var(--color-text-tertiary)] opacity-0 transition duration-100 hover:bg-[var(--color-surface-container-high)] hover:text-[var(--color-text-primary)] group-hover/project:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]`}
               >
@@ -859,7 +876,7 @@ function SessionProjectGroup({
             aria-checked={partiallySelected ? 'mixed' : allSelected}
             aria-label={allSelected ? t('sidebar.clearSessionSelection') : t('sidebar.selectAllSessions')}
             title={allSelected ? t('sidebar.clearSessionSelection') : t('sidebar.selectAllSessions')}
-            onClick={() => onToggleAllSelection?.()}
+            onClick={() => onToggleAllSelection?.(group)}
             className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[6px] text-[var(--color-text-tertiary)] transition-colors duration-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
           >
             {allSelected
@@ -912,14 +929,14 @@ function SessionProjectGroup({
               onRenameChange={onRenameChange}
               onFinishRename={onFinishRename}
               onCancelRename={onCancelRename}
-              onToggleSelection={(selectedSession) => onToggleSessionSelection?.(selectedSession)}
+              onToggleSelection={(selectedSession) => onToggleSessionSelection?.(group.key, selectedSession)}
             />
           ))}
         </div>
       )}
     </section>
   )
-}
+})
 
 function SidebarSessionRow({
   session,

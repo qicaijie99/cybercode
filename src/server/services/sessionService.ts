@@ -233,6 +233,7 @@ type TranscriptUsageRecord = {
   turnIndex: number
   order: number
   isTerminal: boolean
+  isSidechain: boolean
 }
 
 function transcriptTokenTotal(usage: TranscriptTokenUsage): number {
@@ -319,6 +320,7 @@ function summarizeTranscriptUsage(entries: RawEntry[]): {
       isTerminal:
         typeof entry.message?.stop_reason === 'string' &&
         entry.message.stop_reason.length > 0,
+      isSidechain: entry.isSidechain === true,
     }
     const current = recordsByKey.get(key)
     if (!current || shouldReplaceTranscriptUsageRecord(current, candidate)) {
@@ -328,6 +330,11 @@ function summarizeTranscriptUsage(entries: RawEntry[]): {
 
   const records = Array.from(recordsByKey.values()).sort((a, b) => a.order - b.order)
   const tokenRecords = records.filter((record) => transcriptTokenTotal(record.usage) > 0)
+  // The context estimate must reflect the main conversation. Sidechain
+  // (subagent) requests have their own small context and model, so letting one
+  // become latestRequest makes the usage percentage collapse after every
+  // subagent run.
+  const latestMainRequest = tokenRecords.findLast((record) => !record.isSidechain) ?? null
   const latestTurnUsage = emptyTranscriptTokenUsage()
   for (const record of tokenRecords) {
     if (record.turnIndex === latestUserTurnIndex) {
@@ -337,7 +344,7 @@ function summarizeTranscriptUsage(entries: RawEntry[]): {
 
   return {
     records,
-    latestRequest: tokenRecords.at(-1) ?? null,
+    latestRequest: latestMainRequest ?? tokenRecords.at(-1) ?? null,
     latestTurnUsage,
   }
 }

@@ -3,7 +3,22 @@ import { sessionsApi } from './sessions'
 
 describe('sessionsApi', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  it('limits local history requests to twelve seconds by default', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = sessionsApi.getMessages('slow-session', { limit: 80 })
+    const rejection = expect(request).rejects.toThrow('Request timed out after 12s')
+    await vi.advanceTimersByTimeAsync(12_000)
+
+    await rejection
   })
 
   it('loads the lightweight cumulative usage endpoint with the project locator', async () => {

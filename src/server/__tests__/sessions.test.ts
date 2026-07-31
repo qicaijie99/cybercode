@@ -1248,7 +1248,8 @@ describe('Sessions API', () => {
     service = new SessionService()
 
     // Import and start a minimal test server
-    const { handleSessionsApi } = await import('../api/sessions.js')
+    const { handleSessionsApi, invalidateRecentProjectsCache } = await import('../api/sessions.js')
+    invalidateRecentProjectsCache()
     const { handleConversationsApi } = await import('../api/conversations.js')
 
     const port = 30000 + Math.floor(Math.random() * 10000)
@@ -1305,6 +1306,34 @@ describe('Sessions API', () => {
     expect(body.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     )
+  })
+
+  it('expands a partial recent-project cache for a larger request', async () => {
+    for (const name of ['recent-alpha', 'recent-beta', 'recent-gamma']) {
+      const workDir = path.join(tmpDir, name)
+      await fs.mkdir(workDir, { recursive: true })
+      const response = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workDir }),
+      })
+      expect(response.status).toBe(201)
+    }
+
+    const firstResponse = await fetch(`${baseUrl}/api/sessions/recent-projects?limit=1`)
+    expect(firstResponse.status).toBe(200)
+    const firstBody = await firstResponse.json() as { projects: Array<{ realPath: string }> }
+    expect(firstBody.projects).toHaveLength(1)
+
+    const expandedResponse = await fetch(`${baseUrl}/api/sessions/recent-projects?limit=3`)
+    expect(expandedResponse.status).toBe(200)
+    const expandedBody = await expandedResponse.json() as { projects: Array<{ realPath: string }> }
+    expect(expandedBody.projects).toHaveLength(3)
+    expect(new Set(expandedBody.projects.map((project) => project.realPath))).toEqual(new Set([
+      path.join(tmpDir, 'recent-alpha'),
+      path.join(tmpDir, 'recent-beta'),
+      path.join(tmpDir, 'recent-gamma'),
+    ]))
   })
 
   it('POST /api/sessions/:id/branch should create and return an independent branch', async () => {

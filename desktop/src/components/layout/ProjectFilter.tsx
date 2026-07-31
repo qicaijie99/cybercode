@@ -1,9 +1,16 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Folder } from 'lucide-react'
-import { sessionsApi, type RecentProject } from '../../api/sessions'
+import type { RecentProject } from '../../api/sessions'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTranslation } from '../../i18n'
+import {
+  loadRecentProjects,
+  mergeRecentProjects,
+  peekRecentProjects,
+  recentProjectsFromSessions,
+} from '../../lib/recentProjects'
+import { basenameForDisplay } from '../../lib/pathDisplay'
 import { subscribeToViewportChanges } from '../../lib/viewportEvents'
 import { Icon } from '../shared/Icon'
 
@@ -23,10 +30,6 @@ type ProjectOption = {
   modifiedAt?: string
 }
 
-let cachedProjects: RecentProject[] | null = null
-let cacheTimestamp = 0
-const CACHE_TTL = 30_000
-
 export function ProjectFilter({ variant = 'default' }: { variant?: 'default' | 'embedded' }) {
   const t = useTranslation()
   const {
@@ -35,29 +38,24 @@ export function ProjectFilter({ variant = 'default' }: { variant?: 'default' | '
     selectedSessionScope,
     setSessionFilterScope,
     projectDisplayNames,
+    sessions,
   } = useSessionStore()
   const [open, setOpen] = useState(false)
-  const [projects, setProjects] = useState<RecentProject[]>([])
-  const [loading, _setLoading] = useState(false)
+  const localProjects = useMemo(
+    () => recentProjectsFromSessions(sessions, 200),
+    [sessions],
+  )
+  const [projects, setProjects] = useState<RecentProject[]>(() =>
+    mergeRecentProjects([peekRecentProjects(200), localProjects], 200),
+  )
   const [dropdownPos, setDropdownPos] = useState<DropdownPos | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Preload projects on mount, not just when opening
   useEffect(() => {
-    if (cachedProjects && Date.now() - cacheTimestamp < CACHE_TTL) {
-      setProjects(cachedProjects)
-      return
-    }
-    sessionsApi.getRecentProjects(200)
-      .then(({ projects: nextProjects }) => {
-        cachedProjects = nextProjects
-        cacheTimestamp = Date.now()
-        setProjects(nextProjects)
-      })
-      .catch(() => setProjects([]))
-  }, [])
+    setProjects((current) => mergeRecentProjects([current, localProjects], 200))
+  }, [localProjects])
 
   const updateDropdownPos = useCallback(() => {
     if (!triggerRef.current) return
@@ -100,25 +98,22 @@ export function ProjectFilter({ variant = 'default' }: { variant?: 'default' | '
     return subscribeToViewportChanges(updateDropdownPos)
   }, [open, updateDropdownPos])
 
-  // Refresh cache when opening if expired, but don't show loading if we have cached data
   useEffect(() => {
     if (!open) return
-    if (cachedProjects && Date.now() - cacheTimestamp < CACHE_TTL) {
-      if (projects.length === 0) setProjects(cachedProjects)
-      return
+    let alive = true
+    setProjects((current) => mergeRecentProjects(
+      [current, peekRecentProjects(200), localProjects],
+      200,
+    ))
+    loadRecentProjects(200).then((nextProjects) => {
+      if (alive) {
+        setProjects(mergeRecentProjects([nextProjects, localProjects], 200))
+      }
+    })
+    return () => {
+      alive = false
     }
-    if (cachedProjects && projects.length === 0) {
-      setProjects(cachedProjects)
-    }
-    // Refresh in background without loading state
-    sessionsApi.getRecentProjects(200)
-      .then(({ projects: nextProjects }) => {
-        cachedProjects = nextProjects
-        cacheTimestamp = Date.now()
-        setProjects(nextProjects)
-      })
-      .catch(() => {})
-  }, [open, projects.length])
+  }, [localProjects, open])
 
   const selectedProjectPath = selectedSessionScope === 'project' ? selectedProjects[0] : undefined
   const isTemporarySelected = selectedSessionScope === 'temporary'
@@ -280,9 +275,7 @@ export function ProjectFilter({ variant = 'default' }: { variant?: 'default' | '
               )}
             </button>
 
-            {loading && projects.length === 0 ? (
-              <div className="px-4 py-5 text-center text-[12px] text-[var(--color-text-tertiary)]">{t('common.loading')}</div>
-            ) : options.length === 0 ? (
+            {options.length === 0 ? (
               <div className="px-4 py-5 text-center text-[12px] text-[var(--color-text-tertiary)]">{t('sidebar.noSessions')}</div>
             ) : (
               <>
@@ -343,8 +336,8 @@ function compareProjectOptions(a: ProjectOption, b: ProjectOption) {
 
 function fallbackProjectTitle(projectPath: string, fallback: string) {
   if (!projectPath || projectPath === '_unknown') return fallback
-  if (projectPath.includes('/')) {
-    return projectPath.split('/').filter(Boolean).pop() || fallback
+  if (/[\\/]/.test(projectPath)) {
+    return basenameForDisplay(projectPath) || fallback
   }
 
   const segments = projectPath.split('-').filter(Boolean)

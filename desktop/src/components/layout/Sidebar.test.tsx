@@ -96,6 +96,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
+import { invalidateRecentProjectsCache } from '../../lib/recentProjects'
 
 describe('Sidebar', () => {
   const connectToSession = vi.fn()
@@ -121,11 +122,18 @@ describe('Sidebar', () => {
     createProjectFolderMock.mockReset()
     getRecentProjectsMock.mockReset()
     getRecentProjectsMock.mockResolvedValue({ projects: [] })
+    invalidateRecentProjectsCache()
     openDialogMock.mockReset()
     delete (window as typeof window & { __TAURI__?: unknown }).__TAURI__
 
     localStorage.clear()
-    useTabStore.setState({ tabs: [], activeTabId: null })
+    useTabStore.setState({
+      tabs: [],
+      activeTabId: null,
+      activeTabKey: null,
+      recentSessionIds: [],
+      recentSessionKeys: [],
+    })
     useSessionStore.setState({
       sessions: [],
       activeSessionId: null,
@@ -155,7 +163,13 @@ describe('Sidebar', () => {
   })
 
   afterEach(() => {
-    useTabStore.setState({ tabs: [], activeTabId: null })
+    useTabStore.setState({
+      tabs: [],
+      activeTabId: null,
+      activeTabKey: null,
+      recentSessionIds: [],
+      recentSessionKeys: [],
+    })
     localStorage.clear()
   })
 
@@ -228,6 +242,42 @@ describe('Sidebar', () => {
     ])
     expect(useTabStore.getState().activeTabId).toBe('session-new-1')
     expect(screen.getByRole('complementary')).not.toHaveAttribute('data-tauri-drag-region')
+  })
+
+  it('shows projects from loaded sessions without waiting for recent-project metadata', async () => {
+    const now = new Date().toISOString()
+    let resolveRecentProjects: ((value: { projects: [] }) => void) | undefined
+    getRecentProjectsMock.mockReturnValue(new Promise((resolve) => {
+      resolveRecentProjects = resolve
+    }))
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'session-instant-project',
+          title: 'Instant project session',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 2,
+          projectPath: '-workspace-instant-project',
+          workDir: '/workspace/instant-project',
+          workDirExists: true,
+          isTemporary: false,
+        },
+      ],
+      availableProjects: ['-workspace-instant-project'],
+    })
+
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
+
+    const menu = screen.getByRole('menu', { name: 'New Session' })
+    expect(within(menu).getByText('instant-project')).toBeInTheDocument()
+    expect(within(menu).queryByText('Loading')).not.toBeInTheDocument()
+    expect(getRecentProjectsMock).toHaveBeenCalledWith(8)
+
+    await act(async () => {
+      resolveRecentProjects?.({ projects: [] })
+    })
   })
 
   it('closes the new-session menu when a settings panel opens', async () => {

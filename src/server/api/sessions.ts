@@ -239,6 +239,7 @@ async function createSession(req: Request): Promise<Response> {
     workDir: body.workDir,
     temporary: body.temporary === true,
   })
+  invalidateRecentProjectsCache()
   if (!result.session.isTemporary && result.session.workDir) {
     try {
       codeGraphService.ensureProject(result.session.workDir)
@@ -272,6 +273,7 @@ async function createProjectFolder(req: Request): Promise<Response> {
 
 async function deleteSession(sessionId: string, url: URL): Promise<Response> {
   await sessionService.deleteSession(sessionId, { projectPath: getProjectPath(url) })
+  invalidateRecentProjectsCache()
   return Response.json({ ok: true })
 }
 
@@ -569,9 +571,60 @@ type RecentProjectEntry = {
   sessionCount: number
 }
 
-// In-memory cache for recent projects (TTL: 30s)
-let recentProjectsCache: { projects: RecentProjectEntry[]; timestamp: number } | null = null
-const RECENT_PROJECTS_CACHE_TTL = 30_000
+function portableBasename(value: string): string {
+  return value.split(/[\\/]+/).filter(Boolean).pop() || value
+}
+
+// In-memory cache for recent projects (TTL: 5min)
+let recentProjectsCache: {
+  projects: RecentProjectEntry[]
+  coverage: number
+  timestamp: number
+} | null = null
+const RECENT_PROJECTS_CACHE_TTL = 300_000
+const RECENT_PROJECTS_GIT_CONCURRENCY = 6
+const RECENT_PROJECTS_GIT_TIMEOUT = 1_500
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor++
+      results[index] = await mapper(items[index]!)
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  )
+  return results
+}
+
+async function readGitOutput(cwd: string, args: string[]): Promise<string> {
+  const proc = Bun.spawn(['git', ...args], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      new Response(proc.stdout).text(),
+      new Promise<string>((_, reject) => {
+        timeout = setTimeout(() => {
+          proc.kill()
+          reject(new Error('Git metadata probe timed out'))
+        }, RECENT_PROJECTS_GIT_TIMEOUT)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
 
 export function invalidateRecentProjectsCache(): void {
   recentProjectsCache = null
@@ -581,7 +634,11 @@ async function getRecentProjects(url: URL): Promise<Response> {
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '10', 10) || 10, 1), 500)
 
   // Return cached response if fresh
-  if (recentProjectsCache && Date.now() - recentProjectsCache.timestamp < RECENT_PROJECTS_CACHE_TTL) {
+  if (
+    recentProjectsCache &&
+    Date.now() - recentProjectsCache.timestamp < RECENT_PROJECTS_CACHE_TTL &&
+    recentProjectsCache.coverage >= limit
+  ) {
     return Response.json({ projects: recentProjectsCache.projects.slice(0, limit) })
   }
 
@@ -592,16 +649,12 @@ async function getRecentProjects(url: URL): Promise<Response> {
     session.workDir
   )
 
-  // First pass: resolve realPath for each session and group by realPath to dedup
+  // First pass: group by realPath to dedup. listSessions() already resolved
+  // workDir from the transcript entries, so reuse it instead of re-parsing
+  // every JSONL file via getSessionWorkDir().
   const realPathMap = new Map<string, { projectPath: string; modifiedAt: string; sessionCount: number; sessionId: string }>()
   for (const s of validSessions) {
-    let realPath: string
-    try {
-      const workDir = await sessionService.getSessionWorkDir(s.id, { projectPath: s.projectPath })
-      realPath = workDir || sessionService.desanitizePath(s.projectPath)
-    } catch {
-      realPath = sessionService.desanitizePath(s.projectPath)
-    }
+    const realPath = s.workDir!
 
     const existing = realPathMap.get(realPath)
     if (!existing || s.modifiedAt > existing.modifiedAt) {
@@ -616,37 +669,35 @@ async function getRecentProjects(url: URL): Promise<Response> {
     }
   }
 
-  // Build project list with git info — parallelize git operations
+  // Sort by most recent first, then only probe the projects requested by this
+  // caller. The UI can render its local session-derived list immediately, so
+  // Git metadata is an enhancement and must not fan an 8-item request out to
+  // hundreds of child processes.
   const entries = Array.from(realPathMap.entries())
-  const projects = await Promise.all(
-    entries.map(async ([realPath, info]) => {
-      const projectName = realPath.split('/').filter(Boolean).pop() || info.projectPath
+  entries.sort((a, b) => b[1].modifiedAt.localeCompare(a[1].modifiedAt))
+  const scanCount = Math.min(entries.length, limit)
+  const projects = await mapWithConcurrency(
+    entries.slice(0, scanCount),
+    RECENT_PROJECTS_GIT_CONCURRENCY,
+    async ([realPath, info]) => {
+      const projectName = portableBasename(realPath) || info.projectPath
 
       let isGit = false
       let repoName: string | null = null
       let branch: string | null = null
       try {
-        const proc = Bun.spawn(['git', 'rev-parse', '--is-inside-work-tree'], {
-          cwd: realPath, stdout: 'pipe', stderr: 'pipe',
-        })
-        const out = await new Response(proc.stdout).text()
+        const out = await readGitOutput(realPath, ['rev-parse', '--is-inside-work-tree'])
         isGit = out.trim() === 'true'
 
         if (isGit) {
-          // Run branch + remote in parallel
           const [branchResult, remoteResult] = await Promise.all([
             (async () => {
-              const branchProc = Bun.spawn(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], {
-                cwd: realPath, stdout: 'pipe', stderr: 'pipe',
-              })
-              return (await new Response(branchProc.stdout).text()).trim() || null
+              const value = await readGitOutput(realPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
+              return value.trim() || null
             })(),
             (async () => {
               try {
-                const remoteProc = Bun.spawn(['git', 'remote', 'get-url', 'origin'], {
-                  cwd: realPath, stdout: 'pipe', stderr: 'pipe',
-                })
-                const remote = (await new Response(remoteProc.stdout).text()).trim()
+                const remote = (await readGitOutput(realPath, ['remote', 'get-url', 'origin'])).trim()
                 const match = remote.match(/:([^/]+\/[^/]+?)(?:\.git)?$/) || remote.match(/\/([^/]+\/[^/]+?)(?:\.git)?$/)
                 return match ? match[1]! : null
               } catch { return null }
@@ -661,12 +712,16 @@ async function getRecentProjects(url: URL): Promise<Response> {
         projectPath: info.projectPath, realPath, projectName, isGit, repoName, branch,
         modifiedAt: info.modifiedAt, sessionCount: info.sessionCount,
       }
-    })
+    },
   )
 
   // Sort by most recent
   projects.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
 
-  recentProjectsCache = { projects, timestamp: Date.now() }
+  recentProjectsCache = {
+    projects,
+    coverage: entries.length <= scanCount ? Number.MAX_SAFE_INTEGER : scanCount,
+    timestamp: Date.now(),
+  }
   return Response.json({ projects: projects.slice(0, limit) })
 }

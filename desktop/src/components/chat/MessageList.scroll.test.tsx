@@ -203,6 +203,37 @@ describe('MessageList initial bottom positioning', () => {
     })
   })
 
+  it('re-pins a warm session when its preserved panel becomes active again', async () => {
+    const { rerender } = render(
+      <MessageList sessionId="session-a" projectPath="/tmp/a" isActive />,
+    )
+
+    await waitFor(() => {
+      expect(virtuosoMock.getLatestProps().followOutput(false)).toBe(false)
+    })
+
+    act(() => {
+      virtuosoMock.getLatestProps().atBottomStateChange?.(false)
+    })
+
+    rerender(
+      <MessageList sessionId="session-a" projectPath="/tmp/a" isActive={false} />,
+    )
+    virtuosoMock.scrollToIndex.mockClear()
+
+    rerender(
+      <MessageList sessionId="session-a" projectPath="/tmp/a" isActive />,
+    )
+
+    await waitFor(() => {
+      expect(virtuosoMock.scrollToIndex).toHaveBeenCalledWith({
+        index: 'LAST',
+        align: 'end',
+        behavior: 'auto',
+      })
+    })
+  })
+
   it('waits for async-loaded history before doing the initial bottom scroll', async () => {
     useChatStore.setState((state) => ({
       sessions: {

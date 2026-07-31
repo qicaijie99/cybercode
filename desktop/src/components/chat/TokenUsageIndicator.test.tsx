@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sessionsApi } from '../../api/sessions'
@@ -162,6 +162,41 @@ describe('TokenUsageIndicator', () => {
     })
   })
 
+  it('does not treat cumulative live turn usage as context occupancy', async () => {
+    render(<TokenUsageIndicator sessionId="session-1" onOpenDetails={() => {}} />)
+
+    const button = await screen.findByRole('button')
+    await waitFor(() => {
+      expect(button).toHaveTextContent('20%')
+      expect(screen.getByTestId('token-context-ring')).toHaveAttribute('data-context-percent', '20')
+    })
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          'session-1': {
+            ...state.sessions['session-1']!,
+            chatState: 'streaming',
+            tokenUsage: {
+              input_tokens: 220_000,
+              output_tokens: 30_000,
+              cache_read_input_tokens: 160_000,
+              cache_creation_input_tokens: 10_000,
+            },
+          },
+        },
+      }))
+    })
+
+    await waitFor(() => {
+      expect(button).toHaveTextContent('本轮420K')
+      expect(button).toHaveTextContent('20%')
+      expect(button).not.toHaveTextContent('100%')
+      expect(screen.getByTestId('token-context-ring')).toHaveAttribute('data-context-percent', '20')
+    })
+  })
+
   it('restores the latest turn total from the transcript after a restart', async () => {
     useChatStore.setState({
       sessions: {
@@ -199,6 +234,7 @@ describe('TokenUsageIndicator', () => {
         }),
       },
     })
+    vi.mocked(sessionsApi.getUsage).mockImplementationOnce(() => new Promise(() => {}))
 
     render(<TokenUsageIndicator sessionId="session-1" onOpenDetails={() => {}} />)
 
@@ -334,5 +370,26 @@ describe('TokenUsageIndicator', () => {
       cache_read_input_tokens: 250,
       cache_creation_input_tokens: 25,
     })
+  })
+
+  it('keeps context pending instead of using an aggregate turn total', () => {
+    const values = resolveTokenUsageValues({
+      liveTurnUsage: {
+        input_tokens: 220_000,
+        output_tokens: 30_000,
+        cache_read_input_tokens: 160_000,
+        cache_creation_input_tokens: 10_000,
+      },
+      persistedUsage: null,
+      persistedContext: null,
+      isTurnActive: true,
+      usageRevision: 1,
+      loadedRevision: 0,
+      contextWindowOverride: 200_000,
+    })
+
+    expect(values.turnTotal).toBe(420_000)
+    expect(values.contextTokens).toBe(0)
+    expect(values.contextPercentage).toBeNull()
   })
 })

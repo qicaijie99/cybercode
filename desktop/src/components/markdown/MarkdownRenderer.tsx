@@ -137,22 +137,22 @@ const DOCUMENT_PROSE_CLASSES = `
   prose-table:my-0`
 
 const CHAT_PROSE_CLASSES = `
-  text-[15px] font-normal leading-relaxed tracking-normal text-[var(--color-text-primary)]
+  text-[14px] font-normal leading-relaxed tracking-normal text-[var(--color-text-primary)]
   prose-headings:my-0 prose-headings:text-[var(--color-text-primary)] prose-headings:font-bold prose-headings:tracking-normal
-  prose-h1:text-[16px] prose-h1:leading-relaxed
-  prose-h2:text-[16px] prose-h2:leading-relaxed
-  prose-h3:text-[15px] prose-h3:leading-relaxed
-  prose-h4:text-[15px] prose-h4:leading-relaxed
-  prose-p:my-0 prose-p:text-[15px] prose-p:font-normal prose-p:leading-relaxed prose-p:text-[var(--color-text-primary)]
+  prose-h1:text-[15px] prose-h1:leading-relaxed
+  prose-h2:text-[15px] prose-h2:leading-relaxed
+  prose-h3:text-[14px] prose-h3:leading-relaxed
+  prose-h4:text-[14px] prose-h4:leading-relaxed
+  prose-p:my-0 prose-p:text-[14px] prose-p:font-normal prose-p:leading-relaxed prose-p:text-[var(--color-text-primary)]
   prose-p:tracking-normal
   prose-strong:text-[var(--color-text-primary)] prose-strong:font-bold
   prose-em:text-[var(--color-text-secondary)]
   prose-a:text-[var(--color-markdown-link)] hover:prose-a:text-[var(--color-markdown-link-hover)] prose-a:font-semibold prose-a:no-underline hover:prose-a:underline
   prose-ul:my-[8px] prose-ol:my-[8px] prose-ul:pl-[18px] prose-ol:pl-[18px]
-  prose-li:my-[2px] prose-li:text-[15px] prose-li:font-normal prose-li:leading-relaxed prose-li:text-[var(--color-text-primary)]
+  prose-li:my-[2px] prose-li:text-[14px] prose-li:font-normal prose-li:leading-relaxed prose-li:text-[var(--color-text-primary)]
   prose-blockquote:my-[10px] prose-blockquote:rounded-r-lg prose-blockquote:border-l-2 prose-blockquote:border-[var(--color-markdown-quote-border)] prose-blockquote:bg-[var(--color-markdown-quote-bg)] prose-blockquote:px-[12px] prose-blockquote:py-[8px] prose-blockquote:text-[var(--color-text-secondary)] prose-blockquote:not-italic
-  prose-code:text-[14px] prose-code:font-normal prose-code:text-[var(--color-code-fg)] prose-code:bg-[var(--color-code-bg)] prose-code:border-[var(--color-border)] prose-code:px-[5px] prose-code:py-[2px] prose-code:rounded-md
-  prose-table:text-[14px]
+  prose-code:text-[13px] prose-code:font-normal prose-code:text-[var(--color-code-fg)] prose-code:bg-[var(--color-code-bg)] prose-code:border-[var(--color-border)] prose-code:px-[5px] prose-code:py-[2px] prose-code:rounded-md
+  prose-table:text-[13px]
   [&>p+p]:mt-[12px]
   [&>div+p]:mt-[12px]
   [&>p+div]:mt-[12px]

@@ -312,6 +312,7 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
   const initialBottomCompleteSecondRafRef = useRef<number | null>(null)
   const initialBottomCompleteThirdRafRef = useRef<number | null>(null)
   const streamingFollowRafRef = useRef<number | null>(null)
+  const wasActiveRef = useRef(isActive)
 
   const t = useTranslation()
   const [rewindTarget, setRewindTarget] = useState<{
@@ -550,6 +551,7 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
   }, [cancelInitialBottomFrames])
 
   const scheduleInitialBottomCompletion = useCallback((key = initialBottomKeyRef.current) => {
+    if (!isActive) return
     if (key !== initialBottomKeyRef.current) return
     if (!pendingInitialBottomRef.current) return
     if (renderItemsLengthRef.current === 0) return
@@ -590,9 +592,10 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
         })
       })
     })
-  }, [completeInitialBottom, scrollToLatest])
+  }, [completeInitialBottom, isActive, scrollToLatest])
 
   const scheduleInitialBottomScroll = useCallback((key = initialBottomKeyRef.current) => {
+    if (!isActive) return
     if (key !== initialBottomKeyRef.current) return
     if (!pendingInitialBottomRef.current) return
     if (renderItemsLengthRef.current === 0) return
@@ -614,7 +617,53 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
         scheduleInitialBottomCompletion(key)
       })
     })
-  }, [scheduleInitialBottomCompletion, scrollToLatest])
+  }, [isActive, scheduleInitialBottomCompletion, scrollToLatest])
+
+  // ContentRouter keeps the current and previous sessions mounted for fast tab
+  // switches. Returning to one of those warm panels does not change listIdentity,
+  // so explicitly restart the initial-bottom lock when it becomes active again.
+  useLayoutEffect(() => {
+    const wasActive = wasActiveRef.current
+    wasActiveRef.current = isActive
+
+    if (!isActive) {
+      pendingInitialBottomRef.current = false
+      initialBottomRangeIncludesLastRef.current = false
+      autoFollowCurrentTurnRef.current = false
+      cancelInitialBottomFrames()
+      return
+    }
+
+    if (wasActive || __testInitialItemCount) return
+
+    const key = listIdentity
+    cancelInitialBottomFrames()
+    pendingInitialBottomRef.current = true
+    initialBottomRangeIncludesLastRef.current = renderItemsLengthRef.current > 0
+    initialBottomLayoutVersionRef.current += 1
+    isNearBottomRef.current = true
+    autoFollowCurrentTurnRef.current = false
+    setIsAtBottom(true)
+
+    if (renderItemsLengthRef.current === 0) {
+      if (historyLoadState === 'loaded') completeInitialBottom(key)
+      return
+    }
+
+    // Run once before paint, then keep the existing multi-frame settling pass
+    // active for Virtuoso's asynchronous row measurements.
+    scrollToLatest('auto', key)
+    scheduleInitialBottomScroll(key)
+  }, [
+    __testInitialItemCount,
+    cancelInitialBottomFrames,
+    completeInitialBottom,
+    historyLoadState,
+    isActive,
+    listIdentity,
+    scheduleInitialBottomScroll,
+    scrollToLatest,
+  ])
 
   useEffect(() => {
     return () => cancelInitialBottomFrames()
@@ -625,6 +674,7 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
   // settled. This prevents cached sessions, async-loaded sessions, and tall
   // markdown/tool-result sessions from landing at different scroll positions.
   useEffect(() => {
+    if (!isActive) return
     if (__testInitialItemCount) return
     const key = listIdentity
     if (renderItems.length === 0) {
@@ -642,12 +692,14 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
     listIdentity,
     renderItems.length,
     historyLoadState,
+    isActive,
     __testInitialItemCount,
     completeInitialBottom,
     scheduleInitialBottomScroll,
   ])
 
   useEffect(() => {
+    if (!isActive) return
     if (__testInitialItemCount) return
     if (renderItems.length === 0) return
     if (!pendingInitialBottomRef.current && !isNearBottomRef.current && !autoFollowCurrentTurnRef.current) return
@@ -662,6 +714,7 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
   }, [
     __testInitialItemCount,
     bottomSpacerHeight,
+    isActive,
     listIdentity,
     renderItems.length,
     scheduleInitialBottomScroll,
@@ -671,6 +724,7 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
   useEffect(() => {
     const previousLatestKey = latestRenderItemKeyRef.current
     latestRenderItemKeyRef.current = latestRenderItemKey
+    if (!isActive) return
     if (previousLatestKey === latestRenderItemKey) return
     if (!latestRenderItemIsUserMessage) return
 
@@ -680,6 +734,7 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
   }, [
     latestRenderItemIsUserMessage,
     latestRenderItemKey,
+    isActive,
     listIdentity,
     scrollToLatest,
   ])
@@ -690,6 +745,15 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
   useEffect(() => {
     const prevChatState = prevChatStateRef.current
     prevChatStateRef.current = chatState
+
+    if (!isActive) {
+      autoFollowCurrentTurnRef.current = false
+      if (streamingFollowRafRef.current !== null) {
+        cancelAnimationFrame(streamingFollowRafRef.current)
+        streamingFollowRafRef.current = null
+      }
+      return
+    }
 
     if (chatState === 'idle') {
       autoFollowCurrentTurnRef.current = false
@@ -726,7 +790,7 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
         scrollToLatest('auto', key)
       })
     }
-  }, [chatState, scrollToLatest, settlingAssistant, visualStreamingText])
+  }, [chatState, isActive, scrollToLatest, settlingAssistant, visualStreamingText])
 
   useEffect(() => () => {
     if (streamingFollowRafRef.current !== null) {
@@ -984,10 +1048,11 @@ export function MessageList({ sessionId, projectPath, isActive = true, bottomOve
   }, [cancelInitialBottomFrames, chatState, isAtBottom, scrollToEarliest, scrollToLatest])
 
   const handleTotalListHeightChanged = useCallback(() => {
+    if (!isActive) return
     if (!pendingInitialBottomRef.current) return
     initialBottomLayoutVersionRef.current += 1
     scheduleInitialBottomScroll()
-  }, [scheduleInitialBottomScroll])
+  }, [isActive, scheduleInitialBottomScroll])
 
   const getItemContent = useCallback(
     (index: number, item: RenderItem | undefined) => {
@@ -1391,7 +1456,7 @@ export const MessageBlock = memo(function MessageBlock({
 
   // Wrap non-user/assistant messages in iMessage-style assistant bubble
   const wrapInAssistantBubble = (content: React.ReactNode) => wrapInChatColumn(
-    <div className="chat-bubble-text w-fit max-w-[85%] rounded-[24px] rounded-bl-[8px] border border-[var(--color-border)] bg-[var(--color-message-assistant-bg)] px-[24px] py-[16px] text-[15px] font-normal leading-relaxed tracking-normal text-[var(--color-text-primary)]">
+    <div className="chat-bubble-text w-fit max-w-[85%] rounded-[24px] rounded-bl-[8px] border border-[var(--color-border)] bg-[var(--color-message-assistant-bg)] px-[18px] py-[12px] text-[14px] font-normal leading-relaxed tracking-normal text-[var(--color-text-primary)]">
       {content}
     </div>,
     'flex flex-col items-start',

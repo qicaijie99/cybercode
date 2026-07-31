@@ -17,6 +17,7 @@ import {
   reconstructAgentNotifications as reconstructAgentNotificationsImpl,
   parseHistory,
   type HistoryMappingOptions,
+  type ParsedHistory,
 } from './historyParser'
 import type { PermissionMode } from '../types/settings'
 import type { RuntimeSelection } from '../types/runtime'
@@ -51,7 +52,9 @@ export const HISTORY_LOAD_LIMIT = 80
 /** Max messages kept in the visible window. Sliding window trims beyond this. */
 export const WINDOW_SIZE = 200
 const HISTORY_PREFETCH_CACHE_LIMIT = 12
-const HISTORY_PREFETCH_TTL_MS = 60_000
+const HISTORY_PREFETCH_TTL_MS = 5 * 60_000
+const HISTORY_PREFETCH_TIMEOUT_MS = 4_000
+const HISTORY_PREFETCH_PROMOTION_WAIT_MS = 80
 
 export type PerSessionState = {
   projectPath?: string
@@ -172,9 +175,14 @@ type ChatStore = {
   sessions: Record<string, PerSessionState>
 
   getSession: (sessionId: string) => PerSessionState
-  connectToSession: (sessionId: string, projectPath?: string) => void
+  connectToSession: (
+    sessionId: string,
+    projectPath?: string,
+    options?: { deferSocket?: boolean },
+  ) => void
   prewarmSession: (sessionId: string) => void
   prefetchHistory: (sessionId: string, projectPath?: string) => Promise<void>
+  suspendIdleConnectionsExcept: (sessionId: string) => void
   disconnectSession: (sessionId: string) => void
   ensureSessionReady: (sessionId: string, projectPath?: string) => Promise<void>
   sendMessage: (
@@ -352,7 +360,7 @@ function mergePendingSteers(steers: PendingSteer[]): { content: string; attachme
 // Streaming throttle for content_delta
 const pendingDeltas = new Map<string, string>()
 const flushTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const historyLoadTokens = new Map<string, symbol>()
+const historyLoadTokens = new Map<string, { token: symbol; key: string }>()
 
 function consumePendingDelta(sessionId: string): string {
   const timer = flushTimers.get(sessionId)
@@ -372,18 +380,23 @@ function clearPendingDelta(sessionId: string) {
   pendingDeltas.delete(sessionId)
 }
 
-function beginHistoryLoad(sessionId: string) {
+function historyLoadKey(sessionId: string, projectPath?: string) {
+  return `${sessionId}\u0000${projectPath ?? ''}`
+}
+
+function beginHistoryLoad(sessionId: string, projectPath?: string) {
   const token = Symbol(sessionId)
-  historyLoadTokens.set(sessionId, token)
+  historyLoadTokens.set(sessionId, { token, key: historyLoadKey(sessionId, projectPath) })
   return token
 }
 
-function isCurrentHistoryLoad(sessionId: string, token: symbol) {
-  return historyLoadTokens.get(sessionId) === token
+function isCurrentHistoryLoad(sessionId: string, token: symbol, projectPath?: string) {
+  const current = historyLoadTokens.get(sessionId)
+  return current?.token === token && current.key === historyLoadKey(sessionId, projectPath)
 }
 
-function finishHistoryLoad(sessionId: string, token: symbol) {
-  if (isCurrentHistoryLoad(sessionId, token)) {
+function finishHistoryLoad(sessionId: string, token: symbol, projectPath?: string) {
+  if (isCurrentHistoryLoad(sessionId, token, projectPath)) {
     historyLoadTokens.delete(sessionId)
   }
 }
@@ -457,35 +470,59 @@ function updateSessionIn(
   return { ...sessions, [sessionId]: { ...session, ...updater(session) } }
 }
 
+type SessionHistorySnapshot = ParsedHistory & { hasMore: boolean }
+
 async function fetchAndMapSessionHistory(
   sessionId: string,
   params?: { limit?: number; before?: string; after?: string; projectPath?: string },
-) {
-  let response: Awaited<ReturnType<typeof sessionsApi.getMessages>>
-  try {
-    response = await sessionsApi.getMessages(sessionId, params)
-  } catch (error) {
-    // Restored tabs can retain an old project locator after a session moves.
-    // This is a read-only request, so locating the UUID globally is safe.
-    if (!params?.projectPath || !isNotFoundError(error)) throw error
-    response = await sessionsApi.getMessages(sessionId, {
-      ...params,
-      projectPath: undefined,
-    })
-  }
+  requestOptions?: { requestClass?: 'foreground' | 'prefetch'; timeout?: number },
+): Promise<SessionHistorySnapshot> {
+  const key = historyFetchKey(sessionId, params, requestOptions?.requestClass)
+  const existing = historyFetchRequests.get(key)
+  if (existing) return existing
 
-  const { messages, hasMore } = response
-  const parsed = parseHistory(messages, nextId)
-  return {
-    uiMessages: parsed.uiMessages,
-    restoredNotifications: parsed.restoredNotifications,
-    lastTodos: parsed.lastTodos,
-    hasMessagesAfterTaskCompletion: parsed.hasMessagesAfterTaskCompletion,
-    hasMore,
-  }
+  const request = (async () => {
+    let response: Awaited<ReturnType<typeof sessionsApi.getMessages>>
+    const getMessages = (
+      requestParams?: { limit?: number; before?: string; after?: string; projectPath?: string },
+    ) => requestOptions?.timeout
+      ? sessionsApi.getMessages(sessionId, requestParams, { timeout: requestOptions.timeout })
+      : sessionsApi.getMessages(sessionId, requestParams)
+    try {
+      response = await getMessages(params)
+    } catch (error) {
+      // Restored tabs can retain an old project locator after a session moves.
+      // This is a read-only request, so locating the UUID globally is safe.
+      if (!params?.projectPath || !isNotFoundError(error)) throw error
+      response = await getMessages({
+        ...params,
+        projectPath: undefined,
+      })
+    }
+
+    const { messages, hasMore } = response
+    const parsed = parseHistory(messages, nextId)
+    return {
+      uiMessages: parsed.uiMessages,
+      restoredNotifications: parsed.restoredNotifications,
+      lastTodos: parsed.lastTodos,
+      hasMessagesAfterTaskCompletion: parsed.hasMessagesAfterTaskCompletion,
+      hasMore,
+    }
+  })()
+
+  historyFetchRequests.set(key, request)
+  void request.then(
+    () => {
+      if (historyFetchRequests.get(key) === request) historyFetchRequests.delete(key)
+    },
+    () => {
+      if (historyFetchRequests.get(key) === request) historyFetchRequests.delete(key)
+    },
+  )
+  return request
 }
 
-type SessionHistorySnapshot = Awaited<ReturnType<typeof fetchAndMapSessionHistory>>
 type SessionHistoryCacheEntry = {
   value: SessionHistorySnapshot
   cachedAt: number
@@ -493,9 +530,27 @@ type SessionHistoryCacheEntry = {
 
 const historyPrefetchCache = new Map<string, SessionHistoryCacheEntry>()
 const historyPrefetchRequests = new Map<string, Promise<SessionHistorySnapshot | null>>()
+const historyFetchRequests = new Map<string, Promise<SessionHistorySnapshot>>()
+const sessionReadyRequests = new Map<string, Promise<void>>()
+let foregroundSessionKey: string | null = null
 
 function historyPrefetchKey(sessionId: string, projectPath?: string) {
   return `${sessionId}\u0000${projectPath ?? ''}`
+}
+
+function historyFetchKey(
+  sessionId: string,
+  params?: { limit?: number; before?: string; after?: string; projectPath?: string },
+  requestClass: 'foreground' | 'prefetch' = 'foreground',
+) {
+  return [
+    sessionId,
+    params?.projectPath ?? '',
+    params?.limit ?? '',
+    params?.before ?? '',
+    params?.after ?? '',
+    requestClass,
+  ].join('\u0000')
 }
 
 function cachePrefetchedHistory(key: string, value: SessionHistorySnapshot) {
@@ -522,9 +577,14 @@ function startHistoryPrefetch(sessionId: string, projectPath?: string) {
   const request = fetchAndMapSessionHistory(sessionId, {
     limit: HISTORY_LOAD_LIMIT,
     projectPath,
+  }, {
+    requestClass: 'prefetch',
+    timeout: HISTORY_PREFETCH_TIMEOUT_MS,
   })
     .then((value) => {
-      cachePrefetchedHistory(key, value)
+      if (historyPrefetchRequests.get(key) === request) {
+        cachePrefetchedHistory(key, value)
+      }
       return value
     })
     .catch(() => null)
@@ -549,8 +609,23 @@ async function takePrefetchedHistory(sessionId: string, projectPath?: string) {
 
   const pending = historyPrefetchRequests.get(key)
   if (!pending) return null
-  const result = await pending
-  historyPrefetchCache.delete(key)
+
+  const waitExpired = Symbol('history-prefetch-wait-expired')
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const result = await Promise.race([
+    pending,
+    new Promise<typeof waitExpired>((resolve) => {
+      timer = setTimeout(() => resolve(waitExpired), HISTORY_PREFETCH_PROMOTION_WAIT_MS)
+    }),
+  ])
+  if (timer) clearTimeout(timer)
+  if (result === waitExpired) {
+    // The foreground request is promoted to its own request class. Removing
+    // this entry prevents a late low-priority response from replacing it.
+    historyPrefetchRequests.delete(key)
+    return null
+  }
+  if (result) historyPrefetchCache.delete(key)
   return result
 }
 
@@ -559,6 +634,12 @@ function clearPrefetchedHistory(sessionId: string) {
   for (const key of historyPrefetchCache.keys()) {
     if (key.startsWith(prefix)) historyPrefetchCache.delete(key)
   }
+  for (const key of historyFetchRequests.keys()) {
+    if (key.startsWith(prefix)) historyFetchRequests.delete(key)
+  }
+  for (const key of historyPrefetchRequests.keys()) {
+    if (key.startsWith(prefix)) historyPrefetchRequests.delete(key)
+  }
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -566,8 +647,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   getSession: (sessionId) => get().sessions[sessionId] ?? createDefaultSessionState(),
 
-  connectToSession: (sessionId, projectPath) => {
-    void useCLITaskStore.getState().fetchSessionTasks(sessionId)
+  connectToSession: (sessionId, projectPath, options) => {
+    const shouldConnectSocket = options?.deferSocket !== true
+    if (shouldConnectSocket) {
+      void useCLITaskStore.getState().fetchSessionTasks(sessionId)
+    }
 
     const existing = get().sessions[sessionId]
     const locatorChanged = !!projectPath && !!existing?.projectPath && existing.projectPath !== projectPath
@@ -610,9 +694,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         sessions: {
           ...s.sessions,
           [sessionId]: {
-            ...createDefaultSessionState(),
+            ...(existing ?? createDefaultSessionState()),
             projectPath: projectPath ?? existing?.projectPath,
-            connectionState: 'connecting',
+            connectionState: shouldConnectSocket ? 'connecting' : 'disconnected',
             messages: locatorChanged ? [] : existing?.messages ?? [],
             historyBuffer: locatorChanged ? [] : existing?.historyBuffer ?? [],
             recentBuffer: locatorChanged ? [] : existing?.recentBuffer ?? [],
@@ -622,41 +706,43 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         },
       }))
 
-      wsManager.clearHandlers(sessionId)
-      wsManager.connect(sessionId)
-      // Bridge socket-level state into chatStore so a dropped/closed socket
-      // unsticks the UI from `'connecting'`. Without this the only path to
-      // `'connected'` was a server-sent `{type:'connected'}` message, which
-      // never arrives if the handshake itself failed.
-      wsManager.onStateChange(sessionId, (state) => {
-        set((s) => {
-          const sess = s.sessions[sessionId]
-          if (!sess) return s
-          if (state === 'open') {
-            // Server `connected` message will set the formal 'connected'.
-            // Until then we stay in 'connecting' to suppress message-send.
+      if (shouldConnectSocket) {
+        wsManager.clearHandlers(sessionId)
+        wsManager.connect(sessionId)
+        // Bridge socket-level state into chatStore so a dropped/closed socket
+        // unsticks the UI from `'connecting'`. Without this the only path to
+        // `'connected'` was a server-sent `{type:'connected'}` message, which
+        // never arrives if the handshake itself failed.
+        wsManager.onStateChange(sessionId, (state) => {
+          set((s) => {
+            const sess = s.sessions[sessionId]
+            if (!sess) return s
+            if (state === 'open') {
+              // Server `connected` message will set the formal 'connected'.
+              // Until then we stay in 'connecting' to suppress message-send.
+              return s
+            }
+            if (state === 'closed') {
+              // Show as disconnected so connectToSession() will re-init on
+              // the next focus instead of short-circuiting.
+              return { sessions: updateSessionIn(s.sessions, sessionId, () => ({
+                connectionState: 'disconnected',
+              }))}
+            }
             return s
-          }
-          if (state === 'closed') {
-            // Show as disconnected so connectToSession() will re-init on
-            // the next focus instead of short-circuiting.
-            return { sessions: updateSessionIn(s.sessions, sessionId, () => ({
-              connectionState: 'disconnected',
-            }))}
-          }
-          return s
+          })
         })
-      })
-      wsManager.onMessage(sessionId, (msg) => {
-        if (msg.type === 'connected') {
-          set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ connectionState: 'connected' })) }))
-        }
-        get().handleServerMessage(sessionId, msg)
-      })
+        wsManager.onMessage(sessionId, (msg) => {
+          if (msg.type === 'connected') {
+            set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ connectionState: 'connected' })) }))
+          }
+          get().handleServerMessage(sessionId, msg)
+        })
 
-      const runtimeSelection = useSessionRuntimeStore.getState().selections[sessionId]
-      if (runtimeSelection) {
-        wsManager.send(sessionId, { type: 'set_runtime_config', ...runtimeSelection })
+        const runtimeSelection = useSessionRuntimeStore.getState().selections[sessionId]
+        if (runtimeSelection) {
+          wsManager.send(sessionId, { type: 'set_runtime_config', ...runtimeSelection })
+        }
       }
     }
 
@@ -665,7 +751,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // caller controls when data is ready vs when the UI is revealed.
 
     // 3) Slash commands — independent fetch
-    if (!wsAlreadyActive) {
+    if (!wsAlreadyActive && shouldConnectSocket) {
       sessionsApi.getSlashCommands(sessionId, { projectPath: projectPath ?? existing?.projectPath })
         .then(({ commands }) => {
           if (get().sessions[sessionId]) {
@@ -698,12 +784,82 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     await startHistoryPrefetch(sessionId, projectPath)
   },
 
-  ensureSessionReady: async (sessionId, projectPath) => {
-    get().connectToSession(sessionId, projectPath)
-    await get().loadHistory(sessionId, projectPath)
+  suspendIdleConnectionsExcept: (sessionId) => {
+    const suspendedIds = Object.entries(get().sessions)
+      .filter(([candidateId, session]) =>
+        candidateId !== sessionId &&
+        session.chatState === 'idle' &&
+        session.connectionState !== 'disconnected'
+      )
+      .map(([candidateId]) => candidateId)
+
+    if (suspendedIds.length === 0) return
+    for (const candidateId of suspendedIds) {
+      wsManager.disconnect(candidateId)
+    }
+    set((state) => {
+      let sessions = state.sessions
+      for (const candidateId of suspendedIds) {
+        sessions = updateSessionIn(sessions, candidateId, () => ({
+          connectionState: 'disconnected',
+        }))
+      }
+      return { sessions }
+    })
+  },
+
+  ensureSessionReady: (sessionId, projectPath) => {
+    const readyKey = historyLoadKey(sessionId, projectPath)
+    foregroundSessionKey = readyKey
+    get().suspendIdleConnectionsExcept(sessionId)
+    const pending = sessionReadyRequests.get(readyKey)
+    if (pending) return pending
+
+    const request = (async () => {
+      const existing = get().sessions[sessionId]
+      const hasVisibleCachedHistory = !!existing && (
+        existing.messages.length > 0 ||
+        existing.historyBuffer.length > 0 ||
+        existing.recentBuffer.length > 0
+      )
+      const hasCachedHistory = hasVisibleCachedHistory || existing?.historyLoadState === 'loaded'
+
+      if (hasCachedHistory) {
+        const wasDisconnected = existing?.connectionState === 'disconnected'
+        get().connectToSession(sessionId, projectPath)
+        if (wasDisconnected && hasVisibleCachedHistory) {
+          void get().reloadHistory(sessionId, projectPath)
+        }
+        return
+      }
+
+      // Start the local history request before opening another long-lived socket.
+      // This avoids starving HTTP requests in WebView connection pools after the
+      // user has switched through several sessions.
+      get().connectToSession(sessionId, projectPath, { deferSocket: true })
+      try {
+        await get().loadHistory(sessionId, projectPath)
+      } finally {
+        if (foregroundSessionKey === readyKey) {
+          get().connectToSession(sessionId, projectPath)
+        }
+      }
+    })()
+
+    sessionReadyRequests.set(readyKey, request)
+    return request.finally(() => {
+      if (sessionReadyRequests.get(readyKey) === request) {
+        sessionReadyRequests.delete(readyKey)
+      }
+    })
   },
 
   disconnectSession: (sessionId) => {
+    const readyPrefix = `${sessionId}\u0000`
+    for (const key of sessionReadyRequests.keys()) {
+      if (key.startsWith(readyPrefix)) sessionReadyRequests.delete(key)
+    }
+    if (foregroundSessionKey?.startsWith(readyPrefix)) foregroundSessionKey = null
     const session = get().sessions[sessionId]
     if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
     const pendingDelta = pendingDeltas.get(sessionId)
@@ -1168,7 +1324,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // locator/server race into a visible error state.
     if (!locatorChanged && current.historyLoadState === 'loaded') return
 
-    const historyToken = beginHistoryLoad(sessionId)
+    const historyToken = beginHistoryLoad(sessionId, effectiveProjectPath)
 
     set((s) => ({
       sessions: updateSessionIn(s.sessions, sessionId, () => ({
@@ -1195,12 +1351,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         limit: HISTORY_LOAD_LIMIT,
         projectPath: effectiveProjectPath,
       })
-      if (!isCurrentHistoryLoad(sessionId, historyToken)) return
+      if (!isCurrentHistoryLoad(sessionId, historyToken, effectiveProjectPath)) return
 
       set((state) => {
-        if (!isCurrentHistoryLoad(sessionId, historyToken)) return state
+        if (!isCurrentHistoryLoad(sessionId, historyToken, effectiveProjectPath)) return state
         const session = state.sessions[sessionId]
         if (!session) return state
+        if ((session.projectPath ?? effectiveProjectPath) !== effectiveProjectPath) return state
         if (state.sessions[sessionId] !== undefined && session.historyLoadState !== 'loading') {
           return state
         }
@@ -1236,8 +1393,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           agentTaskNotifications: { ...s.agentTaskNotifications, ...restoredNotifications },
         })) }
       })
-      if (isCurrentHistoryLoad(sessionId, historyToken) && get().sessions[sessionId]?.historyLoadState === 'loaded') {
-        finishHistoryLoad(sessionId, historyToken)
+      if (isCurrentHistoryLoad(sessionId, historyToken, effectiveProjectPath) && get().sessions[sessionId]?.historyLoadState === 'loaded') {
+        finishHistoryLoad(sessionId, historyToken, effectiveProjectPath)
         if (lastTodos && lastTodos.length > 0) {
           const taskStore = useCLITaskStore.getState()
           if (taskStore.tasks.length === 0) taskStore.setTasksFromTodos(lastTodos)
@@ -1249,7 +1406,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
       }
     } catch (err) {
-      if (!isCurrentHistoryLoad(sessionId, historyToken)) return
+      if (!isCurrentHistoryLoad(sessionId, historyToken, effectiveProjectPath)) return
       const currentSession = get().sessions[sessionId]
       if (isNotFoundError(err) && isEmptyHistoryState(currentSession)) {
         set((s) => {
@@ -1269,7 +1426,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         if (get().sessions[sessionId]?.historyLoadState === 'loaded') {
           useCLITaskStore.getState().setTasksFromTodos([])
         }
-        finishHistoryLoad(sessionId, historyToken)
+        finishHistoryLoad(sessionId, historyToken, effectiveProjectPath)
         return
       }
 
@@ -1284,14 +1441,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           })),
         }
       })
-      finishHistoryLoad(sessionId, historyToken)
+      finishHistoryLoad(sessionId, historyToken, effectiveProjectPath)
     }
   },
 
   reloadHistory: async (sessionId, projectPath) => {
     clearPrefetchedHistory(sessionId)
     const effectiveProjectPath = projectPath ?? get().sessions[sessionId]?.projectPath
-    const historyToken = beginHistoryLoad(sessionId)
+    const historyToken = beginHistoryLoad(sessionId, effectiveProjectPath)
     set((s) => ({
       sessions: updateSessionIn(s.sessions, sessionId, () => ({
         projectPath: effectiveProjectPath,
@@ -1306,12 +1463,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         hasMessagesAfterTaskCompletion,
         hasMore,
       } = await fetchAndMapSessionHistory(sessionId, { limit: HISTORY_LOAD_LIMIT, projectPath: effectiveProjectPath })
-      if (!isCurrentHistoryLoad(sessionId, historyToken)) return
+      if (!isCurrentHistoryLoad(sessionId, historyToken, effectiveProjectPath)) return
 
       set((state) => {
-        if (!isCurrentHistoryLoad(sessionId, historyToken)) return state
+        if (!isCurrentHistoryLoad(sessionId, historyToken, effectiveProjectPath)) return state
         const session = state.sessions[sessionId]
         if (!session) return state
+        if ((session.projectPath ?? effectiveProjectPath) !== effectiveProjectPath) return state
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
 
         // Apply sliding window: trim head into historyBuffer if exceeds WINDOW_SIZE
@@ -1349,8 +1507,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
       })
 
-      if (isCurrentHistoryLoad(sessionId, historyToken) && get().sessions[sessionId]?.historyLoadState === 'loaded') {
-        finishHistoryLoad(sessionId, historyToken)
+      if (isCurrentHistoryLoad(sessionId, historyToken, effectiveProjectPath) && get().sessions[sessionId]?.historyLoadState === 'loaded') {
+        finishHistoryLoad(sessionId, historyToken, effectiveProjectPath)
         if (lastTodos && lastTodos.length > 0) {
           useCLITaskStore.getState().setTasksFromTodos(lastTodos)
         } else {
@@ -1361,7 +1519,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
       }
     } catch (err) {
-      if (!isCurrentHistoryLoad(sessionId, historyToken)) return
+      if (!isCurrentHistoryLoad(sessionId, historyToken, effectiveProjectPath)) return
       const currentSession = get().sessions[sessionId]
       if (isNotFoundError(err) && isEmptyHistoryState(currentSession)) {
         set((s) => ({
@@ -1378,7 +1536,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         if (get().sessions[sessionId]?.historyLoadState === 'loaded') {
           useCLITaskStore.getState().setTasksFromTodos([])
         }
-        finishHistoryLoad(sessionId, historyToken)
+        finishHistoryLoad(sessionId, historyToken, effectiveProjectPath)
         return
       }
 
@@ -1388,7 +1546,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           historyLoadState: 'error',
         })),
       }))
-      finishHistoryLoad(sessionId, historyToken)
+      finishHistoryLoad(sessionId, historyToken, effectiveProjectPath)
     }
   },
 

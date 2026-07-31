@@ -270,14 +270,21 @@ function sessionGitPath(
 export const sessionsApi = {
   list: listSessions,
 
-  getMessages(sessionId: string, params?: { limit?: number; before?: string; after?: string } & SessionLocatorParams) {
+  getMessages(
+    sessionId: string,
+    params?: { limit?: number; before?: string; after?: string } & SessionLocatorParams,
+    requestOptions?: { timeout?: number },
+  ) {
     const query = new URLSearchParams()
     if (params?.limit) query.set('limit', String(params.limit))
     if (params?.before) query.set('before', params.before)
     if (params?.after) query.set('after', params.after)
     if (params?.projectPath) query.set('projectPath', params.projectPath)
     const qs = query.toString()
-    return api.get<MessagesResponse>(`/api/sessions/${sessionId}/messages${qs ? `?${qs}` : ''}`)
+    return api.get<MessagesResponse>(
+      `/api/sessions/${sessionId}/messages${qs ? `?${qs}` : ''}`,
+      { timeout: requestOptions?.timeout ?? 12_000 },
+    )
   },
 
   create(input?: CreateSessionInput) {

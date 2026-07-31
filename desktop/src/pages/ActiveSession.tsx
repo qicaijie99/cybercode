@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useTabStore } from '../stores/tabStore'
+import { findActiveTab, useTabStore } from '../stores/tabStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
 import { useCLITaskStore } from '../stores/cliTaskStore'
@@ -30,12 +30,14 @@ type ActiveSessionProps = {
 
 export function ActiveSession({ sessionId: sessionIdProp, projectPath, isActive = true }: ActiveSessionProps = {}) {
   const activeTabId = useTabStore((s) => s.activeTabId)
+  const activeTabKey = useTabStore((s) => s.activeTabKey)
   const tabs = useTabStore((s) => s.tabs)
-  const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
-  const sessionId = sessionIdProp ?? activeTabId
+  const activeTab = findActiveTab(tabs, activeTabKey, activeTabId)
+  const sessionId = sessionIdProp ?? activeTab?.sessionId ?? activeTabId
   const resolvedProjectPath = projectPath ?? activeTab?.projectPath
   const sessions = useSessionStore((s) => s.sessions)
   const ensureSessionReady = useChatStore((s) => s.ensureSessionReady)
+  const loadHistory = useChatStore((s) => s.loadHistory)
   const sessionState = useChatStore((s) => sessionId ? s.sessions[sessionId] : undefined)
   const stopGeneration = useChatStore((s) => s.stopGeneration)
   const pendingComputerUsePermission = sessionState?.pendingComputerUsePermission ?? null
@@ -45,6 +47,7 @@ export function ActiveSession({ sessionId: sessionIdProp, projectPath, isActive 
   const chatState = sessionState?.chatState ?? 'idle'
   const bottomOverlayRef = useRef<HTMLDivElement>(null)
   const composerShellRef = useRef<HTMLDivElement>(null)
+  const wasActiveRef = useRef(isActive)
   const [bottomOverlayHeight, setBottomOverlayHeight] = useState(0)
   const [composerHeight, setComposerHeight] = useState(0)
 
@@ -67,6 +70,22 @@ export function ActiveSession({ sessionId: sessionIdProp, projectPath, isActive 
       void ensureSessionReady(sessionId, resolvedProjectPath)
     }
   }, [sessionId, resolvedProjectPath, isActive, isMemberSession, needsSessionReady, ensureSessionReady])
+
+  useEffect(() => {
+    const wasActive = wasActiveRef.current
+    wasActiveRef.current = isActive
+    if (!sessionId || isMemberSession || !isActive || wasActive) return
+    if (sessionState?.historyLoadState !== 'error' || sessionState.messages.length > 0) return
+    void loadHistory(sessionId, resolvedProjectPath)
+  }, [
+    sessionId,
+    resolvedProjectPath,
+    isActive,
+    isMemberSession,
+    sessionState?.historyLoadState,
+    sessionState?.messages.length,
+    loadHistory,
+  ])
 
   useEffect(() => {
     if (!sessionId || isMemberSession || !isActive) return

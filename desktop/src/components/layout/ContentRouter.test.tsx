@@ -3,10 +3,11 @@ import '@testing-library/jest-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../pages/ActiveSession', () => ({
-  ActiveSession: ({ sessionId, isActive }: { sessionId: string; isActive: boolean }) => (
+  ActiveSession: ({ sessionId, projectPath, isActive }: { sessionId: string; projectPath?: string; isActive: boolean }) => (
     <div
       data-testid="active-session"
       data-session-id={sessionId}
+      data-project-path={projectPath ?? ''}
       data-active={isActive ? 'true' : 'false'}
     />
   ),
@@ -44,7 +45,7 @@ import { useTabStore } from '../../stores/tabStore'
 
 describe('ContentRouter terminal tabs', () => {
   afterEach(() => {
-    useTabStore.setState({ tabs: [], activeTabId: null })
+    useTabStore.setState({ tabs: [], activeTabId: null, activeTabKey: null, recentSessionIds: [], recentSessionKeys: [] })
   })
 
   it('renders the empty session page when no tab is active', () => {
@@ -81,6 +82,26 @@ describe('ContentRouter terminal tabs', () => {
 
     expect(screen.getByTestId('terminal-host-__terminal__1')).toHaveAttribute('data-active', 'false')
     expect(screen.getByTestId('active-session')).toBeInTheDocument()
+  })
+
+  it('routes duplicate session ids by active project locator', () => {
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-dup', projectPath: '-project-a', title: 'A', type: 'session', status: 'idle' },
+        { sessionId: 'session-dup', projectPath: '-project-b', title: 'B', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'session-dup',
+      activeTabKey: 'session-dup\u0000-project-b',
+      recentSessionIds: ['session-dup'],
+      recentSessionKeys: ['session-dup\u0000-project-b'],
+    })
+
+    render(<ContentRouter />)
+
+    const panel = screen.getByTestId('active-session')
+    expect(panel).toHaveAttribute('data-session-id', 'session-dup')
+    expect(panel).toHaveAttribute('data-project-path', '-project-b')
+    expect(panel).toHaveAttribute('data-active', 'true')
   })
 
   it('keeps only the current and previous chat panels warm across switches', () => {
