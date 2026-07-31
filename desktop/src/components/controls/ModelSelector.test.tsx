@@ -102,6 +102,48 @@ describe('ModelSelector', () => {
     expect(qianfanHeader?.querySelector('[data-provider-logo="zhipuglm"]')).not.toBeInTheDocument()
   })
 
+  it('uses the selected model brand without changing the provider group brand', () => {
+    useProviderStore.setState({
+      providers: [
+        makeProvider({
+          id: 'claude-compatible',
+          presetId: 'anthropic-api',
+          name: 'Claude-compatible gateway',
+          models: {
+            main: 'deepseek-v4-pro',
+            haiku: '',
+            sonnet: '',
+            opus: '',
+          },
+        }),
+      ],
+    })
+
+    render(
+      <ModelSelector
+        runtimeValue={{ providerId: 'claude-compatible', modelId: 'deepseek-v4-pro' }}
+        onRuntimeChange={vi.fn()}
+        compact
+        variant="pill"
+      />,
+    )
+
+    const trigger = screen.getByRole('button', { name: /deepseek-v4-pro/i })
+    expect(trigger.querySelector('[data-provider-logo="deepseek"]')).toBeInTheDocument()
+    expect(trigger.querySelector('[data-provider-logo="anthropic-api"]')).not.toBeInTheDocument()
+
+    fireEvent.click(trigger)
+
+    const providerGroup = document.querySelector('[data-provider-group="claude-compatible"]')
+    expect(providerGroup).toBeInTheDocument()
+    expect(providerGroup?.querySelector(':scope > button [data-provider-logo="anthropic-api"]'))
+      .toBeInTheDocument()
+
+    const modelRow = Array.from(providerGroup?.querySelectorAll('button') ?? [])
+      .find((button) => button.textContent?.includes('deepseek-v4-pro') && button.hasAttribute('aria-pressed'))
+    expect(modelRow?.querySelector('[data-provider-logo="deepseek"]')).toBeInTheDocument()
+  })
+
   it('supports externally controlled provider and model selection', () => {
     useProviderStore.setState({
       providers: [

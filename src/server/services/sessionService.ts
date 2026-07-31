@@ -11,6 +11,7 @@ import * as path from 'node:path'
 import { ApiError } from '../middleware/errorHandler.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { sanitizePath as sanitizePortablePath } from '../../utils/sessionStoragePortable.js'
+import { resolvePortableProjectPath } from '../../utils/portablePaths.js'
 import {
   deleteSessionFromSearchIndex,
   indexSessionSearchFile,
@@ -540,18 +541,22 @@ export class SessionService {
   ): string | null {
     for (const entry of entries) {
       if (entry.type === 'session-meta' && typeof (entry as Record<string, unknown>).workDir === 'string') {
-        return (entry as Record<string, unknown>).workDir as string
+        return resolvePortableProjectPath(
+          (entry as Record<string, unknown>).workDir as string,
+        )
       }
     }
 
     for (let i = entries.length - 1; i >= 0; i--) {
       const cwd = entries[i]?.cwd
       if (typeof cwd === 'string' && cwd.trim()) {
-        return cwd
+        return resolvePortableProjectPath(cwd)
       }
     }
 
-    return fallbackProjectDir ? this.desanitizePath(fallbackProjectDir) : null
+    return fallbackProjectDir
+      ? resolvePortableProjectPath(this.desanitizePath(fallbackProjectDir))
+      : null
   }
 
   private resolveIsTemporaryFromEntries(entries: RawEntry[]): boolean {

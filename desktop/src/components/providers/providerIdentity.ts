@@ -29,6 +29,7 @@ export type ProviderIdentityInput = {
   name?: string | null
   baseUrl?: string | null
   modelId?: string | null
+  identityPriority?: 'provider' | 'model'
 }
 
 const BRAND_ICON_ROOT = '/provider-icons/brands'
@@ -222,6 +223,11 @@ const FALLBACK_ACCENTS = [
 ] as const
 
 export function resolveProviderIdentity(input: ProviderIdentityInput): ProviderLogoIdentity {
+  if (input.identityPriority === 'model') {
+    const modelIdentity = findMatchingIdentity(input.modelId)
+    if (modelIdentity) return stripMatchers(modelIdentity)
+  }
+
   const exactProviderId = compactIdentityToken(input.providerId)
   if (exactProviderId) {
     const canonicalProviderId = compactIdentityToken(

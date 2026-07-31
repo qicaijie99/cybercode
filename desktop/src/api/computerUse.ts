@@ -39,7 +39,7 @@ export type ComputerUseRuntimeStatus = {
   ready: boolean
   version: string | null
   platformKey: string | null
-  source: 'managed' | 'legacy' | null
+  source: 'bundled' | 'managed' | 'legacy' | null
   downloadedBytes: number
   totalBytes: number | null
   progressPercent: number

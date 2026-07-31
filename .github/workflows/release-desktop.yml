@@ -10,6 +10,11 @@ on:
         required: false
         default: true
         type: boolean
+      build_only:
+        description: 'Build and validate all platforms without publishing a release'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -41,7 +46,7 @@ jobs:
           # Linux x64
           - platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
-            tauri_args: '--bundles deb'
+            tauri_args: '--verbose --bundles deb,appimage'
             label: Linux-x64
             asset_suffix: linux_x64
 
@@ -54,6 +59,10 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.label }})
+    env:
+      # Tauri runs build:sidecars again through beforeBuildCommand. Keep the
+      # runtime embedded for both the explicit preparation and that nested run.
+      CYBERCODE_EMBED_COMPUTER_USE_RUNTIME: '1'
 
     steps:
       - name: Checkout
@@ -411,6 +420,7 @@ jobs:
               deb_name="CyberCode_${VERSION}_${ASSET_SUFFIX}_deb.deb"
               copy_first '*/bundle/deb/*.deb' "$deb_name"
               copy_first '*/bundle/deb/*.deb.sig' "${deb_name}.sig"
+              copy_first '*/bundle/appimage/*.AppImage' "CyberCode_${VERSION}_${ASSET_SUFFIX}_portable.AppImage"
               (
                 cd "$OUT"
                 zip -9 "CyberCode_${VERSION}_${ASSET_SUFFIX}.zip" "$deb_name"
@@ -476,6 +486,11 @@ jobs:
                 exit 1
               fi
               7z x -bd -y "-o$ROOT" "$NSIS" >/dev/null
+              (
+                cd "$ROOT"
+                7z a -bd -tzip "$OUT/CyberCode_${VERSION}_${ASSET_SUFFIX}_portable.zip" ./* >/dev/null
+              )
+              7z t "$OUT/CyberCode_${VERSION}_${ASSET_SUFFIX}_portable.zip" >/dev/null
               ;;
             *)
               echo "::error::Unknown release label: $LABEL"
@@ -486,7 +501,9 @@ jobs:
           RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/codegraph' -print -quit)"
           AGENT_BROWSER_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/agent-browser' -print -quit)"
           COMPUTER_USE_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/computer-use' -print -quit)"
+          COMPUTER_USE_RUNTIME_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/computer-use-runtime' -print -quit)"
           RTK_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/rtk' -print -quit)"
+          SIDECAR_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/sidecar' -print -quit)"
           SIDECAR="$(find "$ROOT" -type f \( -name 'cybercode-sidecar' -o -name 'cybercode-sidecar.exe' \) -print -quit)"
           AGENT_BROWSER="$(find "$ROOT" -type f \( -name 'agent-browser' -o -name 'agent-browser.exe' \) -print -quit)"
           RTK="$(find "$ROOT" -type f \( -name 'rtk' -o -name 'rtk.exe' \) -print -quit)"
@@ -494,7 +511,9 @@ jobs:
             [ -z "$RESOURCE_DIR" ] || \
             [ -z "$AGENT_BROWSER_RESOURCE_DIR" ] || \
             [ -z "$COMPUTER_USE_RESOURCE_DIR" ] || \
+            [ -z "$COMPUTER_USE_RUNTIME_RESOURCE_DIR" ] || \
             [ -z "$RTK_RESOURCE_DIR" ] || \
+            [ -z "$SIDECAR_RESOURCE_DIR" ] || \
             [ -z "$SIDECAR" ] || [ ! -s "$SIDECAR" ] || \
             [ -z "$AGENT_BROWSER" ] || [ ! -s "$AGENT_BROWSER" ] || \
             [ -z "$RTK" ] || [ ! -s "$RTK" ]; then
@@ -536,6 +555,16 @@ jobs:
             find "$COMPUTER_USE_RESOURCE_DIR" -maxdepth 6 -type f | sort
             exit 1
           fi
+          if [ ! -s "$COMPUTER_USE_RUNTIME_RESOURCE_DIR/manifest.json" ]; then
+            echo "::error::Packaged Computer Use runtime manifest is missing or empty"
+            find "$COMPUTER_USE_RUNTIME_RESOURCE_DIR" -maxdepth 8 -type f | sort
+            exit 1
+          fi
+          if [ ! -s "$SIDECAR_RESOURCE_DIR/manifest.json" ]; then
+            echo "::error::Packaged sidecar manifest is missing or empty"
+            find "$SIDECAR_RESOURCE_DIR" -maxdepth 3 -type f | sort
+            exit 1
+          fi
 
           case "$LABEL" in
             macOS-ARM64|macOS-x64)
@@ -560,7 +589,10 @@ jobs:
           RESOURCE_DIR="$RESOURCE_DIR" \
           AGENT_BROWSER_RESOURCE_DIR="$AGENT_BROWSER_RESOURCE_DIR" \
           COMPUTER_USE_RESOURCE_DIR="$COMPUTER_USE_RESOURCE_DIR" \
+          COMPUTER_USE_RUNTIME_RESOURCE_DIR="$COMPUTER_USE_RUNTIME_RESOURCE_DIR" \
           RTK_RESOURCE_DIR="$RTK_RESOURCE_DIR" \
+          SIDECAR_RESOURCE_DIR="$SIDECAR_RESOURCE_DIR" \
+          SIDECAR="$SIDECAR" \
           TARGET_TRIPLE="$TARGET_TRIPLE" \
           LABEL="$LABEL" \
           node <<'NODE'
@@ -625,7 +657,215 @@ jobs:
           ) {
             throw new Error('Packaged Computer Use manifest is invalid')
           }
+
+          const computerUseRuntimeManifest = JSON.parse(
+            fs.readFileSync(
+              path.join(process.env.COMPUTER_USE_RUNTIME_RESOURCE_DIR, 'manifest.json'),
+              'utf8',
+            ),
+          )
+          const expectedRuntimePlatform = {
+            'aarch64-apple-darwin': 'darwin-arm64',
+            'x86_64-apple-darwin': 'darwin-x64',
+            'x86_64-pc-windows-msvc': 'win32-x64',
+            'x86_64-unknown-linux-gnu': 'linux-x64',
+          }[process.env.TARGET_TRIPLE]
+          if (
+            computerUseRuntimeManifest.name !== 'computer-use-runtime' ||
+            computerUseRuntimeManifest.format !== 'opaque-xor-v1' ||
+            computerUseRuntimeManifest.encoding !== 'xor-a5' ||
+            computerUseRuntimeManifest.targetTriple !== process.env.TARGET_TRIPLE ||
+            computerUseRuntimeManifest.platformKey !== expectedRuntimePlatform ||
+            computerUseRuntimeManifest.available !== true ||
+            !/^[a-zA-Z0-9._-]+$/.test(computerUseRuntimeManifest.version ?? '') ||
+            !/^[0-9a-f]{64}$/.test(computerUseRuntimeManifest.payloadSha256 ?? '') ||
+            !Number.isSafeInteger(computerUseRuntimeManifest.payloadSize) ||
+            computerUseRuntimeManifest.payloadSize <= 0 ||
+            typeof computerUseRuntimeManifest.payload !== 'string' ||
+            path.basename(computerUseRuntimeManifest.payload) !== computerUseRuntimeManifest.payload ||
+            !/^[0-9a-f]{64}$/.test(computerUseRuntimeManifest.archiveSha256 ?? '') ||
+            !Number.isSafeInteger(computerUseRuntimeManifest.archiveSize) ||
+            computerUseRuntimeManifest.archiveSize <= 0 ||
+            typeof computerUseRuntimeManifest.archiveFilename !== 'string' ||
+            path.basename(computerUseRuntimeManifest.archiveFilename) !== computerUseRuntimeManifest.archiveFilename ||
+            typeof computerUseRuntimeManifest.pythonPath !== 'string' ||
+            path.isAbsolute(computerUseRuntimeManifest.pythonPath) ||
+            computerUseRuntimeManifest.pythonPath.split(/[\\/]+/).includes('..')
+          ) {
+            throw new Error('Packaged Computer Use runtime manifest is invalid')
+          }
+          const computerUseRuntimePayload = path.join(
+            process.env.COMPUTER_USE_RUNTIME_RESOURCE_DIR,
+            computerUseRuntimeManifest.payload,
+          )
+          if (
+            !fs.existsSync(computerUseRuntimePayload) ||
+            !fs.statSync(computerUseRuntimePayload).isFile() ||
+            fs.statSync(computerUseRuntimePayload).size !== computerUseRuntimeManifest.payloadSize
+          ) {
+            throw new Error('Packaged Computer Use runtime payload is missing or incomplete')
+          }
+          const computerUseRuntimePayloadBuffer = fs.readFileSync(computerUseRuntimePayload)
+          const computerUseRuntimePayloadSha256 = crypto
+            .createHash('sha256')
+            .update(computerUseRuntimePayloadBuffer)
+            .digest('hex')
+          if (computerUseRuntimePayloadSha256 !== computerUseRuntimeManifest.payloadSha256) {
+            throw new Error('Packaged Computer Use runtime payload checksum is invalid')
+          }
+          const archiveHash = crypto.createHash('sha256')
+          const chunkSize = 1024 * 1024
+          for (
+            let offset = 0;
+            offset < computerUseRuntimePayloadBuffer.length;
+            offset += chunkSize
+          ) {
+            const decoded = Buffer.from(
+              computerUseRuntimePayloadBuffer.subarray(offset, offset + chunkSize),
+            )
+            for (let index = 0; index < decoded.length; index += 1) {
+              decoded[index] ^= 0xa5
+            }
+            archiveHash.update(decoded)
+          }
+          if (
+            computerUseRuntimePayloadBuffer.length !== computerUseRuntimeManifest.archiveSize ||
+            archiveHash.digest('hex') !== computerUseRuntimeManifest.archiveSha256
+          ) {
+            throw new Error('Packaged Computer Use runtime cannot restore the verified archive')
+          }
+          if (
+            fs.existsSync(
+              path.join(process.env.COMPUTER_USE_RUNTIME_RESOURCE_DIR, 'managed'),
+            )
+          ) {
+            throw new Error(
+              'Packaged Computer Use runtime must remain archived until first use',
+            )
+          }
+
+          const sidecarManifest = JSON.parse(
+            fs.readFileSync(
+              path.join(process.env.SIDECAR_RESOURCE_DIR, 'manifest.json'),
+              'utf8',
+            ),
+          )
+          if (
+            sidecarManifest.schemaVersion !== 1 ||
+            sidecarManifest.name !== 'cybercode-sidecar' ||
+            sidecarManifest.targetTriple !== process.env.TARGET_TRIPLE
+          ) {
+            throw new Error('Packaged sidecar manifest is invalid')
+          }
+
+          if (process.env.LABEL === 'Linux-x64') {
+            if (
+              sidecarManifest.format !== 'split-elf-header-v1' ||
+              typeof sidecarManifest.payload !== 'string' ||
+              path.basename(sidecarManifest.payload) !== sidecarManifest.payload ||
+              !Number.isSafeInteger(sidecarManifest.payloadSize) ||
+              sidecarManifest.payloadSize <= 0 ||
+              !/^[0-9a-f]{64}$/.test(sidecarManifest.payloadSha256 ?? '') ||
+              !Number.isSafeInteger(sidecarManifest.executableSize) ||
+              sidecarManifest.executableSize !== sidecarManifest.payloadSize + 4 ||
+              !/^[0-9a-f]{64}$/.test(sidecarManifest.executableSha256 ?? '')
+            ) {
+              throw new Error('Packaged Linux sidecar manifest is invalid')
+            }
+
+            const payload = fs.readFileSync(
+              path.join(process.env.SIDECAR_RESOURCE_DIR, sidecarManifest.payload),
+            )
+            if (
+              payload.length !== sidecarManifest.payloadSize ||
+              crypto.createHash('sha256').update(payload).digest('hex') !==
+                sidecarManifest.payloadSha256
+            ) {
+              throw new Error('Packaged Linux sidecar payload checksum is invalid')
+            }
+
+            const restoredHash = crypto
+              .createHash('sha256')
+              .update(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+              .update(payload)
+              .digest('hex')
+            if (restoredHash !== sidecarManifest.executableSha256) {
+              throw new Error('Packaged Linux sidecar cannot restore the verified ELF')
+            }
+
+            const launcher = fs.readFileSync(process.env.SIDECAR)
+            if (
+              launcher.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
+              !launcher.toString('utf8').startsWith('#!/bin/sh') ||
+              !launcher.toString('utf8').includes(sidecarManifest.executableSha256)
+            ) {
+              throw new Error('Packaged Linux sidecar launcher is invalid')
+            }
+          } else if (sidecarManifest.format !== 'direct-executable-v1') {
+            throw new Error('Packaged native sidecar manifest is invalid')
+          }
           NODE
+
+          smoke_linux_sidecar() {
+            local package_root="$1"
+            local smoke_name="$2"
+            local launcher
+            local resources
+            local smoke_home
+            local output
+            local status
+            local expected_sha256
+            local restored
+
+            launcher="$(find "$package_root" -type f -name 'cybercode-sidecar' -print -quit)"
+            resources="$(find "$package_root" -type d -path '*/resources/sidecar' -print -quit)"
+            smoke_home="$INSPECT/sidecar-home-$smoke_name"
+            if [ -z "$launcher" ] || [ -z "$resources" ]; then
+              echo "::error::$smoke_name is missing the Linux sidecar launcher or payload"
+              exit 1
+            fi
+
+            mkdir -p "$smoke_home"
+            set +e
+            output="$(
+              HOME="$smoke_home" \
+              XDG_CACHE_HOME="$smoke_home/cache" \
+              "$launcher" 2>&1
+            )"
+            status=$?
+            set -e
+            if [ "$status" -ne 2 ] || ! grep -Fq 'CyberCode sidecar: missing mode argument' <<<"$output"; then
+              echo "::error::$smoke_name could not restore and launch the Linux sidecar (exit $status)"
+              printf '%s\n' "$output"
+              exit 1
+            fi
+
+            expected_sha256="$(jq -r '.executableSha256' "$resources/manifest.json")"
+            restored="$smoke_home/cache/cybercode/sidecar/cybercode-sidecar"
+            if [ ! -x "$restored" ] || [ "$(sha256sum "$restored" | awk '{print $1}')" != "$expected_sha256" ]; then
+              echo "::error::$smoke_name restored an invalid Linux sidecar"
+              exit 1
+            fi
+          }
+
+          if [ "$LABEL" = "Linux-x64" ]; then
+            smoke_linux_sidecar "$ROOT" "deb"
+
+            APPIMAGE="$OUT/CyberCode_${VERSION}_${ASSET_SUFFIX}_portable.AppImage"
+            APPIMAGE_EXTRACT="$INSPECT/appimage"
+            mkdir -p "$APPIMAGE_EXTRACT"
+            chmod +x "$APPIMAGE"
+            (
+              cd "$APPIMAGE_EXTRACT"
+              "$APPIMAGE" --appimage-extract >/dev/null
+            )
+            APPIMAGE_ROOT="$APPIMAGE_EXTRACT/squashfs-root"
+            if [ ! -d "$APPIMAGE_ROOT" ]; then
+              echo "::error::Linux AppImage could not be extracted for validation"
+              exit 1
+            fi
+            smoke_linux_sidecar "$APPIMAGE_ROOT" "appimage"
+          fi
 
           echo "Validated packaged runtime resources for $LABEL ($GRAMMAR_COUNT Code Graph grammars)"
 
@@ -638,6 +878,7 @@ jobs:
 
   publish:
     needs: build
+    if: github.event_name != 'workflow_dispatch' || inputs.build_only != true
     runs-on: ubuntu-22.04
     name: Publish Release
 
@@ -713,9 +954,11 @@ jobs:
             "CyberCode_${VERSION}_macos_x64.zip"
             "CyberCode_${VERSION}_linux_x64_deb.deb"
             "CyberCode_${VERSION}_linux_x64_deb.deb.sig"
+            "CyberCode_${VERSION}_linux_x64_portable.AppImage"
             "CyberCode_${VERSION}_linux_x64.zip"
             "CyberCode_${VERSION}_windows_x64_nsis.exe"
             "CyberCode_${VERSION}_windows_x64_nsis.exe.sig"
+            "CyberCode_${VERSION}_windows_x64_portable.zip"
             "CyberCode_${VERSION}_windows_x64.zip"
           )
 
@@ -739,6 +982,7 @@ jobs:
 
           node <<'NODE'
           const fs = require('node:fs')
+          const crypto = require('node:crypto')
           const version = process.env.VERSION
           const tagName = process.env.TAG_NAME
           const repo = process.env.GITHUB_REPOSITORY
@@ -762,6 +1006,24 @@ jobs:
           const macX64 = `CyberCode_${version}_macos_x64_app.app.tar.gz`
           const linux = `CyberCode_${version}_linux_x64_deb.deb`
           const windows = `CyberCode_${version}_windows_x64_nsis.exe`
+          const portableAssets = {
+            'macos-arm64': {
+              filename: macArm,
+              archiveType: 'app-tar-gz',
+            },
+            'macos-x64': {
+              filename: macX64,
+              archiveType: 'app-tar-gz',
+            },
+            'linux-x64': {
+              filename: `CyberCode_${version}_linux_x64_portable.AppImage`,
+              archiveType: 'appimage',
+            },
+            'windows-x64': {
+              filename: `CyberCode_${version}_windows_x64_portable.zip`,
+              archiveType: 'zip',
+            },
+          }
 
           const createManifest = (assetBaseUrl) => ({
             version,
@@ -786,6 +1048,35 @@ jobs:
               `${JSON.stringify(createManifest(mirror.baseUrl), null, 2)}\n`,
             )
           }
+
+          const portableManifest = {
+            schemaVersion: 1,
+            version,
+            generatedAt: new Date().toISOString(),
+            platforms: Object.fromEntries(
+              Object.entries(portableAssets).map(([platform, definition]) => {
+                const filePath = `release-assets/${definition.filename}`
+                const bytes = fs.readFileSync(filePath)
+                return [
+                  platform,
+                  {
+                    ...definition,
+                    size: bytes.byteLength,
+                    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+                    urls: [
+                      `${baseUrl}/${definition.filename}`,
+                      `https://gh-proxy.com/${baseUrl}/${definition.filename}`,
+                      `https://ghfast.top/${baseUrl}/${definition.filename}`,
+                    ],
+                  },
+                ]
+              }),
+            ),
+          }
+          fs.writeFileSync(
+            'release-assets/portable.json',
+            `${JSON.stringify(portableManifest, null, 2)}\n`,
+          )
           NODE
 
       - name: Publish GitHub Release

@@ -112,8 +112,15 @@ jobs:
           bundled distribution and site-packages directories.
           NOTICE
 
-          tar -czf "$OUT_DIR/$ASSET_NAME" -C "$BUNDLE_DIR" .
-          tar -tzf "$OUT_DIR/$ASSET_NAME" >/dev/null
+          TAR_BUNDLE_DIR="$BUNDLE_DIR"
+          TAR_ASSET_PATH="$OUT_DIR/$ASSET_NAME"
+          if [[ "$RUNTIME_KEY" == win32-* ]]; then
+            TAR_BUNDLE_DIR="$(cygpath -u "$TAR_BUNDLE_DIR")"
+            TAR_ASSET_PATH="$(cygpath -u "$TAR_ASSET_PATH")"
+          fi
+
+          tar -czf "$TAR_ASSET_PATH" -C "$TAR_BUNDLE_DIR" .
+          tar -tzf "$TAR_ASSET_PATH" >/dev/null
 
           export ASSET_PATH="$OUT_DIR/$ASSET_NAME"
           export ASSET_NAME

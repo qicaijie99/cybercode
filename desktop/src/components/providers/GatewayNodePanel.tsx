@@ -163,7 +163,7 @@ function TargetAccessButton({
       disabled={disabled}
       onClick={onClick}
       aria-label={`${title}: ${selected.length} / ${total}`}
-      className="group flex min-h-[92px] min-w-0 items-center gap-[12px] px-[16px] py-[14px] text-left transition-colors hover:bg-[var(--color-surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+      className="group flex min-h-[92px] w-full min-w-0 items-center gap-[12px] overflow-hidden px-[16px] py-[14px] text-left transition-colors hover:bg-[var(--color-surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span className={`flex size-[38px] shrink-0 items-center justify-center rounded-[8px] ${
         kind === 'route'
@@ -226,8 +226,8 @@ function TargetPolicySection({
       title={t('settings.gateway.targetPolicy')}
       description={t('settings.gateway.targetPolicyForKey', { name: keyName })}
     >
-      <div className="grid sm:grid-cols-[minmax(0,1fr)_220px]">
-        <div className="min-w-0 p-[16px] sm:border-r sm:border-[var(--color-border-separator)]">
+      <div className="gateway-target-policy-primary grid">
+        <div className="gateway-target-policy-default min-w-0 p-[16px]">
           <div className="mb-[7px] text-[11px] font-semibold text-[var(--color-text-secondary)]">
             {t('settings.gateway.autoModel')}
           </div>
@@ -266,7 +266,7 @@ function TargetPolicySection({
             />
           </button>
         </div>
-        <div className="border-t border-[var(--color-border-separator)] p-[16px] sm:border-t-0">
+        <div className="gateway-target-policy-limit min-w-0 border-t border-[var(--color-border-separator)] p-[16px]">
           <Input
             label={t('settings.gateway.monthlyLimit')}
             type="number"
@@ -284,7 +284,7 @@ function TargetPolicySection({
         </div>
       </div>
 
-      <div className="grid sm:grid-cols-2">
+      <div className="gateway-target-policy-access grid">
         <TargetAccessButton
           kind="route"
           title={t('settings.gateway.routes')}
@@ -295,7 +295,7 @@ function TargetPolicySection({
           disabled={disabled || routeCount === 0}
           onClick={() => onOpenPicker('scope', 'route')}
         />
-        <div className="border-t border-[var(--color-border-separator)] sm:border-l sm:border-t-0">
+        <div className="gateway-target-policy-access-secondary min-w-0 border-t border-[var(--color-border-separator)]">
           <TargetAccessButton
             kind="model"
             title={t('settings.gateway.directModels')}
@@ -447,8 +447,8 @@ function GatewayConnectionBuilder({
         title={t('settings.gateway.connectionBuilder')}
         description={t('settings.gateway.connectionBuilderHint')}
       >
-        <div className="grid gap-[14px] p-[16px] sm:grid-cols-[220px_minmax(0,1fr)]">
-          <div>
+        <div className="gateway-connection-builder-controls grid gap-[14px] p-[16px]">
+          <div className="min-w-0">
             <div className="mb-[7px] text-[11px] font-semibold text-[var(--color-text-secondary)]">
               {t('settings.gateway.connectionProtocol')}
             </div>
@@ -781,7 +781,7 @@ function GatewayKeyTable({
     >
       {keys.length > 0 ? (
         <div role="radiogroup" aria-label={t('settings.gateway.keyManagement')}>
-          <div className="hidden min-h-[34px] grid-cols-[minmax(220px,1.4fr)_100px_130px_124px] items-center gap-[12px] bg-[var(--color-surface-container-low)] px-[16px] text-[10px] font-bold uppercase tracking-[0.06em] text-[var(--color-text-tertiary)] sm:grid">
+          <div className="gateway-key-table-header min-h-[34px] items-center gap-[12px] bg-[var(--color-surface-container-low)] px-[16px] text-[10px] font-bold uppercase tracking-[0.06em] text-[var(--color-text-tertiary)]">
             <span>{t('settings.gateway.keyNameColumn')}</span>
             <span>{t('settings.gateway.keyScopeColumn')}</span>
             <span>{t('settings.gateway.keyUsageColumn')}</span>
@@ -807,7 +807,7 @@ function GatewayKeyTable({
                     onSelect(key.id)
                   }
                 }}
-                className={`grid min-h-[68px] grid-cols-[minmax(0,1fr)_auto] items-center gap-[10px] px-[16px] py-[10px] sm:grid-cols-[minmax(220px,1.4fr)_100px_130px_124px] sm:gap-[12px] ${
+                className={`gateway-key-table-row grid min-h-[68px] grid-cols-[minmax(0,1fr)_auto] items-center gap-[10px] px-[16px] py-[10px] ${
                   selected ? 'bg-[var(--color-surface-selected)]' : ''
                 }`}
               >
@@ -876,7 +876,7 @@ function GatewayKeyTable({
                       </span>
                     )}
                   </div>
-                  <div className="mt-[3px] text-[10px] text-[var(--color-text-tertiary)] sm:hidden">
+                  <div className="gateway-key-table-mobile-summary mt-[3px] text-[10px] text-[var(--color-text-tertiary)]">
                     {t('settings.gateway.keyMobileSummary', {
                       targets: key.allowedTargets.length,
                       requests: key.usage.requests,
@@ -884,10 +884,10 @@ function GatewayKeyTable({
                     })}
                   </div>
                 </div>
-                <div className="hidden text-[11px] font-semibold text-[var(--color-text-secondary)] sm:block">
+                <div className="gateway-key-table-metric text-[11px] font-semibold text-[var(--color-text-secondary)]">
                   {t('settings.gateway.keyTargetCount', { count: key.allowedTargets.length })}
                 </div>
-                <div className="hidden text-[11px] font-semibold text-[var(--color-text-secondary)] sm:block">
+                <div className="gateway-key-table-metric text-[11px] font-semibold text-[var(--color-text-secondary)]">
                   {key.usage.requests} / {usageLimit}
                 </div>
                 <div className="flex items-center justify-end gap-[2px]">
@@ -1203,7 +1203,7 @@ export function GatewayNodePanel() {
 
   const header = (
     <section className="border-b border-[var(--color-border-separator)] pb-[18px]">
-      <div className="flex flex-col gap-[14px] sm:flex-row sm:items-center sm:justify-between">
+      <div className="gateway-node-header flex flex-col gap-[14px]">
         <div className="flex min-w-0 items-start gap-[11px]">
           <div className="flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]">
             <Network size={19} strokeWidth={1.8} />
@@ -1213,7 +1213,7 @@ export function GatewayNodePanel() {
             <p className="mt-[3px] max-w-[600px] text-[12px] leading-[18px] text-[var(--color-text-secondary)]">{t('settings.gateway.description')}</p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-[8px] self-end sm:self-auto">
+        <div className="gateway-node-header-actions flex shrink-0 items-center gap-[8px] self-end">
           <Button
             variant="ghost"
             size="sm"
@@ -1277,13 +1277,13 @@ export function GatewayNodePanel() {
         {header}
 
       <SettingsSection title={t('settings.gateway.connection')}>
-        <div className="grid gap-[12px] p-[16px] sm:grid-cols-2">
+        <div className="gateway-node-connection-grid grid gap-[12px] p-[16px]">
           <CopyField value={status.baseUrl} label={t('settings.gateway.baseUrl')} copyLabel={t('settings.gateway.copy')} />
           <CopyField value={status.anthropicBaseUrl} label={t('settings.gateway.anthropicBaseUrl')} copyLabel={t('settings.gateway.copy')} />
-          <div className="sm:col-span-2">
+          <div className="gateway-node-connection-wide min-w-0">
             <CopyField value={status.modelsUrl} label={t('settings.gateway.modelsEndpoint')} copyLabel={t('settings.gateway.copy')} />
           </div>
-          <div className="sm:col-span-2">
+          <div className="gateway-node-connection-wide min-w-0">
             <Input
               label={t('settings.gateway.publicBaseUrl')}
               placeholder="https://agent.example.com"

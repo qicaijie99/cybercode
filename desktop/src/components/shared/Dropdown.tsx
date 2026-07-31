@@ -1,31 +1,41 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { Check } from 'lucide-react'
 import { subscribeToViewportChanges } from '../../lib/viewportEvents'
-import { Icon } from './Icon'
 
-type DropdownItem<T extends string> = {
+export type DropdownItem<T extends string> = {
   value: T
   label: string
   description?: string
   icon?: ReactNode
 }
 
+export type DropdownTriggerState = {
+  open: boolean
+  menuId: string
+}
+
 type DropdownProps<T extends string> = {
-  items: DropdownItem<T>[]
+  items: readonly DropdownItem<T>[]
   value: T
   onChange: (value: T) => void
-  trigger: ReactNode
+  trigger: ReactNode | ((state: DropdownTriggerState) => ReactNode)
   width?: CSSProperties['width']
   align?: 'left' | 'right'
   className?: string
+  disabled?: boolean
+  ariaLabel?: string
 }
 
 type DropdownPosition = {
@@ -57,11 +67,40 @@ export function Dropdown<T extends string>({
   width = 320,
   align = 'left',
   className = '',
+  disabled = false,
+  ariaLabel,
 }: DropdownProps<T>) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<DropdownPosition | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const focusMenuOnOpenRef = useRef(false)
+  const menuId = useId()
+
+  const focusTrigger = useCallback(() => {
+    ref.current
+      ?.querySelector<HTMLElement>(
+        'button:not([disabled]), [role="button"]:not([aria-disabled="true"]), input:not([disabled])',
+      )
+      ?.focus()
+  }, [])
+
+  const closeAndFocusTrigger = useCallback(() => {
+    setOpen(false)
+    focusTrigger()
+  }, [focusTrigger])
+
+  const focusOption = useCallback((index: number) => {
+    if (items.length === 0) return
+    const normalizedIndex = (index + items.length) % items.length
+    optionRefs.current[normalizedIndex]?.focus()
+  }, [items.length])
+
+  const selectedIndex = Math.max(
+    0,
+    items.findIndex((item) => item.value === value),
+  )
 
   const updatePosition = useCallback(() => {
     const trigger = ref.current
@@ -103,16 +142,20 @@ export function Dropdown<T extends string>({
       if (ref.current?.contains(target) || menuRef.current?.contains(target)) return
       setOpen(false)
     }
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      closeAndFocusTrigger()
     }
     document.addEventListener('mousedown', handleClick)
-    document.addEventListener('keydown', handleEsc)
+    document.addEventListener('keydown', handleEscape, true)
     return () => {
       document.removeEventListener('mousedown', handleClick)
-      document.removeEventListener('keydown', handleEsc)
+      document.removeEventListener('keydown', handleEscape, true)
     }
-  }, [open])
+  }, [closeAndFocusTrigger, open])
 
   useLayoutEffect(() => {
     if (!open) {
@@ -124,20 +167,87 @@ export function Dropdown<T extends string>({
     return subscribeToViewportChanges(updatePosition)
   }, [open, updatePosition])
 
+  useEffect(() => {
+    if (!open || !position || !focusMenuOnOpenRef.current) return
+    focusMenuOnOpenRef.current = false
+    focusOption(selectedIndex)
+  }, [focusOption, open, position, selectedIndex])
+
+  const handleTriggerClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (disabled || menuRef.current?.contains(event.target as Node)) return
+    focusMenuOnOpenRef.current = event.detail === 0
+    setOpen((current) => !current)
+  }
+
+  const handleTriggerKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return
+    if (event.key === 'Escape' && open) {
+      event.preventDefault()
+      closeAndFocusTrigger()
+      return
+    }
+    if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault()
+      focusMenuOnOpenRef.current = true
+      setOpen(true)
+    }
+  }
+
+  const handleMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const focusedIndex = optionRefs.current.findIndex(
+      (option) => option === document.activeElement,
+    )
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      event.stopPropagation()
+      focusOption(focusedIndex < 0 ? selectedIndex : focusedIndex + 1)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      event.stopPropagation()
+      focusOption(focusedIndex < 0 ? selectedIndex : focusedIndex - 1)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      event.stopPropagation()
+      focusOption(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      event.stopPropagation()
+      focusOption(items.length - 1)
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closeAndFocusTrigger()
+    } else if (event.key === 'Tab') {
+      setOpen(false)
+    }
+  }
+
+  const renderedTrigger = typeof trigger === 'function'
+    ? trigger({ open, menuId })
+    : trigger
+
   return (
     <div ref={ref} className={`relative ${className || 'inline-block'}`}>
-      <div onClick={() => setOpen((value) => !value)} className="cursor-pointer">
-        {trigger}
+      <div
+        onClick={handleTriggerClick}
+        onKeyDown={handleTriggerKeyDown}
+        className={disabled ? 'cursor-not-allowed' : 'cursor-pointer'}
+      >
+        {renderedTrigger}
       </div>
 
       {open && position && createPortal(
         <div
+          id={menuId}
           ref={menuRef}
           role="listbox"
+          aria-label={ariaLabel}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={handleMenuKeyDown}
           className={`
-            settings-ui native-ui-text fixed z-[9999] overflow-y-auto overscroll-contain rounded-xl
-            bg-[var(--color-background)] border border-[var(--color-border-separator)]
-            shadow-[var(--shadow-dropdown)] animate-slide-down
+            settings-ui native-ui-text fixed z-[10050] overflow-y-auto overscroll-contain rounded-[8px]
+            border border-[var(--color-border-separator)] bg-[var(--color-surface-container-lowest)]
+            p-[5px] shadow-[var(--shadow-dropdown)] animate-slide-down
           `}
           style={{
             left: position.left,
@@ -154,23 +264,49 @@ export function Dropdown<T extends string>({
               type="button"
               role="option"
               aria-selected={item.value === value}
-              onClick={() => { onChange(item.value); setOpen(false) }}
+              tabIndex={-1}
+              ref={(option) => {
+                optionRefs.current[i] = option
+              }}
+              onClick={() => {
+                onChange(item.value)
+                closeAndFocusTrigger()
+              }}
               className={`
-                w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors
-                hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]
+                flex min-h-[42px] w-full items-center gap-[10px] rounded-[6px] px-[10px] py-[7px] text-left
+                transition-colors hover:bg-[var(--color-surface-hover)]
+                focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none
                 ${item.value === value ? 'bg-[var(--color-surface-selected)]' : ''}
-                ${i > 0 ? 'border-t border-[var(--color-border-separator)]' : ''}
               `}
             >
-              {item.icon && <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">{item.icon}</span>}
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-semibold tracking-[-0.01em] text-[var(--color-text-primary)]">{item.label}</div>
+              {item.icon && (
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--color-text-secondary)]">
+                  {item.icon}
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <div
+                  title={item.label}
+                  className="truncate text-[13px] font-semibold tracking-normal text-[var(--color-text-primary)]"
+                >
+                  {item.label}
+                </div>
                 {item.description && (
-                  <div className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">{item.description}</div>
+                  <div
+                    title={item.description}
+                    className="mt-0.5 truncate text-[11px] text-[var(--color-text-tertiary)]"
+                  >
+                    {item.description}
+                  </div>
                 )}
               </div>
               {item.value === value && (
-                <Icon name="check" size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />
+                <Check
+                  size={15}
+                  strokeWidth={2.25}
+                  className="shrink-0 text-[#1473e6] dark:text-[#68adff]"
+                  aria-hidden="true"
+                />
               )}
             </button>
           ))}

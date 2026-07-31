@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Dropdown } from './Dropdown'
@@ -52,6 +52,7 @@ describe('Dropdown viewport positioning', () => {
     const menu = screen.getByRole('listbox')
     expect(container.contains(menu)).toBe(false)
     expect(document.body.contains(menu)).toBe(true)
+    expect(menu).toHaveClass('z-[10050]')
     expect(menu).toHaveStyle({
       left: '28px',
       width: '320px',
@@ -61,5 +62,59 @@ describe('Dropdown viewport positioning', () => {
 
     fireEvent.click(screen.getByRole('option', { name: 'Beta' }))
     expect(onChange).toHaveBeenCalledWith('b')
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('supports arrow, Home, End, and Escape keyboard navigation', async () => {
+    const parentEscapeHandler = vi.fn()
+    const handleParentKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') parentEscapeHandler()
+    }
+    document.addEventListener('keydown', handleParentKeyDown)
+    render(
+      <Dropdown
+        items={[
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Beta' },
+          { value: 'c', label: 'Gamma' },
+        ]}
+        value="b"
+        onChange={vi.fn()}
+        trigger={({ open, menuId }) => (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={open ? menuId : undefined}
+          >
+            Choose model
+          </button>
+        )}
+      />,
+    )
+
+    const trigger = screen.getByRole('button', { name: 'Choose model' })
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+
+    const beta = await screen.findByRole('option', { name: 'Beta' })
+    await waitFor(() => expect(beta).toHaveFocus())
+
+    fireEvent.keyDown(beta, { key: 'ArrowDown' })
+    expect(screen.getByRole('option', { name: 'Gamma' })).toHaveFocus()
+
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' })
+    expect(screen.getByRole('option', { name: 'Alpha' })).toHaveFocus()
+
+    fireEvent.keyDown(document.activeElement!, { key: 'End' })
+    const gamma = screen.getByRole('option', { name: 'Gamma' })
+    expect(gamma).toHaveFocus()
+
+    fireEvent.keyDown(gamma, { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(parentEscapeHandler).not.toHaveBeenCalled()
+    document.removeEventListener('keydown', handleParentKeyDown)
   })
 })

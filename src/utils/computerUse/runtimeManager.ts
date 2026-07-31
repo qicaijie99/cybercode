@@ -26,7 +26,7 @@ export type ComputerUseRuntimePhase =
   | 'paused'
   | 'error'
 
-export type ComputerUseRuntimeSource = 'managed' | 'legacy' | null
+export type ComputerUseRuntimeSource = 'bundled' | 'managed' | 'legacy' | null
 
 export type ComputerUseRuntimeStatus = {
   phase: ComputerUseRuntimePhase
@@ -62,8 +62,33 @@ type ActiveRuntimePointer = {
   installedAt: string
 }
 
+type BundledRuntimeManifest = {
+  name: 'computer-use-runtime'
+  format: 'opaque-xor-v1'
+  encoding: 'xor-a5'
+  version: string
+  platformKey: string
+  payload: string
+  payloadSha256: string
+  payloadSize: number
+  archiveFilename: string
+  archiveSha256: string
+  archiveSize: number
+  pythonPath: string
+  available: true
+}
+
+type BundledRuntimeArchive = {
+  manifest: ComputerUseRuntimeManifest
+  asset: ComputerUseRuntimeAsset
+  payloadPath: string
+  payloadSha256: string
+  payloadSize: number
+}
+
 type RuntimeManagerOptions = {
   runtimeRoot?: string
+  bundledRuntimeRoot?: string | null
   platform?: NodeJS.Platform
   arch?: string
   manifestUrls?: string[]
@@ -83,6 +108,7 @@ const DEFAULT_MANIFEST_URLS = [
 ]
 const MANIFEST_TIMEOUT_MS = 15_000
 const DOWNLOAD_STALL_TIMEOUT_MS = 45_000
+const BUNDLED_RUNTIME_XOR_BYTE = 0xa5
 
 class RuntimeManagerError extends Error {
   constructor(
@@ -119,6 +145,31 @@ function isBusyPhase(phase: ComputerUseRuntimePhase): boolean {
   return ['checking', 'downloading', 'verifying', 'installing'].includes(phase)
 }
 
+function isSafeRuntimeFilename(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value !== '.' &&
+    value !== '..' &&
+    path.basename(value) === value
+  )
+}
+
+function isSafeRuntimeAsset(asset: unknown): asset is ComputerUseRuntimeAsset {
+  if (!asset || typeof asset !== 'object') return false
+  const candidate = asset as Partial<ComputerUseRuntimeAsset>
+  return (
+    isSafeRuntimeFilename(candidate.filename) &&
+    /^[a-f0-9]{64}$/i.test(candidate.sha256 ?? '') &&
+    Number.isSafeInteger(candidate.size) &&
+    (candidate.size ?? 0) > 0 &&
+    typeof candidate.pythonPath === 'string' &&
+    candidate.pythonPath.length > 0 &&
+    !path.isAbsolute(candidate.pythonPath) &&
+    !candidate.pythonPath.split(/[\\/]+/).includes('..')
+  )
+}
+
 function assertSafeManifest(manifest: unknown): asserts manifest is ComputerUseRuntimeManifest {
   if (!manifest || typeof manifest !== 'object') {
     throw new RuntimeManagerError('INVALID_MANIFEST', '运行组件清单格式无效')
@@ -136,18 +187,7 @@ function assertSafeManifest(manifest: unknown): asserts manifest is ComputerUseR
   }
 
   for (const asset of Object.values(candidate.assets)) {
-    if (
-      !asset ||
-      typeof asset.filename !== 'string' ||
-      path.basename(asset.filename) !== asset.filename ||
-      !/^[a-f0-9]{64}$/i.test(asset.sha256) ||
-      typeof asset.size !== 'number' ||
-      asset.size <= 0 ||
-      typeof asset.pythonPath !== 'string' ||
-      asset.pythonPath.length === 0 ||
-      path.isAbsolute(asset.pythonPath) ||
-      asset.pythonPath.split(/[\\/]+/).includes('..')
-    ) {
+    if (!isSafeRuntimeAsset(asset)) {
       throw new RuntimeManagerError('INVALID_MANIFEST', '运行组件资源信息无效')
     }
   }
@@ -174,6 +214,28 @@ async function sha256File(filePath: string, signal?: AbortSignal): Promise<strin
     stream.destroy()
   }
   return hash.digest('hex')
+}
+
+async function decodeBundledRuntimePayload(
+  payloadPath: string,
+  archivePath: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const input = createReadStream(payloadPath)
+  const output = await open(archivePath, 'w')
+  try {
+    for await (const chunk of input) {
+      signal.throwIfAborted()
+      const decoded = Buffer.from(chunk as Buffer)
+      for (let index = 0; index < decoded.length; index += 1) {
+        decoded[index] ^= BUNDLED_RUNTIME_XOR_BYTE
+      }
+      await output.write(decoded)
+    }
+  } finally {
+    input.destroy()
+    await output.close()
+  }
 }
 
 function archiveUrl(manifestUrl: string, filename: string): string {
@@ -255,6 +317,9 @@ export class ComputerUseRuntimeManager {
   private readonly managedRoot: string
   private readonly downloadsRoot: string
   private readonly activePointerPath: string
+  private readonly bundledRuntimeRoot: string | null
+  private readonly bundledManagedRoot: string | null
+  private readonly bundledActivePointerPath: string | null
   private readonly platform: NodeJS.Platform
   private readonly arch: string
   private readonly platformKey: string | null
@@ -272,6 +337,17 @@ export class ComputerUseRuntimeManager {
     this.managedRoot = path.join(this.runtimeRoot, 'managed')
     this.downloadsRoot = path.join(this.runtimeRoot, 'downloads')
     this.activePointerPath = path.join(this.managedRoot, 'active.json')
+    const bundledRuntimeRoot =
+      options.bundledRuntimeRoot === undefined
+        ? process.env.CYBER_COMPUTER_USE_RUNTIME_ROOT
+        : options.bundledRuntimeRoot
+    this.bundledRuntimeRoot = bundledRuntimeRoot || null
+    this.bundledManagedRoot = this.bundledRuntimeRoot
+      ? path.join(this.bundledRuntimeRoot, 'managed')
+      : null
+    this.bundledActivePointerPath = this.bundledManagedRoot
+      ? path.join(this.bundledManagedRoot, 'active.json')
+      : null
     this.platform = options.platform ?? process.platform
     this.arch = options.arch ?? process.arch
     this.platformKey = runtimePlatformKey(this.platform, this.arch)
@@ -301,11 +377,13 @@ export class ComputerUseRuntimeManager {
     this.status = { ...this.status, ...patch }
   }
 
-  async refreshFromDisk(): Promise<ComputerUseRuntimeStatus> {
-    if (isBusyPhase(this.status.phase)) return this.snapshot()
-
+  private async resolveActivePointer(
+    activePointerPath: string,
+    managedRoot: string,
+    source: Exclude<ComputerUseRuntimeSource, 'legacy' | null>,
+  ): Promise<string | null> {
     try {
-      const pointer = JSON.parse(await readFile(this.activePointerPath, 'utf8')) as ActiveRuntimePointer
+      const pointer = JSON.parse(await readFile(activePointerPath, 'utf8')) as ActiveRuntimePointer
       if (
         pointer.platformKey === this.platformKey &&
         /^[a-zA-Z0-9._-]+$/.test(pointer.runtimeVersion) &&
@@ -315,7 +393,7 @@ export class ComputerUseRuntimeManager {
         !pointer.pythonPath.split(/[\\/]+/).includes('..')
       ) {
         const pythonPath = path.join(
-          this.managedRoot,
+          managedRoot,
           pointer.runtimeVersion,
           pointer.platformKey,
           ...pointer.pythonPath.split(/[\\/]+/),
@@ -326,15 +404,84 @@ export class ComputerUseRuntimeManager {
             phase: 'ready',
             ready: true,
             version: pointer.runtimeVersion,
-            source: 'managed',
+            source,
             progressPercent: 100,
             error: null,
             canPause: false,
           })
-          return this.snapshot()
+          return pythonPath
         }
       }
     } catch {}
+    return null
+  }
+
+  private async resolveBundledArchive(): Promise<BundledRuntimeArchive | null> {
+    if (!this.bundledRuntimeRoot || !this.platformKey) return null
+
+    try {
+      const bundled = JSON.parse(
+        await readFile(path.join(this.bundledRuntimeRoot, 'manifest.json'), 'utf8'),
+      ) as Partial<BundledRuntimeManifest>
+      const asset: ComputerUseRuntimeAsset = {
+        filename: bundled.archiveFilename ?? '',
+        sha256: bundled.archiveSha256 ?? '',
+        size: bundled.archiveSize ?? 0,
+        pythonPath: bundled.pythonPath ?? '',
+      }
+      if (
+        bundled.name !== 'computer-use-runtime' ||
+        bundled.format !== 'opaque-xor-v1' ||
+        bundled.encoding !== 'xor-a5' ||
+        bundled.available !== true ||
+        bundled.platformKey !== this.platformKey ||
+        typeof bundled.version !== 'string' ||
+        !/^[a-zA-Z0-9._-]+$/.test(bundled.version) ||
+        !isSafeRuntimeFilename(bundled.payload) ||
+        !/^[a-f0-9]{64}$/i.test(bundled.payloadSha256 ?? '') ||
+        !Number.isSafeInteger(bundled.payloadSize) ||
+        (bundled.payloadSize ?? 0) <= 0 ||
+        !isSafeRuntimeAsset(asset)
+      ) {
+        return null
+      }
+
+      const payloadPath = path.join(this.bundledRuntimeRoot, bundled.payload)
+      const payloadStat = await stat(payloadPath)
+      if (!payloadStat.isFile() || payloadStat.size !== bundled.payloadSize) return null
+
+      return {
+        manifest: {
+          schemaVersion: 1,
+          runtimeVersion: bundled.version,
+          assets: { [this.platformKey]: asset },
+        },
+        asset,
+        payloadPath,
+        payloadSha256: bundled.payloadSha256,
+        payloadSize: bundled.payloadSize,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  async refreshFromDisk(): Promise<ComputerUseRuntimeStatus> {
+    if (isBusyPhase(this.status.phase)) return this.snapshot()
+
+    if (await this.resolveActivePointer(this.activePointerPath, this.managedRoot, 'managed')) {
+      return this.snapshot()
+    }
+
+    if (this.bundledActivePointerPath && this.bundledManagedRoot) {
+      if (await this.resolveActivePointer(
+        this.bundledActivePointerPath,
+        this.bundledManagedRoot,
+        'bundled',
+      )) {
+        return this.snapshot()
+      }
+    }
 
     this.activePythonPath = null
     if (this.status.phase !== 'paused' && this.status.phase !== 'error') {
@@ -453,6 +600,12 @@ export class ComputerUseRuntimeManager {
       error: null,
       canPause: true,
     })
+
+    const bundledArchive = await this.resolveBundledArchive()
+    if (bundledArchive) {
+      return this.installBundledArchive(bundledArchive, signal)
+    }
+
     const manifest = await this.fetchManifest(signal)
     const asset = manifest.assets[this.platformKey]
     if (!asset) {
@@ -462,15 +615,77 @@ export class ComputerUseRuntimeManager {
       )
     }
 
-    this.update({
-      version: manifest.runtimeVersion,
-      totalBytes: asset.size,
-    })
     const archivePath = await this.downloadAsset(asset, signal)
     signal.throwIfAborted()
 
+    return this.verifyAndInstallArchive(
+      manifest,
+      asset,
+      archivePath,
+      signal,
+      'managed',
+      true,
+    )
+  }
+
+  private async installBundledArchive(
+    bundled: BundledRuntimeArchive,
+    signal: AbortSignal,
+  ): Promise<string> {
     this.update({
       phase: 'verifying',
+      version: bundled.manifest.runtimeVersion,
+      downloadedBytes: bundled.payloadSize,
+      totalBytes: bundled.payloadSize,
+      progressPercent: 100,
+      canPause: false,
+    })
+    const payloadChecksum = await sha256File(bundled.payloadPath, signal)
+    if (payloadChecksum.toLowerCase() !== bundled.payloadSha256.toLowerCase()) {
+      throw new RuntimeManagerError('CHECKSUM_MISMATCH', '内置运行组件校验失败')
+    }
+
+    await mkdir(this.downloadsRoot, { recursive: true })
+    const decodedArchivePath = path.join(
+      this.downloadsRoot,
+      `.${bundled.asset.filename}.${process.pid}.${Date.now()}.bundled`,
+    )
+    await rm(decodedArchivePath, { force: true })
+    try {
+      await decodeBundledRuntimePayload(
+        bundled.payloadPath,
+        decodedArchivePath,
+        signal,
+      )
+      signal.throwIfAborted()
+      const decodedStat = await stat(decodedArchivePath)
+      if (!decodedStat.isFile() || decodedStat.size !== bundled.asset.size) {
+        throw new RuntimeManagerError('RUNTIME_INVALID', '内置运行组件数据不完整')
+      }
+      return await this.verifyAndInstallArchive(
+        bundled.manifest,
+        bundled.asset,
+        decodedArchivePath,
+        signal,
+        'bundled',
+        true,
+      )
+    } finally {
+      await rm(decodedArchivePath, { force: true })
+    }
+  }
+
+  private async verifyAndInstallArchive(
+    manifest: ComputerUseRuntimeManifest,
+    asset: ComputerUseRuntimeAsset,
+    archivePath: string,
+    signal: AbortSignal,
+    source: Exclude<ComputerUseRuntimeSource, 'legacy' | null>,
+    removeArchiveAfterInstall: boolean,
+  ): Promise<string> {
+    this.update({
+      phase: 'verifying',
+      version: manifest.runtimeVersion,
       downloadedBytes: asset.size,
       totalBytes: asset.size,
       progressPercent: 100,
@@ -478,17 +693,23 @@ export class ComputerUseRuntimeManager {
     })
     const checksum = await sha256File(archivePath, signal)
     if (checksum.toLowerCase() !== asset.sha256.toLowerCase()) {
-      await rm(archivePath, { force: true })
+      if (removeArchiveAfterInstall) await rm(archivePath, { force: true })
       throw new RuntimeManagerError('CHECKSUM_MISMATCH', '运行组件校验失败，请重试下载')
     }
 
-    const pythonPath = await this.installArchive(manifest, asset, archivePath, signal)
+    const pythonPath = await this.installArchive(
+      manifest,
+      asset,
+      archivePath,
+      signal,
+      removeArchiveAfterInstall,
+    )
     this.activePythonPath = pythonPath
     this.update({
       phase: 'ready',
       ready: true,
       version: manifest.runtimeVersion,
-      source: 'managed',
+      source,
       downloadedBytes: asset.size,
       totalBytes: asset.size,
       progressPercent: 100,
@@ -691,6 +912,7 @@ export class ComputerUseRuntimeManager {
     asset: ComputerUseRuntimeAsset,
     archivePath: string,
     signal: AbortSignal,
+    removeArchiveAfterInstall: boolean,
   ): Promise<string> {
     this.update({ phase: 'installing', canPause: false })
     await mkdir(this.managedRoot, { recursive: true })
@@ -736,7 +958,7 @@ export class ComputerUseRuntimeManager {
       await writeFile(pointerTemp, `${JSON.stringify(pointer, null, 2)}\n`, 'utf8')
       await rm(this.activePointerPath, { force: true })
       await rename(pointerTemp, this.activePointerPath)
-      await rm(archivePath, { force: true })
+      if (removeArchiveAfterInstall) await rm(archivePath, { force: true })
       await this.cleanupStaleDownloads()
       await this.cleanupOldVersions(manifest.runtimeVersion)
 

@@ -21,6 +21,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { Button } from '../shared/Button'
 import { Input } from '../shared/Input'
 import { Modal } from '../shared/Modal'
+import { SelectField } from '../shared/SelectField'
 import { ProviderLogo } from './ProviderLogo'
 
 type Props = {
@@ -219,22 +220,16 @@ export function MediaProviderDialog({
           {note}
         </div>
 
-        <label className="flex flex-col gap-[6px]">
-          <span className="text-[12px] font-bold text-[var(--color-text-primary)]">
-            {labels.model}
-          </span>
-          <select
-            value={modelId}
-            onChange={(event) => setModelId(event.target.value)}
-            className="h-[40px] rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[11px] text-[12px] font-medium text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
-          >
-            {provider.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {serviceLabels[model.service]} · {model.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <SelectField
+          label={labels.model}
+          value={modelId}
+          onChange={setModelId}
+          options={provider.models.map((model) => ({
+            value: model.id,
+            label: model.label,
+            description: `${serviceLabels[model.service]} · ${model.id}`,
+          }))}
+        />
 
         {provider.credentialFields.length > 0 && (
           <div className="grid grid-cols-1 gap-[12px] sm:grid-cols-2">

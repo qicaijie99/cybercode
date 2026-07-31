@@ -19,7 +19,7 @@ import { TerminalSettings } from '../../pages/TerminalSettings'
 import { SSHSettings } from '../../pages/SSHSettings'
 import { TokenOptimization } from '../../pages/TokenOptimization'
 import { KnowledgeSpace } from '../../pages/KnowledgeSpace'
-import { AgentMigration } from '../../pages/AgentMigration'
+import { DataMigration } from '../../pages/DataMigration'
 import { GitWorkspace } from '../../pages/GitWorkspace'
 import { useUIStore, type SettingsPanelView } from '../../stores/uiStore'
 import { useTranslation } from '../../i18n'
@@ -241,7 +241,9 @@ function renderPanelContent(view: SettingsPanelView): ReactNode {
     case 'git':
       return <GitWorkspace />
     case 'agentMigration':
-      return <AgentMigration />
+      return <DataMigration />
+    case 'usbMigration':
+      return <DataMigration initialTab="usb" />
     case 'settings':
     default:
       return <MemoSettings />
@@ -254,6 +256,6 @@ function getPanelLabel(view: SettingsPanelView, t: ReturnType<typeof useTranslat
   if (view === 'tokenOptimization') return t('tokenOptimization.title')
   if (view === 'codeGraph') return t('knowledgeSpace.title')
   if (view === 'git') return t('git.title')
-  if (view === 'agentMigration') return t('agentMigration.title')
+  if (view === 'agentMigration' || view === 'usbMigration') return t('dataMigration.title')
   return t(`settings.tab.${view}` as never)
 }

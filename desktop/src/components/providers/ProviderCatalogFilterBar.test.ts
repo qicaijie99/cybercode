@@ -52,6 +52,39 @@ describe('provider catalog relevance', () => {
     })).toBe(false)
   })
 
+  it('keeps custom and local access filters independent', () => {
+    const customCandidate: ProviderCatalogFilterCandidate = {
+      ...candidate(['Company Gateway']),
+      auth: ['custom'],
+    }
+    const localCandidate: ProviderCatalogFilterCandidate = {
+      ...candidate(['LM Studio']),
+      auth: ['local'],
+      costs: ['uncapped'],
+    }
+
+    expect(matchesProviderCatalogCandidate(customCandidate, '', {
+      auth: ['custom'],
+      cost: [],
+      modality: [],
+    })).toBe(true)
+    expect(matchesProviderCatalogCandidate(localCandidate, '', {
+      auth: ['custom'],
+      cost: [],
+      modality: [],
+    })).toBe(false)
+    expect(matchesProviderCatalogCandidate(localCandidate, '', {
+      auth: ['local'],
+      cost: [],
+      modality: [],
+    })).toBe(true)
+    expect(matchesProviderCatalogCandidate(customCandidate, '', {
+      auth: ['local'],
+      cost: [],
+      modality: [],
+    })).toBe(false)
+  })
+
   it('prioritizes exact provider names over incidental model or endpoint matches', () => {
     const query = normalizeProviderSearchQuery('OpenAI')
     const exactProviderScore = scoreProviderCatalogCandidate(

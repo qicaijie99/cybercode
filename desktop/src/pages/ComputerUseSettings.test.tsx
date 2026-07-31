@@ -151,6 +151,21 @@ describe('ComputerUseSettings runtime preparation', () => {
     expect(screen.queryByRole('button', { name: '一键安装全部依赖' })).not.toBeInTheDocument()
   })
 
+  it('labels a bundled runtime as included with the installer', async () => {
+    vi.mocked(computerUseApi.getStatus).mockResolvedValue(status(runtime({
+      phase: 'ready',
+      ready: true,
+      version: 'bundled-v1',
+      source: 'bundled',
+      progressPercent: 100,
+    })))
+
+    render(<ComputerUseSettings />)
+
+    expect(await screen.findByText('已就绪 · 安装包内置运行组件 bundled-v1')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '一键安装全部依赖' })).not.toBeInTheDocument()
+  })
+
   it('keeps Wayland screenshots available without claiming full input support', async () => {
     const linuxStatus: ComputerUseStatus = {
       ...status(runtime({

@@ -8,7 +8,8 @@ export type ProviderAuthFilter =
   | 'aggregator'
   | 'no-auth'
   | 'web-session'
-  | 'local-custom'
+  | 'custom'
+  | 'local'
 
 export type ProviderModalityFilter =
   | 'language'
@@ -229,12 +230,13 @@ export function ProviderCatalogFilterBar({
       key: 'auth',
       label: labels.auth,
       options: ([
+        'custom',
         'api-key',
         'oauth',
         'aggregator',
         'no-auth',
         'web-session',
-        'local-custom',
+        'local',
       ] as const).map((value) => ({ value, label: labels.authOptions[value] })),
     },
     {
@@ -281,10 +283,8 @@ export function ProviderCatalogFilterBar({
   }, [open])
 
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-[8px] lg:grid-cols-[1fr_minmax(320px,56%)_1fr] lg:items-center">
-      <div aria-hidden="true" className="hidden lg:block" />
-
-      <div className="relative min-w-0 w-full max-w-[640px] justify-self-center">
+    <div className="provider-catalog-toolbar flex min-w-0 flex-wrap items-center gap-[8px]">
+      <div className="provider-catalog-toolbar-search relative min-w-0 flex-[1_1_420px]">
         <Icon
           name="search"
           size={17}
@@ -311,8 +311,8 @@ export function ProviderCatalogFilterBar({
         )}
       </div>
 
-      <div className="flex min-w-0 items-center justify-between gap-[8px] lg:justify-end">
-        <div ref={rootRef} className="relative shrink-0">
+      <div className="provider-catalog-toolbar-actions relative ml-auto flex min-w-0 shrink-0 items-center justify-between gap-[8px]">
+        <div ref={rootRef} className="provider-catalog-filter-anchor shrink-0">
           <button
             type="button"
             aria-haspopup="dialog"
@@ -337,7 +337,7 @@ export function ProviderCatalogFilterBar({
             <div
               role="dialog"
               aria-label={labels.filterTitle}
-              className="absolute right-0 top-[48px] z-[80] w-[min(440px,calc(100vw-48px))] rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-[14px] shadow-[var(--shadow-dropdown)]"
+              className="provider-catalog-filter-popover absolute right-0 top-[48px] z-[80] w-[min(440px,calc(100vw-48px))] rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-[14px] shadow-[var(--shadow-dropdown)]"
             >
               <div className="mb-[12px] flex items-center justify-between gap-[12px]">
                 <div className="min-w-0">

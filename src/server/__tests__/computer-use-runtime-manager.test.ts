@@ -35,9 +35,45 @@ function manifestFor(bytes: Uint8Array): ComputerUseRuntimeManifest {
   }
 }
 
+function encodeBundledPayload(archive: Uint8Array): Uint8Array {
+  return Uint8Array.from(archive, byte => byte ^ 0xa5)
+}
+
 async function fakeExtract(_archivePath: string, destination: string): Promise<void> {
   await mkdir(path.join(destination, 'python'), { recursive: true })
   await writeFile(path.join(destination, 'python', 'python.exe'), 'fake python')
+}
+
+async function writeActiveRuntime(
+  root: string,
+  runtimeVersion: string,
+  platformKey = 'win32-x64',
+): Promise<string> {
+  const pythonPath = path.join(
+    root,
+    'managed',
+    runtimeVersion,
+    platformKey,
+    'python',
+    'python.exe',
+  )
+  await mkdir(path.dirname(pythonPath), { recursive: true })
+  await writeFile(pythonPath, 'fake python')
+  await writeFile(
+    path.join(root, 'managed', 'active.json'),
+    `${JSON.stringify(
+      {
+        runtimeVersion,
+        platformKey,
+        pythonPath: 'python/python.exe',
+        sha256: 'a'.repeat(64),
+        installedAt: '2026-07-30T00:00:00.000Z',
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  return pythonPath
 }
 
 describe('ComputerUseRuntimeManager', () => {
@@ -100,6 +136,173 @@ describe('ComputerUseRuntimeManager', () => {
     await expect(
       readFile(path.join(root, 'downloads', 'stale-runtime.tar.gz.part'), 'utf8'),
     ).rejects.toThrow()
+  })
+
+  test('uses a bundled runtime without fetching a manifest', async () => {
+    const runtimeRoot = await makeRoot()
+    const bundledRoot = await makeRoot()
+    const bundledPython = await writeActiveRuntime(bundledRoot, 'bundled-v1')
+    let fetchCalls = 0
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot,
+      bundledRuntimeRoot: bundledRoot,
+      platform: 'win32',
+      arch: 'x64',
+      manifestUrls: ['https://downloads.example/runtime/manifest.json'],
+      fetchImpl: (async () => {
+        fetchCalls += 1
+        throw new Error('network should not be used for bundled runtime')
+      }) as typeof fetch,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    await expect(manager.ensureReady()).resolves.toBe(bundledPython)
+    expect(manager.snapshot()).toMatchObject({
+      phase: 'ready',
+      ready: true,
+      source: 'bundled',
+      version: 'bundled-v1',
+    })
+    expect(fetchCalls).toBe(0)
+  })
+
+  test('installs an archived bundled runtime without network access', async () => {
+    const runtimeRoot = await makeRoot()
+    const bundledRoot = await makeRoot()
+    const archive = new TextEncoder().encode('bundled-archive-runtime')
+    const payload = encodeBundledPayload(archive)
+    const manifest = manifestFor(archive)
+    const asset = manifest.assets['win32-x64']!
+    const payloadFilename = 'computer-use-runtime-win32-x64.cyber-runtime'
+    const payloadPath = path.join(bundledRoot, payloadFilename)
+    await writeFile(payloadPath, payload)
+    await writeFile(
+      path.join(bundledRoot, 'manifest.json'),
+      `${JSON.stringify(
+        {
+          name: 'computer-use-runtime',
+          format: 'opaque-xor-v1',
+          encoding: 'xor-a5',
+          version: manifest.runtimeVersion,
+          platformKey: 'win32-x64',
+          payload: payloadFilename,
+          payloadSha256: createHash('sha256').update(payload).digest('hex'),
+          payloadSize: payload.byteLength,
+          archiveFilename: asset.filename,
+          archiveSha256: asset.sha256,
+          archiveSize: asset.size,
+          pythonPath: asset.pythonPath,
+          available: true,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    let fetchCalls = 0
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot,
+      bundledRuntimeRoot: bundledRoot,
+      platform: 'win32',
+      arch: 'x64',
+      fetchImpl: (async () => {
+        fetchCalls += 1
+        throw new Error('network should not be used for bundled runtime')
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    await expect(manager.ensureReady()).resolves.toBe(
+      path.join(runtimeRoot, 'managed', 'test-v1', 'win32-x64', 'python', 'python.exe'),
+    )
+    expect(manager.snapshot()).toMatchObject({
+      phase: 'ready',
+      ready: true,
+      source: 'bundled',
+      version: 'test-v1',
+    })
+    expect(fetchCalls).toBe(0)
+    await expect(readFile(payloadPath)).resolves.toEqual(payload)
+    await expect(
+      readFile(path.join(runtimeRoot, 'managed', 'active.json'), 'utf8'),
+    ).resolves.toContain('"runtimeVersion": "test-v1"')
+  })
+
+  test('rejects a corrupted archived bundled runtime without deleting it', async () => {
+    const runtimeRoot = await makeRoot()
+    const bundledRoot = await makeRoot()
+    const expected = new TextEncoder().encode('expected-bundled-runtime')
+    const corrupted = new TextEncoder().encode('corrupted-bundled-runtime')
+    const manifest = manifestFor(expected)
+    const asset = manifest.assets['win32-x64']!
+    const payloadFilename = 'computer-use-runtime-win32-x64.cyber-runtime'
+    const payloadPath = path.join(bundledRoot, payloadFilename)
+    await writeFile(payloadPath, corrupted)
+    await writeFile(
+      path.join(bundledRoot, 'manifest.json'),
+      `${JSON.stringify(
+        {
+          name: 'computer-use-runtime',
+          format: 'opaque-xor-v1',
+          encoding: 'xor-a5',
+          version: manifest.runtimeVersion,
+          platformKey: 'win32-x64',
+          payload: payloadFilename,
+          payloadSha256: createHash('sha256').update(expected).digest('hex'),
+          payloadSize: corrupted.byteLength,
+          archiveFilename: asset.filename,
+          archiveSha256: asset.sha256,
+          archiveSize: asset.size,
+          pythonPath: asset.pythonPath,
+          available: true,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot,
+      bundledRuntimeRoot: bundledRoot,
+      platform: 'win32',
+      arch: 'x64',
+      fetchImpl: (async () => {
+        throw new Error('network should not be used for a bundled runtime')
+      }) as typeof fetch,
+      extractArchive: fakeExtract,
+      validatePython: async () => 'Python 3.12.0',
+    })
+
+    await expect(manager.ensureReady()).rejects.toThrow('内置运行组件校验失败')
+    await expect(readFile(payloadPath)).resolves.toEqual(corrupted)
+    expect(manager.snapshot()).toMatchObject({ phase: 'error', ready: false })
+  })
+
+  test('prefers an installed managed runtime over the bundled runtime', async () => {
+    const runtimeRoot = await makeRoot()
+    const bundledRoot = await makeRoot()
+    await writeActiveRuntime(bundledRoot, 'bundled-v1')
+    const managedPython = await writeActiveRuntime(runtimeRoot, 'managed-v2')
+
+    const manager = new ComputerUseRuntimeManager({
+      runtimeRoot,
+      bundledRuntimeRoot: bundledRoot,
+      platform: 'win32',
+      arch: 'x64',
+      fetchImpl: (async () => {
+        throw new Error('network should not be used when managed runtime exists')
+      }) as typeof fetch,
+    })
+
+    await expect(manager.ensureReady()).resolves.toBe(managedPython)
+    expect(manager.snapshot()).toMatchObject({
+      phase: 'ready',
+      ready: true,
+      source: 'managed',
+      version: 'managed-v2',
+    })
   })
 
   test('resumes a partial download with an HTTP Range request', async () => {

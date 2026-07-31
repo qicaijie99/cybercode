@@ -27,6 +27,7 @@ const zhSidebar = [
       { text: '第三方模型', link: '/guide/third-party-models' },
       { text: '模型同步与智能路由', link: '/guide/models-routing' },
       { text: '智能体节点接入', link: '/guide/agent-node' },
+      { text: '数据迁移与 U 盘', link: '/guide/data-migration' },
       { text: '全局使用', link: '/guide/global-usage' },
       { text: '常见问题', link: '/guide/faq' },
     ],
@@ -124,6 +125,7 @@ const enSidebar = [
       { text: 'Third-Party Models', link: '/en/guide/third-party-models' },
       { text: 'Models & Smart Routing', link: '/en/guide/models-routing' },
       { text: 'Agent Node', link: '/en/guide/agent-node' },
+      { text: 'Data & USB Migration', link: '/en/guide/data-migration' },
       { text: 'Global Usage', link: '/en/guide/global-usage' },
       { text: 'FAQ', link: '/en/guide/faq' },
     ],
@@ -209,6 +211,7 @@ const jaSidebar = [
       { text: 'Knowledge Space / Code Graph', link: '/ja/guide/code-graph' },
       { text: 'モデル同期とルーティング', link: '/ja/guide/models-routing' },
       { text: 'Agent ノード接続', link: '/ja/guide/agent-node' },
+      { text: 'データ / USB 移行', link: '/ja/guide/data-migration' },
     ],
   },
 ]
@@ -222,6 +225,7 @@ const koSidebar = [
       { text: 'Knowledge Space / Code Graph', link: '/ko/guide/code-graph' },
       { text: '모델 동기화 및 라우팅', link: '/ko/guide/models-routing' },
       { text: 'Agent 노드 연결', link: '/ko/guide/agent-node' },
+      { text: '데이터 / USB 마이그레이션', link: '/ko/guide/data-migration' },
     ],
   },
 ]

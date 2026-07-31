@@ -12,6 +12,7 @@ type ProviderLogoProps = {
   providerId?: string | null
   baseUrl?: string | null
   modelId?: string | null
+  identityPriority?: 'provider' | 'model'
   active?: boolean
   decorative?: boolean
   size?: ProviderLogoSize
@@ -37,12 +38,19 @@ export function ProviderLogo({
   providerId,
   baseUrl,
   modelId,
+  identityPriority = 'provider',
   active = false,
   decorative = false,
   size = 'lg',
   className = '',
 }: ProviderLogoProps) {
-  const identity = resolveProviderIdentity({ providerId, name, baseUrl, modelId })
+  const identity = resolveProviderIdentity({
+    providerId,
+    name,
+    baseUrl,
+    modelId,
+    identityPriority,
+  })
   const label = name.trim() || identity.label
   const [assetFailed, setAssetFailed] = useState(false)
   const usesAsset = Boolean(identity.assetSrc) && !assetFailed

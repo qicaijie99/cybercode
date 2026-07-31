@@ -33,6 +33,8 @@ export type WebSessionModel = {
   label: string
 }
 
+export type WebSessionCredentialSource = 'cookies' | 'local-storage' | 'network'
+
 export type WebSessionProviderDefinition = {
   id: WebSessionProviderId
   names: Record<WebSessionLocale, string>
@@ -44,6 +46,7 @@ export type WebSessionProviderDefinition = {
   credentialName: string
   credentialPlaceholder: string
   acceptsFullCookieHeader: boolean
+  credentialSource?: WebSessionCredentialSource
   freeTier: boolean
 }
 
@@ -129,6 +132,7 @@ export const WEB_SESSION_PROVIDERS: readonly WebSessionProviderDefinition[] = [
     credentialName: 'userToken',
     credentialPlaceholder: 'Paste userToken from Local Storage',
     acceptsFullCookieHeader: false,
+    credentialSource: 'local-storage',
     freeTier: true,
   },
   {
@@ -185,6 +189,7 @@ export const WEB_SESSION_PROVIDERS: readonly WebSessionProviderDefinition[] = [
     credentialName: 'access_token',
     credentialPlaceholder: 'access_token=...',
     acceptsFullCookieHeader: false,
+    credentialSource: 'network',
     freeTier: true,
   },
   {
@@ -404,6 +409,7 @@ export const WEB_SESSION_PROVIDERS: readonly WebSessionProviderDefinition[] = [
     credentialName: 'access_token + chathubPath',
     credentialPlaceholder: 'access_token=...; chathubPath=...',
     acceptsFullCookieHeader: false,
+    credentialSource: 'network',
     freeTier: false,
   },
   {
@@ -455,6 +461,7 @@ export const WEB_SESSION_PROVIDERS: readonly WebSessionProviderDefinition[] = [
     credentialName: 'token + email',
     credentialPlaceholder: 'token_value user@example.com',
     acceptsFullCookieHeader: false,
+    credentialSource: 'cookies',
     freeTier: false,
   },
   {
@@ -506,4 +513,11 @@ export function getWebSessionProviderName(
 ): string {
   const normalized = locale === 'zh-CN' ? 'zh' : locale.split('-')[0]
   return provider.names[normalized as WebSessionLocale] ?? provider.names.en
+}
+
+export function getWebSessionCredentialSource(
+  provider: WebSessionProviderDefinition,
+): WebSessionCredentialSource {
+  if (provider.credentialSource) return provider.credentialSource
+  return provider.credentialKind === 'cookie' ? 'cookies' : 'network'
 }

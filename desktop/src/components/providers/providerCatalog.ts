@@ -134,10 +134,17 @@ export function isNoAuthProviderPreset(
   return NO_AUTH_PROVIDER_SET.has(preset.id)
 }
 
-export function isLocalOrCustomProviderPreset(preset: ProviderCatalogPreset): boolean {
+export function isCustomProviderPreset(
+  preset: Pick<ProviderCatalogPreset, 'id'>,
+): boolean {
+  return preset.id === 'custom'
+}
+
+export function isLocalProviderPreset(preset: ProviderCatalogPreset): boolean {
   return (
-    (!preset.needsApiKey && !isNoAuthProviderPreset(preset)) ||
-    preset.id === 'custom'
+    !preset.needsApiKey &&
+    !isNoAuthProviderPreset(preset) &&
+    !isCustomProviderPreset(preset)
   )
 }
 

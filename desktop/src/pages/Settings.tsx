@@ -8,7 +8,7 @@ import { ConfirmDialog } from '../components/shared/ConfirmDialog'
 import { Input } from '../components/shared/Input'
 import { Textarea } from '../components/shared/Textarea'
 import { Button } from '../components/shared/Button'
-import { Dropdown } from '../components/shared/Dropdown'
+import { SelectField } from '../components/shared/SelectField'
 import type { PermissionMode, EffortLevel, ThemeMode } from '../types/settings'
 import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, ApiFormat, ModelContextWindows, ImageSupportMode, ProviderModelInfo, ProviderModelSyncState } from '../types/provider'
 import type { ProviderPreset, ProviderModelOption } from '../types/providerPreset'
@@ -61,7 +61,8 @@ import {
   inferProviderPresetId,
   isAggregatorGatewayPreset,
   isApiKeyProviderPreset,
-  isLocalOrCustomProviderPreset,
+  isCustomProviderPreset,
+  isLocalProviderPreset,
   isNoAuthProviderPreset,
 } from '../components/providers/providerCatalog'
 import {
@@ -377,28 +378,30 @@ export function ProviderSettings() {
     ? providerRows.find((row) => row.key === selectedProviderCatalogKey) ?? null
     : null
   const normalizedSourceQuery = normalizeProviderSearchQuery(sourceQuery)
+  const customProviderCatalogRows = providerRows
+    .filter((row) => row.variants.some(({ preset }) => isCustomProviderPreset(preset)))
   const apiKeyProviderCatalogRows = providerRows
-    .filter((row) => row.variants.some(({ preset, providers: configuredProviders }) => (
-      (
-        isApiKeyProviderPreset(preset) ||
-        configuredProviders.some((provider) => isRemoteCustomProvider(preset, provider))
-      ) &&
+    .filter((row) => row.variants.some(({ preset }) => (
+      isApiKeyProviderPreset(preset) &&
       !isAggregatorGatewayPreset(preset)
     )))
   const aggregatorGatewayCatalogRows = providerRows
     .filter((row) => row.variants.some(({ preset }) => isAggregatorGatewayPreset(preset)))
   const noAuthProviderCatalogRows = providerRows
     .filter((row) => row.variants.some(({ preset }) => isNoAuthProviderPreset(preset)))
-  const localAndCustomProviderCatalogRows = providerRows
-    .filter((row) => row.variants.some(({ preset, providers: configuredProviders }) => (
-      isLocalOrCustomProviderPreset(preset) &&
-      (
-        configuredProviders.length === 0 ||
-        configuredProviders.some((provider) => !isRemoteCustomProvider(preset, provider))
-      )
-    )))
+  const localProviderCatalogRows = providerRows
+    .filter((row) => row.variants.some(({ preset }) => isLocalProviderPreset(preset)))
 
   const mostRelevantProviderKeys = selectMostRelevantProviderResults([
+    ...customProviderCatalogRows.map((row) => ({
+      key: getProviderSearchResultKey('custom', row.key),
+      score: providerCatalogRowFilterScore(
+        row,
+        'custom',
+        normalizedSourceQuery,
+        sourceFilters,
+      ),
+    })),
     ...apiKeyProviderCatalogRows.map((row) => ({
       key: getProviderSearchResultKey('api-key', row.key),
       score: providerCatalogRowFilterScore(
@@ -426,11 +429,11 @@ export function ProviderSettings() {
         sourceFilters,
       ),
     })),
-    ...localAndCustomProviderCatalogRows.map((row) => ({
-      key: getProviderSearchResultKey('local-custom', row.key),
+    ...localProviderCatalogRows.map((row) => ({
+      key: getProviderSearchResultKey('local', row.key),
       score: providerCatalogRowFilterScore(
         row,
-        'local-custom',
+        'local',
         normalizedSourceQuery,
         sourceFilters,
       ),
@@ -487,6 +490,12 @@ export function ProviderSettings() {
         : compareWithoutSearch(left.row, right.row)
     ))
     .map(({ row }) => row)
+  const customProviderRows = rankProviderRows(
+    customProviderCatalogRows,
+    'custom',
+    'custom',
+    () => 0,
+  )
   const apiKeyProviderRows = rankProviderRows(
     apiKeyProviderCatalogRows,
     'api-key',
@@ -505,10 +514,10 @@ export function ProviderSettings() {
     'no-auth',
     () => 0,
   )
-  const localAndCustomProviderRows = rankProviderRows(
-    localAndCustomProviderCatalogRows,
-    'local-custom',
-    'local-custom',
+  const localProviderRows = rankProviderRows(
+    localProviderCatalogRows,
+    'local',
+    'local',
     () => 0,
   )
   const configuredAggregatorGatewayCount = new Set(
@@ -755,11 +764,12 @@ export function ProviderSettings() {
   const activeSourceFilterCount = countProviderCatalogFilters(sourceFilters)
   const hasSourceCriteria = normalizedSourceQuery.length > 0 || activeSourceFilterCount > 0
   const visibleProviderCount = (
+    customProviderRows.length +
     apiKeyProviderRows.length +
     aggregatorGatewayRows.length +
     filteredOAuthProviders.length +
     noAuthProviderRows.length +
-    localAndCustomProviderRows.length +
+    localProviderRows.length +
     filteredWebSessionProviders.length +
     filteredMediaProviders.length
   )
@@ -894,16 +904,15 @@ export function ProviderSettings() {
 
   return (
     <SettingsPage layout="workspace">
-      <div className="provider-settings-layout grid min-h-0 gap-[24px] lg:grid-cols-[200px_minmax(0,1fr)]">
+      <div className="provider-settings-layout grid min-h-0 gap-[18px]">
         <aside
           aria-label={t('settings.routing.centerTabs')}
-          className="min-w-0 lg:sticky lg:top-0 lg:self-start lg:border-r lg:border-[var(--color-border-separator)] lg:pr-[18px]"
+          className="provider-settings-sidebar min-w-0"
         >
           <nav
             role="tablist"
-            aria-orientation="vertical"
             aria-label={t('settings.routing.centerTabs')}
-            className="provider-settings-nav grid grid-cols-2 gap-[6px] lg:flex lg:flex-col"
+            className="provider-settings-nav grid min-w-0 grid-cols-4 gap-[6px]"
           >
             {(['sources', 'routing', 'node', 'status'] as const).map((view) => (
               <button
@@ -924,7 +933,7 @@ export function ProviderSettings() {
           </nav>
         </aside>
 
-        <main className="min-w-0">
+        <main className="provider-settings-main min-w-0">
           {providerView === 'sources' && (isInitialLoading ? (
             <div className="flex justify-center py-10">
               <Icon name="loading" size={24} className="animate-spin text-[var(--color-text-tertiary)]" />
@@ -950,12 +959,13 @@ export function ProviderSettings() {
                     cost: t('settings.routing.providerSearch.cost'),
                     modality: t('settings.routing.providerSearch.modality'),
                     authOptions: {
+                      custom: t('settings.routing.providerSearch.auth.custom'),
                       'api-key': t('settings.routing.providerSearch.auth.apiKey'),
                       oauth: t('settings.routing.providerSearch.auth.oauth'),
                       aggregator: t('settings.routing.providerSearch.auth.aggregator'),
                       'no-auth': t('settings.routing.providerSearch.auth.noAuth'),
                       'web-session': t('settings.routing.providerSearch.auth.webSession'),
-                      'local-custom': t('settings.routing.providerSearch.auth.localCustom'),
+                      local: t('settings.routing.providerSearch.auth.local'),
                     },
                     costOptions: {
                       paid: t('settings.routing.providerSearch.cost.paid'),
@@ -998,6 +1008,40 @@ export function ProviderSettings() {
                 </div>
               )}
 
+              {(!hasSourceCriteria || customProviderRows.length > 0) && (
+                <section
+                  aria-labelledby="custom-provider-catalog-title"
+                  className="border-t border-[var(--color-border-separator)] pt-[18px]"
+                >
+                  <div className="mb-[12px] min-w-0">
+                    <div className="flex items-center gap-[7px]">
+                      <h2
+                        id="custom-provider-catalog-title"
+                        className="text-[15px] font-semibold text-[var(--color-text-primary)]"
+                      >
+                        {t('settings.routing.customProviders.title')}
+                      </h2>
+                      <span className="text-[12px] font-semibold text-[#1473e6] dark:text-[#68adff]">
+                        {t('settings.routing.customProviders.count', {
+                          count: String(customProviderRows.length),
+                        })}
+                      </span>
+                    </div>
+                    <p className="mt-[3px] text-[12px] leading-[1.55] text-[var(--color-text-secondary)]">
+                      {t('settings.routing.customProviders.description')}
+                    </p>
+                  </div>
+
+                  <div
+                    data-provider-catalog="custom"
+                    data-provider-catalog-layout="comfortable"
+                    className="provider-catalog-grid grid gap-[9px]"
+                  >
+                    {customProviderRows.map(renderProviderRow)}
+                  </div>
+                </section>
+              )}
+
               {(!hasSourceCriteria || apiKeyProviderRows.length > 0) && (
               <section
                 aria-labelledby="api-key-provider-catalog-title"
@@ -1027,7 +1071,7 @@ export function ProviderSettings() {
                 <div
                   data-provider-catalog="api-key"
                   data-provider-catalog-layout="comfortable"
-                  className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                  className="provider-catalog-grid grid gap-[9px]"
                 >
                   {apiKeyProviderRows.map(renderProviderRow)}
                   {apiKeyProviderRows.length === 0 && (
@@ -1071,7 +1115,7 @@ export function ProviderSettings() {
                 <div
                   data-provider-catalog="aggregators-gateways"
                   data-provider-catalog-layout="comfortable"
-                  className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                  className="provider-catalog-grid grid gap-[9px]"
                 >
                   {aggregatorGatewayRows.map(renderProviderRow)}
                   {aggregatorGatewayRows.length === 0 && (
@@ -1136,14 +1180,14 @@ export function ProviderSettings() {
                   <div
                     data-provider-catalog="no-auth"
                     data-provider-catalog-layout="comfortable"
-                    className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                    className="provider-catalog-grid grid gap-[9px]"
                   >
                     {noAuthProviderRows.map(renderProviderRow)}
                   </div>
                 </section>
               )}
 
-              {(!hasSourceCriteria || localAndCustomProviderRows.length > 0) && (
+              {(!hasSourceCriteria || localProviderRows.length > 0) && (
                 <section
                   aria-labelledby="local-provider-catalog-title"
                   className="border-t border-[var(--color-border-separator)] pt-[18px]"
@@ -1158,7 +1202,7 @@ export function ProviderSettings() {
                       </h2>
                       <span className="text-[12px] font-semibold text-[#1473e6] dark:text-[#68adff]">
                         {t('settings.routing.localProviders.count', {
-                          count: String(localAndCustomProviderRows.length),
+                          count: String(localProviderRows.length),
                         })}
                       </span>
                     </div>
@@ -1168,11 +1212,11 @@ export function ProviderSettings() {
                   </div>
 
                   <div
-                    data-provider-catalog="local-custom"
+                    data-provider-catalog="local"
                     data-provider-catalog-layout="comfortable"
-                    className="grid grid-cols-1 gap-[9px] sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                    className="provider-catalog-grid grid gap-[9px]"
                   >
-                    {localAndCustomProviderRows.map(renderProviderRow)}
+                    {localProviderRows.map(renderProviderRow)}
                   </div>
                 </section>
               )}
@@ -1335,6 +1379,25 @@ export function ProviderSettings() {
           compatibilityNote: t('settings.routing.webSessionDialog.compatibilityNote'),
           saveFailed: t('settings.routing.webSessionDialog.saveFailed'),
           testPassed: t('settings.routing.webSessionProviders.testPassed'),
+          howToGet: t('settings.routing.webSessionDialog.howToGet'),
+          hideGuide: t('settings.routing.webSessionDialog.hideGuide'),
+          exactCredential: t('settings.routing.webSessionDialog.exactCredential'),
+          credentialExample: t('settings.routing.webSessionDialog.credentialExample'),
+          stepLogin: t('settings.routing.webSessionDialog.stepLogin'),
+          stepLoginBody: t('settings.routing.webSessionDialog.stepLoginBody'),
+          stepFind: t('settings.routing.webSessionDialog.stepFind'),
+          findCookiesBody: t('settings.routing.webSessionDialog.findCookiesBody'),
+          findCookieValueBody: t('settings.routing.webSessionDialog.findCookieValueBody'),
+          findLocalStorageBody: t('settings.routing.webSessionDialog.findLocalStorageBody'),
+          findNetworkBody: t('settings.routing.webSessionDialog.findNetworkBody'),
+          stepCopy: t('settings.routing.webSessionDialog.stepCopy'),
+          copyCookieBody: t('settings.routing.webSessionDialog.copyCookieBody'),
+          copyTokenBody: t('settings.routing.webSessionDialog.copyTokenBody'),
+          securityNote: t('settings.routing.webSessionDialog.securityNote'),
+          importClipboard: t('settings.routing.webSessionDialog.importClipboard'),
+          clipboardImported: t('settings.routing.webSessionDialog.clipboardImported'),
+          clipboardEmpty: t('settings.routing.webSessionDialog.clipboardEmpty'),
+          clipboardDenied: t('settings.routing.webSessionDialog.clipboardDenied'),
         }}
       />
 
@@ -1623,7 +1686,7 @@ function getMediaProviderFilterCandidate(
   const auth: ProviderAuthFilter = provider.connectionMode === 'none'
     ? 'no-auth'
     : provider.connectionMode === 'local'
-      ? 'local-custom'
+      ? 'local'
       : 'api-key'
   const fallbackCost: SourceCostClass = (
     provider.connectionMode === 'none' || provider.connectionMode === 'local'
@@ -1651,20 +1714,6 @@ function getMediaProviderFilterCandidate(
     auth: [auth],
     costs: sharedCosts.length > 0 ? sharedCosts : [fallbackCost],
     modalities: [provider.kind],
-  }
-}
-
-function isRemoteCustomProvider(
-  preset: ProviderPreset,
-  provider?: SavedProvider,
-): boolean {
-  if (preset.id !== 'custom' || !provider?.baseUrl) return false
-
-  try {
-    const hostname = new URL(provider.baseUrl).hostname.toLowerCase()
-    return !['localhost', '127.0.0.1', '::1'].includes(hostname)
-  } catch {
-    return true
   }
 }
 
@@ -2304,7 +2353,7 @@ function ModelIdInput({
         {hasOptions && open && (
           <div
             role="listbox"
-            className="absolute left-0 right-0 z-50 mt-1.5 max-h-[272px] overflow-y-auto rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-background)] py-1 shadow-[var(--shadow-dropdown)] animate-slide-down"
+            className="absolute left-0 right-0 z-50 mt-1.5 max-h-[272px] overflow-y-auto rounded-[8px] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-lowest)] p-[5px] shadow-[var(--shadow-dropdown)] animate-slide-down"
           >
             {visibleOptions.map((option) => {
               const selected = option.id === value
@@ -2321,7 +2370,7 @@ function ModelIdInput({
                     setOpen(false)
                   }}
                   className={`
-                    flex min-h-[42px] w-full items-center gap-2 px-3 py-2 text-left transition-colors
+                    flex min-h-[42px] w-full items-center gap-[10px] rounded-[6px] px-[10px] py-[7px] text-left transition-colors
                     hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none
                     ${selected ? 'bg-[var(--color-surface-selected)]' : ''}
                   `}
@@ -2341,7 +2390,7 @@ function ModelIdInput({
                       {contextLabel}
                     </span>
                   )}
-                  {selected && <Icon name="check" size={14} className="shrink-0 text-[var(--color-text-secondary)]" />}
+                  {selected && <Icon name="check" size={14} className="shrink-0 text-[#1473e6] dark:text-[#68adff]" />}
                 </button>
               )
             })}
@@ -3010,22 +3059,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
               {/* API Format */}
               {(isCustom || mode === 'edit') ? (
                 <div>
-                  <label className="text-[14px] font-medium text-[var(--color-text-primary)] mb-1 block">{t('settings.providers.apiFormat')}</label>
-                  <Dropdown<ApiFormat>
-                    items={apiFormatItems}
+                  <SelectField<ApiFormat>
+                    label={t('settings.providers.apiFormat')}
+                    options={apiFormatItems}
                     value={apiFormat}
                     onChange={setApiFormat}
-                    width="100%"
-                    className="block w-full"
-                    trigger={
-                      <button
-                        type="button"
-                        className="flex h-[40px] w-full items-center gap-[12px] rounded-[10px] border border-[var(--color-border)] bg-white px-[14px] text-left text-[13px] font-medium text-[var(--color-text-primary)] outline-none transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-container-low)] focus-visible:border-[var(--color-border-focus)] focus-visible:shadow-[var(--shadow-focus-ring)] dark:bg-[var(--color-surface-container-low)]"
-                      >
-                        <span className="min-w-0 flex-1 truncate">{selectedApiFormatLabel}</span>
-                        <Icon name="expand_more" size={18} className="flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]" />
-                      </button>
-                    }
                   />
                   {apiFormat !== 'anthropic' && (
                     <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.proxyHint')}</p>

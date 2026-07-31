@@ -172,6 +172,22 @@ describe('ProviderLogo', () => {
     }).id).toBe('github-models')
   })
 
+  it('can prefer a recognized model brand while retaining the provider fallback', () => {
+    expect(resolveProviderIdentity({
+      providerId: 'anthropic-api',
+      name: 'Claude-compatible gateway',
+      modelId: 'deepseek-v4-pro',
+      identityPriority: 'model',
+    }).id).toBe('deepseek')
+
+    expect(resolveProviderIdentity({
+      providerId: 'qianfan',
+      name: 'Baidu Qianfan',
+      modelId: 'private-coding-model',
+      identityPriority: 'model',
+    }).id).toBe('qianfan')
+  })
+
   it('renders unknown custom providers as generated monograms', () => {
     render(<ProviderLogo name="Acme Lab" providerId="custom" />)
 

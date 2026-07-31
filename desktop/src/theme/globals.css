@@ -1424,6 +1424,180 @@ button, input, textarea, select, a, [role="button"] {
   }
 }
 
+/* Provider workspaces respond to the drawer's usable width, not the outer
+   browser viewport that still includes both app rails. */
+.provider-settings-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.provider-settings-nav {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.provider-catalog-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+}
+
+.provider-catalog-toolbar-search {
+  min-width: min(100%, 280px);
+}
+
+.provider-catalog-filter-popover {
+  max-height: min(560px, calc(100dvh - 200px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.gateway-node-header {
+  align-items: stretch;
+}
+
+.gateway-key-table-header {
+  display: none;
+}
+
+.gateway-key-table-metric {
+  display: none;
+}
+
+.gateway-key-table-mobile-summary {
+  display: block;
+}
+
+.gateway-target-policy-primary,
+.gateway-target-policy-access,
+.gateway-connection-builder-controls,
+.gateway-node-connection-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.routing-metric:nth-child(n + 3) {
+  border-top: 1px solid var(--color-border-separator);
+}
+
+.routing-metric:nth-child(2n) {
+  border-left: 1px solid var(--color-border-separator);
+}
+
+@container settings-content (min-width: 560px) {
+  .gateway-connection-builder-controls {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .gateway-node-connection-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .gateway-node-connection-wide {
+    grid-column: 1 / -1;
+  }
+}
+
+@container settings-content (min-width: 640px) {
+  .gateway-node-header {
+    flex-direction: row !important;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .gateway-node-header-actions {
+    align-self: auto !important;
+  }
+}
+
+@container settings-content (min-width: 700px) {
+  .routing-global-header,
+  .routing-routes-header,
+  .routing-route-item {
+    padding-inline: 20px !important;
+  }
+
+  .routing-route-layout {
+    flex-direction: row !important;
+    align-items: center;
+  }
+
+  .routing-route-actions {
+    justify-content: flex-end;
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+
+@container settings-content (min-width: 740px) {
+  .gateway-key-table-header {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.4fr) 100px 130px 124px;
+  }
+
+  .gateway-key-table-row {
+    grid-template-columns: minmax(220px, 1.4fr) 100px 130px 124px !important;
+    gap: 12px !important;
+  }
+
+  .gateway-key-table-metric {
+    display: block;
+  }
+
+  .gateway-key-table-mobile-summary {
+    display: none;
+  }
+
+  .gateway-target-policy-primary {
+    grid-template-columns: minmax(0, 1fr) 220px;
+  }
+
+  .gateway-target-policy-default {
+    border-right: 1px solid var(--color-border-separator);
+  }
+
+  .gateway-target-policy-limit {
+    border-top: 0;
+  }
+
+  .gateway-target-policy-access {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .gateway-target-policy-access-secondary {
+    border-top: 0;
+    border-left: 1px solid var(--color-border-separator);
+  }
+
+  .routing-metrics-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .routing-metric {
+    border-top: 0 !important;
+    border-left: 0 !important;
+  }
+
+  .routing-metric:nth-child(n + 2) {
+    border-left: 1px solid var(--color-border-separator) !important;
+  }
+}
+
+@container settings-content (min-width: 960px) {
+  .provider-settings-layout {
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: 24px !important;
+  }
+
+  .provider-settings-sidebar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    border-right: 1px solid var(--color-border-separator);
+    padding-right: 18px;
+  }
+
+  .provider-settings-nav {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
 /* Child workspaces respond to their own usable width. This matters when the
    app rails consume part of a narrow desktop window. */
 @container settings-content (max-width: 620px) {
@@ -1479,13 +1653,6 @@ button, input, textarea, select, a, [role="button"] {
     gap: 12px !important;
   }
 
-  .provider-settings-nav {
-    grid-template-columns: repeat(4, minmax(104px, 1fr)) !important;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    padding-bottom: 2px;
-  }
-
   .provider-settings-nav > button {
     min-height: 42px !important;
   }
@@ -1521,6 +1688,22 @@ button, input, textarea, select, a, [role="button"] {
   .optimizer-row-controls {
     grid-column: 3 !important;
     grid-row: 1 !important;
+  }
+}
+
+@container settings-content (max-width: 520px) {
+  .provider-settings-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .provider-catalog-toolbar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .provider-catalog-filter-popover {
+    width: 100%;
+    max-height: min(440px, calc(100dvh - 280px));
   }
 }
 

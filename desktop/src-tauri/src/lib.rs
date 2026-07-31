@@ -1632,6 +1632,13 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
             None
         }
     };
+    let computer_use_runtime_root = app
+        .path()
+        .resource_dir()
+        .map_err(|err| format!("resolve Computer Use runtime resources: {err}"))?
+        .join("resources")
+        .join("computer-use-runtime");
+    let computer_use_runtime_root_arg = computer_use_runtime_root.to_string_lossy().to_string();
 
     // 单一合并 sidecar：第一个参数选 server / cli / adapters 模式。
     let mut sidecar = app
@@ -1646,7 +1653,8 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
         .env("CYBERCODE_DESKTOP_PARENT_WATCH", "1")
         .env("CYBER_CODEGRAPH_ASSET_DIR", &codegraph_asset_dir_arg)
         .env("CYBER_RTK_PATH", &rtk_binary_arg)
-        .env("CYBER_AGENT_BROWSER_PATH", &agent_browser_binary_arg);
+        .env("CYBER_AGENT_BROWSER_PATH", &agent_browser_binary_arg)
+        .env("CYBER_COMPUTER_USE_RUNTIME_ROOT", &computer_use_runtime_root_arg);
     if let Some(computer_use_helper) = computer_use_helper {
         sidecar = sidecar.env(
             "CYBER_COMPUTER_USE_HELPER_PATH",

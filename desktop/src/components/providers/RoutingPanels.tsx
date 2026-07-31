@@ -208,7 +208,7 @@ export function SmartRoutingPanel({
   return (
     <div className="flex flex-col gap-[14px]">
       <section className="overflow-hidden rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
-        <header className="flex min-h-[76px] items-center justify-between gap-[18px] px-[18px] py-[14px] sm:px-[20px]">
+        <header className="routing-global-header flex min-h-[76px] items-center justify-between gap-[18px] px-[18px] py-[14px]">
           <div className="min-w-0">
             <h2 className="text-[16px] font-bold text-[var(--color-text-primary)]">
               {t('settings.routing.global')}
@@ -236,7 +236,7 @@ export function SmartRoutingPanel({
       </section>
 
       <section className="overflow-hidden rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
-        <header className="flex min-h-[68px] items-center justify-between gap-[14px] border-b border-[var(--color-border-separator)] px-[18px] py-[12px] sm:px-[20px]">
+        <header className="routing-routes-header flex min-h-[68px] items-center justify-between gap-[14px] border-b border-[var(--color-border-separator)] px-[18px] py-[12px]">
           <div className="min-w-0">
             <h3 className="text-[13px] font-bold text-[var(--color-text-primary)]">
               {t('settings.routing.myRoutes')}
@@ -373,8 +373,8 @@ function RouteListItem({
   })
 
   return (
-    <article className={`px-[16px] py-[15px] sm:px-[20px] ${profile.enabled ? '' : 'opacity-60'}`}>
-      <div className="flex flex-col gap-[13px] sm:flex-row sm:items-center">
+    <article className={`routing-route-item px-[16px] py-[15px] ${profile.enabled ? '' : 'opacity-60'}`}>
+      <div className="routing-route-layout flex flex-col gap-[13px]">
         <div className="flex min-w-0 flex-1 items-start gap-[11px]">
           <span className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-surface-container-high)] text-[var(--color-text-secondary)]">
             <Route size={17} />
@@ -404,6 +404,8 @@ function RouteListItem({
                         key={`${target.providerId}:${modelId}:${index}`}
                         name={source?.name ?? target.providerId}
                         providerId={source?.presetId}
+                        modelId={modelId}
+                        identityPriority="model"
                         size="xs"
                         decorative
                       />
@@ -429,7 +431,7 @@ function RouteListItem({
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center justify-between gap-[8px] border-t border-[var(--color-border-separator)] pt-[10px] sm:justify-end sm:border-t-0 sm:pt-0">
+        <div className="routing-route-actions flex shrink-0 items-center justify-between gap-[8px] border-t border-[var(--color-border-separator)] pt-[10px]">
           <div className="flex items-center gap-[2px]">
             <RouteActionButton label={t('settings.routing.editRoute')} onClick={onEdit}>
               <Pencil size={14} />
@@ -543,11 +545,11 @@ export function RoutingStatusPanel() {
 
   return (
     <div className="flex flex-col gap-[16px]">
-      <div className="grid grid-cols-2 overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container)] md:grid-cols-4">
+      <div className="routing-metrics-grid grid grid-cols-2 overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container)]">
         <Metric icon={Activity} label={t('settings.routing.metric.requests')} value={String(summary.requests)} />
-        <Metric icon={Check} label={t('settings.routing.metric.success')} value={`${summary.successRate}%`} divided />
-        <Metric icon={Gauge} label={t('settings.routing.metric.latency')} value={summary.latency ? `${summary.latency} ms` : '-'} divided />
-        <Metric icon={ShieldCheck} label={t('settings.routing.metric.available')} value={String(summary.active)} divided />
+        <Metric icon={Check} label={t('settings.routing.metric.success')} value={`${summary.successRate}%`} />
+        <Metric icon={Gauge} label={t('settings.routing.metric.latency')} value={summary.latency ? `${summary.latency} ms` : '-'} />
+        <Metric icon={ShieldCheck} label={t('settings.routing.metric.available')} value={String(summary.active)} />
       </div>
 
       <SettingsSection
@@ -615,15 +617,13 @@ function Metric({
   icon: MetricIcon,
   label,
   value,
-  divided,
 }: {
   icon: typeof Activity
   label: string
   value: string
-  divided?: boolean
 }) {
   return (
-    <div className={`flex min-h-[82px] items-center gap-[12px] px-[16px] ${divided ? 'border-l border-[var(--color-border-separator)]' : ''}`}>
+    <div className="routing-metric flex min-h-[82px] min-w-0 items-center gap-[12px] px-[16px]">
       <MetricIcon size={17} className="shrink-0 text-[var(--color-text-tertiary)]" />
       <div className="min-w-0">
         <div className="text-[18px] font-bold text-[var(--color-text-primary)]">{value}</div>

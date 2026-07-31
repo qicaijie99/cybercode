@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
+  ChevronRight,
+  ClipboardPaste,
   ExternalLink,
   KeyRound,
   Link2Off,
@@ -9,6 +12,7 @@ import {
   Star,
 } from 'lucide-react'
 import {
+  getWebSessionCredentialSource,
   getWebSessionProviderName,
   type WebSessionProviderDefinition,
 } from '../../../../src/shared/webSessionProviders'
@@ -21,6 +25,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { openExternalUrl } from '../../lib/openExternalUrl'
 import { Button } from '../shared/Button'
 import { Modal } from '../shared/Modal'
+import { SelectField } from '../shared/SelectField'
 import { Textarea } from '../shared/Textarea'
 import { ProviderLogo } from './ProviderLogo'
 
@@ -47,7 +52,67 @@ type Props = {
     compatibilityNote: string
     saveFailed: string
     testPassed: string
+    howToGet: string
+    hideGuide: string
+    exactCredential: string
+    credentialExample: string
+    stepLogin: string
+    stepLoginBody: string
+    stepFind: string
+    findCookiesBody: string
+    findCookieValueBody: string
+    findLocalStorageBody: string
+    findNetworkBody: string
+    stepCopy: string
+    copyCookieBody: string
+    copyTokenBody: string
+    securityNote: string
+    importClipboard: string
+    clipboardImported: string
+    clipboardEmpty: string
+    clipboardDenied: string
   }
+}
+
+function formatLabel(
+  template: string,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (result, [key, value]) => result.replaceAll(`{${key}}`, value),
+    template,
+  )
+}
+
+function stripMatchingQuotes(value: string): string {
+  const first = value[0]
+  const last = value[value.length - 1]
+  if (value.length >= 2 && first === last && (first === '"' || first === "'")) {
+    return value.slice(1, -1).trim()
+  }
+  return value
+}
+
+export function normalizeWebSessionClipboardCredential(
+  provider: WebSessionProviderDefinition,
+  clipboardText: string,
+): string {
+  let value = clipboardText.trim()
+  if (!value) return ''
+
+  const source = getWebSessionCredentialSource(provider)
+  if (source === 'cookies') {
+    const headerMatch = value.match(/(?:^|\r?\n)\s*cookie\s*:\s*([^\r\n]+)/i)
+    value = headerMatch?.[1]?.trim() ?? value.replace(/^cookie\s*:\s*/i, '').trim()
+    return stripMatchingQuotes(value)
+  }
+
+  if (provider.id === 'deepseek-web') {
+    const assignment = value.match(/^userToken\s*[:=]\s*(.+)$/is)
+    if (assignment?.[1]) value = assignment[1].trim()
+  }
+
+  return stripMatchingQuotes(value)
 }
 
 export function WebSessionProviderDialog({
@@ -67,6 +132,7 @@ export function WebSessionProviderDialog({
   const [isDisconnecting, setIsDisconnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [guideOpen, setGuideOpen] = useState(!status?.connected)
 
   useEffect(() => {
     setCredential('')
@@ -75,9 +141,29 @@ export function WebSessionProviderDialog({
     setSuccess(null)
   }, [provider?.id, provider?.defaultModel, status?.modelId])
 
+  useEffect(() => {
+    setGuideOpen(!status?.connected)
+  }, [provider?.id, status?.connected])
+
   if (!provider) return null
 
   const displayName = getWebSessionProviderName(provider, locale)
+  const credentialSource = getWebSessionCredentialSource(provider)
+  const findCredentialBody = credentialSource === 'cookies'
+    ? provider.acceptsFullCookieHeader
+      ? labels.findCookiesBody
+      : labels.findCookieValueBody
+    : credentialSource === 'local-storage'
+      ? labels.findLocalStorageBody
+      : labels.findNetworkBody
+  const copyCredentialBody = credentialSource === 'cookies'
+    && provider.acceptsFullCookieHeader
+    ? labels.copyCookieBody
+    : labels.copyTokenBody
+  const guideValues = {
+    provider: displayName,
+    credential: provider.credentialName,
+  }
 
   const save = async () => {
     setIsSaving(true)
@@ -141,8 +227,32 @@ export function WebSessionProviderDialog({
     }
   }
 
+  const importFromClipboard = async () => {
+    setError(null)
+    setSuccess(null)
+    if (!navigator.clipboard?.readText) {
+      setError(labels.clipboardDenied)
+      return
+    }
+    try {
+      const clipboardText = await navigator.clipboard.readText()
+      const normalized = normalizeWebSessionClipboardCredential(
+        provider,
+        clipboardText ?? '',
+      )
+      if (!normalized) {
+        setError(labels.clipboardEmpty)
+        return
+      }
+      setCredential(normalized)
+      setSuccess(labels.clipboardImported)
+    } catch {
+      setError(labels.clipboardDenied)
+    }
+  }
+
   return (
-    <Modal open onClose={onClose} title={displayName} width={520}>
+    <Modal open onClose={onClose} title={displayName} width={600}>
       <div className="flex flex-col gap-[18px]">
         <div className="flex items-center gap-[12px]">
           <ProviderLogo
@@ -201,22 +311,82 @@ export function WebSessionProviderDialog({
           </div>
         </div>
 
-        <label className="flex flex-col gap-[6px]">
-          <span className="text-[12px] font-bold text-[var(--color-text-primary)]">
-            {labels.model}
-          </span>
-          <select
-            value={modelId}
-            onChange={(event) => setModelId(event.target.value)}
-            className="h-[40px] rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[11px] text-[12px] font-medium text-[var(--color-text-primary)] outline-none focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
+        <section className="border-y border-[var(--color-border-separator)] py-[2px]">
+          <button
+            type="button"
+            aria-expanded={guideOpen}
+            aria-label={guideOpen ? labels.hideGuide : labels.howToGet}
+            title={guideOpen ? labels.hideGuide : labels.howToGet}
+            onClick={() => setGuideOpen((open) => !open)}
+            className="flex min-h-[42px] w-full items-center gap-[8px] text-left text-[12px] font-bold text-[var(--color-text-primary)] transition-colors hover:text-[#1473e6] dark:hover:text-[#68adff]"
           >
-            {provider.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            {guideOpen
+              ? <ChevronDown size={15} aria-hidden="true" />
+              : <ChevronRight size={15} aria-hidden="true" />}
+            {labels.howToGet}
+          </button>
+
+          {guideOpen && (
+            <div className="pb-[14px] pl-[23px]">
+              <div className="grid gap-[5px] rounded-[6px] bg-[var(--color-surface-container-low)] px-[11px] py-[9px] text-[11px] sm:grid-cols-[auto_1fr]">
+                <span className="font-medium text-[var(--color-text-secondary)]">
+                  {labels.exactCredential}
+                </span>
+                <code className="min-w-0 break-all font-mono font-semibold text-[var(--color-text-primary)]">
+                  {provider.credentialName}
+                </code>
+                <span className="font-medium text-[var(--color-text-secondary)]">
+                  {labels.credentialExample}
+                </span>
+                <code className="min-w-0 break-all font-mono text-[var(--color-text-secondary)]">
+                  {provider.credentialPlaceholder}
+                </code>
+              </div>
+
+              <ol className="mt-[12px] grid gap-[10px]">
+                <li>
+                  <div className="text-[11px] font-bold text-[var(--color-text-primary)]">
+                    {labels.stepLogin}
+                  </div>
+                  <p className="mt-[2px] text-[11px] leading-[1.55] text-[var(--color-text-secondary)]">
+                    {formatLabel(labels.stepLoginBody, guideValues)}
+                  </p>
+                </li>
+                <li>
+                  <div className="text-[11px] font-bold text-[var(--color-text-primary)]">
+                    {labels.stepFind}
+                  </div>
+                  <p className="mt-[2px] text-[11px] leading-[1.55] text-[var(--color-text-secondary)]">
+                    {formatLabel(findCredentialBody, guideValues)}
+                  </p>
+                </li>
+                <li>
+                  <div className="text-[11px] font-bold text-[var(--color-text-primary)]">
+                    {labels.stepCopy}
+                  </div>
+                  <p className="mt-[2px] text-[11px] leading-[1.55] text-[var(--color-text-secondary)]">
+                    {copyCredentialBody}
+                  </p>
+                </li>
+              </ol>
+
+              <p className="mt-[11px] text-[10px] leading-[1.55] text-[var(--color-text-tertiary)]">
+                {labels.securityNote}
+              </p>
+            </div>
+          )}
+        </section>
+
+        <SelectField
+          label={labels.model}
+          value={modelId}
+          onChange={setModelId}
+          options={provider.models.map((model) => ({
+            value: model.id,
+            label: model.label,
+            ...(model.label !== model.id && { description: model.id }),
+          }))}
+        />
 
         <Textarea
           label={`${labels.credential} · ${provider.credentialName}`}
@@ -229,6 +399,18 @@ export function WebSessionProviderDialog({
           spellCheck={false}
           className="min-h-[112px] font-mono text-[11px]"
         />
+
+        <div className="-mt-[8px] flex justify-end">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            icon={<ClipboardPaste size={14} />}
+            onClick={() => void importFromClipboard()}
+          >
+            {labels.importClipboard}
+          </Button>
+        </div>
 
         {error && (
           <div role="alert" className="text-[11px] font-medium leading-[1.55] text-[var(--color-error)]">
