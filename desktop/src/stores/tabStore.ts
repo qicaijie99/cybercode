@@ -18,10 +18,11 @@ export type Tab = {
   title: string
   type: TabType
   status: 'idle' | 'running' | 'error'
+  unviewedCompleted?: boolean
 }
 
 type TabPersistence = {
-  openTabs: Array<{ sessionId: string; projectPath?: string; title: string; type?: TabType; status?: Tab['status'] }>
+  openTabs: Array<{ sessionId: string; projectPath?: string; title: string; type?: TabType; status?: Tab['status']; unviewedCompleted?: boolean }>
   activeTabId: string | null
 }
 
@@ -80,7 +81,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
     if (existing) {
       set({
         tabs: tabs.map((tab) =>
-          tab.sessionId === sessionId ? { ...tab, title, type, projectPath } : tab,
+          tab.sessionId === sessionId ? { ...tab, title, type, projectPath, unviewedCompleted: false } : tab,
         ),
         activeTabId: sessionId,
         recentSessionIds: newRecent,
@@ -149,6 +150,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
     set({
       activeTabId: sessionId,
       recentSessionIds: tab.type === 'session' ? addToRecent(recentSessionIds, sessionId) : recentSessionIds,
+      tabs: tabs.map((t) => t.sessionId === sessionId ? { ...t, unviewedCompleted: false } : t),
     })
     get().saveTabs()
   },
@@ -163,8 +165,17 @@ export const useTabStore = create<TabStore>((set, get) => ({
   },
 
   updateTabStatus: (sessionId, status) => {
+    const { activeTabId } = get()
     set((s) => ({
-      tabs: s.tabs.map((t) => (t.sessionId === sessionId ? { ...t, status } : t)),
+      tabs: s.tabs.map((t) => {
+        if (t.sessionId !== sessionId) return t
+        const unviewedCompleted = status === 'idle' && t.status === 'running' && t.sessionId !== activeTabId
+          ? true
+          : status === 'running'
+            ? false
+            : t.unviewedCompleted
+        return { ...t, status, unviewedCompleted }
+      }),
     }))
   },
 
@@ -217,6 +228,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
         title: tab.title,
         type: tab.type,
         status: tab.status,
+        unviewedCompleted: tab.unviewedCompleted,
       })),
       activeTabId: activeTabId && tabs.some((tab) => tab.sessionId === activeTabId)
         ? activeTabId
@@ -272,7 +284,8 @@ export const useTabStore = create<TabStore>((set, get) => ({
             projectPath: session?.projectPath ?? tab.projectPath,
             title: session ? getSessionDisplayTitle(session, t) : getSessionTitleText(tab.title, t),
             type: 'session',
-            status: tab.status || 'idle',
+            status: 'idle',
+            unviewedCompleted: tab.unviewedCompleted,
           }
         })
 
