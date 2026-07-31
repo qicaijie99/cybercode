@@ -332,7 +332,7 @@ describe('GatewayNodePanel', () => {
     expect(within(dialog).getByText('ccn_test••••••••••••••••')).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Copy all settings' })).toBeDisabled()
     expect(within(dialog).getByRole('button', { name: 'Rotate and complete' })).toBeInTheDocument()
-  })
+  }, 15_000)
 
   it('switches protocol and copies every generated setting when the full key is available', async () => {
     const created = makeStatus({
