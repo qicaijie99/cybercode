@@ -1,10 +1,18 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { prepareLinuxSidecarPackage } from './linuxSidecarPackaging'
 import { detectHostTriple, mapTargetTripleToBun } from './sidecarTarget'
 
 const desktopRoot = path.resolve(import.meta.dir, '..')
 const repoRoot = path.resolve(desktopRoot, '..')
 const binariesDir = path.join(desktopRoot, 'src-tauri', 'binaries')
+const sidecarResourcesDir = path.join(
+  desktopRoot,
+  'src-tauri',
+  'resources',
+  'sidecar',
+)
 
 const targetTriple =
   process.env.TAURI_ENV_TARGET_TRIPLE ||
@@ -14,6 +22,11 @@ const targetTriple =
 const bunTarget = mapTargetTripleToBun(targetTriple)
 
 await mkdir(binariesDir, { recursive: true })
+await mkdir(sidecarResourcesDir, { recursive: true })
+await Promise.all([
+  rm(path.join(sidecarResourcesDir, 'cybercode-sidecar.body'), { force: true }),
+  rm(path.join(sidecarResourcesDir, 'manifest.json'), { force: true }),
+])
 
 console.log('[build-sidecars] preparing native Computer Use helper...')
 const computerUseHelperPrepareProc = Bun.spawn(
@@ -111,12 +124,57 @@ if (scanExit !== 0) {
 // 单一合并 sidecar：server / cli 共享一份 bun runtime + 共享依赖代码。
 // 调用方（Tauri lib.rs / conversationService）通过第一个 positional 参数
 // 选择 'server' 或 'cli' 模式，详见 desktop/sidecars/cybercode-sidecar.ts。
-await compileExecutable({
-  entrypoint: path.join(desktopRoot, 'sidecars/cybercode-sidecar.ts'),
-  outfileBase: path.join(binariesDir, `cybercode-sidecar-${targetTriple}`),
-  productName: 'CyberCode Sidecar',
-  bunTarget,
-})
+const sidecarOutfileBase = path.join(
+  binariesDir,
+  `cybercode-sidecar-${targetTriple}`,
+)
+if (targetTriple.includes('-linux-')) {
+  // linuxdeploy 会向 Bun 的静态 ELF 写入 RPATH，随后 GTK 插件再次执行
+  // ldd 时崩溃。仅把 4 字节 ELF 头拆出，首启时由轻量 shell launcher
+  // 校验并恢复，既保留无感安装，也让 AppImage 打包器不会改写真实二进制。
+  const temporaryBuildDir = await mkdtemp(
+    path.join(tmpdir(), 'cybercode-sidecar-build-'),
+  )
+  try {
+    const compiledSidecar = await compileExecutable({
+      entrypoint: path.join(desktopRoot, 'sidecars/cybercode-sidecar.ts'),
+      outfileBase: path.join(temporaryBuildDir, 'cybercode-sidecar'),
+      productName: 'CyberCode Sidecar',
+      bunTarget,
+    })
+    const manifest = await prepareLinuxSidecarPackage({
+      executablePath: compiledSidecar,
+      launcherPath: sidecarOutfileBase,
+      resourceDir: sidecarResourcesDir,
+      targetTriple,
+    })
+    console.log(
+      `[build-sidecars] Linux sidecar launcher -> ${sidecarOutfileBase} (${manifest.executableSha256.slice(0, 12)})`,
+    )
+  } finally {
+    await rm(temporaryBuildDir, { recursive: true, force: true })
+  }
+} else {
+  await compileExecutable({
+    entrypoint: path.join(desktopRoot, 'sidecars/cybercode-sidecar.ts'),
+    outfileBase: sidecarOutfileBase,
+    productName: 'CyberCode Sidecar',
+    bunTarget,
+  })
+  await writeFile(
+    path.join(sidecarResourcesDir, 'manifest.json'),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        name: 'cybercode-sidecar',
+        format: 'direct-executable-v1',
+        targetTriple,
+      },
+      null,
+      2,
+    )}\n`,
+  )
+}
 
 console.log(`[build-sidecars] Built desktop sidecar for ${targetTriple} (${bunTarget})`)
 
@@ -130,7 +188,7 @@ async function compileExecutable({
   outfileBase: string
   productName: string
   bunTarget: string
-}) {
+}): Promise<string> {
   const result = await Bun.build({
     entrypoints: [entrypoint],
     // minify whitespace + identifiers + dead-code 大概能省 5-15% 的二进制大小，
@@ -196,6 +254,8 @@ async function compileExecutable({
   if (process.platform === 'darwin') {
     await adHocSignMacBinary(outputPath)
   }
+
+  return outputPath
 }
 
 async function adHocSignMacBinary(outputPath: string) {

@@ -10,6 +10,11 @@ on:
         required: false
         default: true
         type: boolean
+      build_only:
+        description: 'Build and validate all platforms without publishing a release'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -498,6 +503,7 @@ jobs:
           COMPUTER_USE_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/computer-use' -print -quit)"
           COMPUTER_USE_RUNTIME_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/computer-use-runtime' -print -quit)"
           RTK_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/rtk' -print -quit)"
+          SIDECAR_RESOURCE_DIR="$(find "$ROOT" -type d -path '*/resources/sidecar' -print -quit)"
           SIDECAR="$(find "$ROOT" -type f \( -name 'cybercode-sidecar' -o -name 'cybercode-sidecar.exe' \) -print -quit)"
           AGENT_BROWSER="$(find "$ROOT" -type f \( -name 'agent-browser' -o -name 'agent-browser.exe' \) -print -quit)"
           RTK="$(find "$ROOT" -type f \( -name 'rtk' -o -name 'rtk.exe' \) -print -quit)"
@@ -507,6 +513,7 @@ jobs:
             [ -z "$COMPUTER_USE_RESOURCE_DIR" ] || \
             [ -z "$COMPUTER_USE_RUNTIME_RESOURCE_DIR" ] || \
             [ -z "$RTK_RESOURCE_DIR" ] || \
+            [ -z "$SIDECAR_RESOURCE_DIR" ] || \
             [ -z "$SIDECAR" ] || [ ! -s "$SIDECAR" ] || \
             [ -z "$AGENT_BROWSER" ] || [ ! -s "$AGENT_BROWSER" ] || \
             [ -z "$RTK" ] || [ ! -s "$RTK" ]; then
@@ -553,6 +560,11 @@ jobs:
             find "$COMPUTER_USE_RUNTIME_RESOURCE_DIR" -maxdepth 8 -type f | sort
             exit 1
           fi
+          if [ ! -s "$SIDECAR_RESOURCE_DIR/manifest.json" ]; then
+            echo "::error::Packaged sidecar manifest is missing or empty"
+            find "$SIDECAR_RESOURCE_DIR" -maxdepth 3 -type f | sort
+            exit 1
+          fi
 
           case "$LABEL" in
             macOS-ARM64|macOS-x64)
@@ -579,6 +591,8 @@ jobs:
           COMPUTER_USE_RESOURCE_DIR="$COMPUTER_USE_RESOURCE_DIR" \
           COMPUTER_USE_RUNTIME_RESOURCE_DIR="$COMPUTER_USE_RUNTIME_RESOURCE_DIR" \
           RTK_RESOURCE_DIR="$RTK_RESOURCE_DIR" \
+          SIDECAR_RESOURCE_DIR="$SIDECAR_RESOURCE_DIR" \
+          SIDECAR="$SIDECAR" \
           TARGET_TRIPLE="$TARGET_TRIPLE" \
           LABEL="$LABEL" \
           node <<'NODE'
@@ -729,7 +743,129 @@ jobs:
               'Packaged Computer Use runtime must remain archived until first use',
             )
           }
+
+          const sidecarManifest = JSON.parse(
+            fs.readFileSync(
+              path.join(process.env.SIDECAR_RESOURCE_DIR, 'manifest.json'),
+              'utf8',
+            ),
+          )
+          if (
+            sidecarManifest.schemaVersion !== 1 ||
+            sidecarManifest.name !== 'cybercode-sidecar' ||
+            sidecarManifest.targetTriple !== process.env.TARGET_TRIPLE
+          ) {
+            throw new Error('Packaged sidecar manifest is invalid')
+          }
+
+          if (process.env.LABEL === 'Linux-x64') {
+            if (
+              sidecarManifest.format !== 'split-elf-header-v1' ||
+              typeof sidecarManifest.payload !== 'string' ||
+              path.basename(sidecarManifest.payload) !== sidecarManifest.payload ||
+              !Number.isSafeInteger(sidecarManifest.payloadSize) ||
+              sidecarManifest.payloadSize <= 0 ||
+              !/^[0-9a-f]{64}$/.test(sidecarManifest.payloadSha256 ?? '') ||
+              !Number.isSafeInteger(sidecarManifest.executableSize) ||
+              sidecarManifest.executableSize !== sidecarManifest.payloadSize + 4 ||
+              !/^[0-9a-f]{64}$/.test(sidecarManifest.executableSha256 ?? '')
+            ) {
+              throw new Error('Packaged Linux sidecar manifest is invalid')
+            }
+
+            const payload = fs.readFileSync(
+              path.join(process.env.SIDECAR_RESOURCE_DIR, sidecarManifest.payload),
+            )
+            if (
+              payload.length !== sidecarManifest.payloadSize ||
+              crypto.createHash('sha256').update(payload).digest('hex') !==
+                sidecarManifest.payloadSha256
+            ) {
+              throw new Error('Packaged Linux sidecar payload checksum is invalid')
+            }
+
+            const restoredHash = crypto
+              .createHash('sha256')
+              .update(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+              .update(payload)
+              .digest('hex')
+            if (restoredHash !== sidecarManifest.executableSha256) {
+              throw new Error('Packaged Linux sidecar cannot restore the verified ELF')
+            }
+
+            const launcher = fs.readFileSync(process.env.SIDECAR)
+            if (
+              launcher.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
+              !launcher.toString('utf8').startsWith('#!/bin/sh') ||
+              !launcher.toString('utf8').includes(sidecarManifest.executableSha256)
+            ) {
+              throw new Error('Packaged Linux sidecar launcher is invalid')
+            }
+          } else if (sidecarManifest.format !== 'direct-executable-v1') {
+            throw new Error('Packaged native sidecar manifest is invalid')
+          }
           NODE
+
+          smoke_linux_sidecar() {
+            local package_root="$1"
+            local smoke_name="$2"
+            local launcher
+            local resources
+            local smoke_home
+            local output
+            local status
+            local expected_sha256
+            local restored
+
+            launcher="$(find "$package_root" -type f -name 'cybercode-sidecar' -print -quit)"
+            resources="$(find "$package_root" -type d -path '*/resources/sidecar' -print -quit)"
+            smoke_home="$INSPECT/sidecar-home-$smoke_name"
+            if [ -z "$launcher" ] || [ -z "$resources" ]; then
+              echo "::error::$smoke_name is missing the Linux sidecar launcher or payload"
+              exit 1
+            fi
+
+            mkdir -p "$smoke_home"
+            set +e
+            output="$(
+              HOME="$smoke_home" \
+              XDG_CACHE_HOME="$smoke_home/cache" \
+              "$launcher" 2>&1
+            )"
+            status=$?
+            set -e
+            if [ "$status" -ne 2 ] || ! grep -Fq 'CyberCode sidecar: missing mode argument' <<<"$output"; then
+              echo "::error::$smoke_name could not restore and launch the Linux sidecar (exit $status)"
+              printf '%s\n' "$output"
+              exit 1
+            fi
+
+            expected_sha256="$(jq -r '.executableSha256' "$resources/manifest.json")"
+            restored="$smoke_home/cache/cybercode/sidecar/cybercode-sidecar"
+            if [ ! -x "$restored" ] || [ "$(sha256sum "$restored" | awk '{print $1}')" != "$expected_sha256" ]; then
+              echo "::error::$smoke_name restored an invalid Linux sidecar"
+              exit 1
+            fi
+          }
+
+          if [ "$LABEL" = "Linux-x64" ]; then
+            smoke_linux_sidecar "$ROOT" "deb"
+
+            APPIMAGE="$OUT/CyberCode_${VERSION}_${ASSET_SUFFIX}_portable.AppImage"
+            APPIMAGE_EXTRACT="$INSPECT/appimage"
+            mkdir -p "$APPIMAGE_EXTRACT"
+            chmod +x "$APPIMAGE"
+            (
+              cd "$APPIMAGE_EXTRACT"
+              "$APPIMAGE" --appimage-extract >/dev/null
+            )
+            APPIMAGE_ROOT="$APPIMAGE_EXTRACT/squashfs-root"
+            if [ ! -d "$APPIMAGE_ROOT" ]; then
+              echo "::error::Linux AppImage could not be extracted for validation"
+              exit 1
+            fi
+            smoke_linux_sidecar "$APPIMAGE_ROOT" "appimage"
+          fi
 
           echo "Validated packaged runtime resources for $LABEL ($GRAMMAR_COUNT Code Graph grammars)"
 
@@ -742,6 +878,7 @@ jobs:
 
   publish:
     needs: build
+    if: github.event_name != 'workflow_dispatch' || inputs.build_only != true
     runs-on: ubuntu-22.04
     name: Publish Release
 

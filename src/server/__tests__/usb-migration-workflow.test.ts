@@ -9,8 +9,10 @@ describe('desktop portable release workflow', () => {
       'utf8',
     )
 
-    expect(workflow).toContain("tauri_args: '--bundles deb,appimage'")
+    expect(workflow).toContain("tauri_args: '--verbose --bundles deb,appimage'")
     expect(workflow).toContain('CyberCode_${VERSION}_${ASSET_SUFFIX}_portable.AppImage')
+    expect(workflow).toContain('"$APPIMAGE" --appimage-extract')
+    expect(workflow).toContain('smoke_linux_sidecar "$APPIMAGE_ROOT" "appimage"')
     expect(workflow).toContain('CyberCode_${VERSION}_${ASSET_SUFFIX}_portable.zip')
     expect(workflow).toContain("'release-assets/portable.json'")
     expect(workflow).toContain("crypto.createHash('sha256')")

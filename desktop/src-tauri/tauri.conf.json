@@ -58,6 +58,7 @@
       "resources/codegraph",
       "resources/computer-use",
       "resources/computer-use-runtime",
+      "resources/sidecar",
       "resources/rtk/LICENSE",
       "resources/rtk/manifest.json",
       "resources/agent-browser/LICENSE",
