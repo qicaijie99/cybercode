@@ -57,7 +57,9 @@ describe('Linux sidecar packaging', () => {
     expect(launcher).toContain("printf '\\177ELF'")
     expect(launcher).toContain(manifest.executableSha256)
     expect(launcher).toContain('exec "$TARGET" "$@"')
-    expect(launcherMode).toBe(0o755)
+    if (process.platform !== 'win32') {
+      expect(launcherMode).toBe(0o755)
+    }
   })
 
   test('rejects unsafe payload names and invalid checksums', () => {
