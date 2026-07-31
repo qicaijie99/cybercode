@@ -13,6 +13,7 @@ describe('ConversationService', () => {
   let originalModel: string | undefined
   let originalEntrypoint: string | undefined
   let originalOAuthToken: string | undefined
+  let originalServerAuthToken: string | undefined
   let originalProviderManagedByHost: string | undefined
   let originalProviderServerPort: number
 
@@ -24,6 +25,7 @@ describe('ConversationService', () => {
     originalModel = process.env.ANTHROPIC_MODEL
     originalEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT
     originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    originalServerAuthToken = process.env.SERVER_AUTH_TOKEN
     originalProviderManagedByHost = process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
     originalProviderServerPort = ProviderService.getServerPort()
 
@@ -57,6 +59,9 @@ describe('ConversationService', () => {
 
     if (originalOAuthToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
     else process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOAuthToken
+
+    if (originalServerAuthToken === undefined) delete process.env.SERVER_AUTH_TOKEN
+    else process.env.SERVER_AUTH_TOKEN = originalServerAuthToken
 
     if (originalProviderManagedByHost === undefined) delete process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
     else process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = originalProviderManagedByHost
@@ -312,6 +317,7 @@ describe('ConversationService', () => {
   })
 
   test('buildChildEnv injects desktop Computer Use host bundle id for sdk sessions', async () => {
+    process.env.SERVER_AUTH_TOKEN = 'desktop-server-token'
     const service = new ConversationService() as any
     const env = (await service.buildChildEnv(
       '/tmp',
@@ -322,6 +328,7 @@ describe('ConversationService', () => {
       'com.cybercode.desktop',
     )
     expect(env.CYBERCODE_DESKTOP_SERVER_URL).toBe('http://127.0.0.1:3456')
+    expect(env.SERVER_AUTH_TOKEN).toBe('desktop-server-token')
     expect(env.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING).toBe('1')
   })
 

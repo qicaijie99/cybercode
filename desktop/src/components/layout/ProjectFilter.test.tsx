@@ -32,11 +32,13 @@ vi.mock('../../i18n', () => ({
 }))
 
 import { useSessionStore } from '../../stores/sessionStore'
+import { invalidateRecentProjectsCache } from '../../lib/recentProjects'
 import { ProjectFilter } from './ProjectFilter'
 
 describe('ProjectFilter', () => {
   beforeEach(() => {
     getRecentProjectsMock.mockReset()
+    invalidateRecentProjectsCache()
     useSessionStore.setState({
       sessions: [],
       activeSessionId: null,
@@ -49,6 +51,41 @@ describe('ProjectFilter', () => {
         'Users-dev-workspace-myself_code-OpenCutSkill',
         'Users-dev-workspace-myself_code-cybercode',
       ],
+    })
+  })
+
+  it('does not scan project metadata until the filter is opened', async () => {
+    const now = new Date().toISOString()
+    let resolveRecentProjects: ((value: { projects: [] }) => void) | undefined
+    getRecentProjectsMock.mockReturnValue(new Promise((resolve) => {
+      resolveRecentProjects = resolve
+    }))
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'session-local-project',
+          title: 'Local project',
+          createdAt: now,
+          modifiedAt: now,
+          messageCount: 1,
+          projectPath: 'Users-dev-local-project',
+          workDir: '/Users/dev/local-project',
+          workDirExists: true,
+          isTemporary: false,
+        },
+      ],
+      availableProjects: ['Users-dev-local-project'],
+    })
+
+    render(<ProjectFilter />)
+    expect(getRecentProjectsMock).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /All projects/i }))
+    expect(screen.getByRole('button', { name: /local-project/i })).toBeInTheDocument()
+    expect(getRecentProjectsMock).toHaveBeenCalledWith(200)
+
+    await act(async () => {
+      resolveRecentProjects?.({ projects: [] })
     })
   })
 

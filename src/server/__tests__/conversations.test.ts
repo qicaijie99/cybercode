@@ -502,6 +502,76 @@ describe('ConversationService', () => {
       await fs.rm(workDir, { recursive: true, force: true })
     }
   })
+
+  it('should base the context estimate on the main conversation, not trailing sidechain requests', async () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousNodeEnv = process.env.NODE_ENV
+    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-sidechain-'))
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-sidechain-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
+    process.env.NODE_ENV = 'development'
+
+    try {
+      const svc = new SessionService()
+      const { sessionId } = await svc.createSession(workDir)
+      const found = await svc.findSessionFile(sessionId)
+      expect(found).not.toBeNull()
+
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'assistant',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:00:00.000Z',
+        cwd: workDir,
+        version: '999.0.0-test',
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'main reply' }],
+          usage: {
+            input_tokens: 100_000,
+            output_tokens: 200,
+            cache_read_input_tokens: 80_000,
+          },
+        },
+      }) + '\n')
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'assistant',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:01:00.000Z',
+        cwd: workDir,
+        version: '999.0.0-test',
+        isSidechain: true,
+        message: {
+          role: 'assistant',
+          model: 'claude-haiku-4-5',
+          content: [{ type: 'text', text: 'subagent reply' }],
+          usage: {
+            input_tokens: 3_000,
+            output_tokens: 50,
+          },
+        },
+      }) + '\n')
+
+      const contextEstimate = await svc.getTranscriptContextEstimate(sessionId)
+
+      expect(contextEstimate?.model).toBe('claude-sonnet-4-6')
+      expect(contextEstimate?.totalTokens).toBe(180_000)
+      expect(contextEstimate?.rawMaxTokens).toBe(200_000)
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV
+      } else {
+        process.env.NODE_ENV = previousNodeEnv
+      }
+      await fs.rm(tmpConfigDir, { recursive: true, force: true })
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ============================================================================

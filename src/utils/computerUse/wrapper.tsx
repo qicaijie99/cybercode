@@ -53,6 +53,14 @@ type Binding = {
 let binding: Binding | undefined;
 let currentToolUseContext: ToolUseContext | undefined;
 const desktopServerUrl = process.env.CYBERCODE_DESKTOP_SERVER_URL;
+
+type DesktopPermissionDialogOptions = {
+  serverUrl?: string;
+  serverAuthToken?: string;
+  sessionId?: string;
+  fetchImpl?: typeof fetch;
+};
+
 function tuc(): ToolUseContext {
   // Safe: `binding` is only populated when `currentToolUseContext` is set.
   // Called only from within `ctx` callbacks, which only fire during dispatch.
@@ -233,25 +241,36 @@ export function buildSessionContext(): ComputerUseSessionContext {
   };
 }
 
-async function runDesktopPermissionDialog(
+export async function runDesktopPermissionDialog(
   req: CuPermissionRequest,
   signal: AbortSignal,
+  options: DesktopPermissionDialogOptions = {},
 ): Promise<CuPermissionResponse> {
-  if (!desktopServerUrl) {
+  const serverUrl = options.serverUrl ?? desktopServerUrl;
+  if (!serverUrl) {
     throw new Error('Desktop server URL is not configured')
   }
 
-  const response = await fetch(`${desktopServerUrl}/api/computer-use/request-access`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
+  const serverAuthToken = options.serverAuthToken ?? process.env.SERVER_AUTH_TOKEN;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+  if (serverAuthToken) {
+    headers.Authorization = `Bearer ${serverAuthToken}`;
+  }
+
+  const response = await (options.fetchImpl ?? fetch)(
+    `${serverUrl}/api/computer-use/request-access`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        sessionId: options.sessionId ?? getSessionId(),
+        request: req
+      }),
+      signal
     },
-    body: JSON.stringify({
-      sessionId: getSessionId(),
-      request: req
-    }),
-    signal
-  })
+  )
 
   if (!response.ok) {
     const message = await response.text().catch(() => '')

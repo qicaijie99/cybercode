@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MessageEntry } from '../types/session'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { sessionsApi } from '../api/sessions'
+import { wsManager } from '../api/websocket'
 import { ApiError } from '../api/client'
 
 const {
@@ -156,6 +157,9 @@ describe('chatStore history mapping', () => {
       if (session.elapsedTimer) clearInterval(session.elapsedTimer)
     }
     sendMock.mockReset()
+    vi.mocked(wsManager.connect).mockClear()
+    vi.mocked(wsManager.disconnect).mockClear()
+    vi.mocked(wsManager.clearHandlers).mockClear()
     getMemberBySessionIdMock.mockReset()
     getMemberBySessionIdMock.mockReturnValue(null)
     sendMessageToMemberMock.mockReset()
@@ -923,6 +927,117 @@ describe('chatStore history mapping', () => {
     useChatStore.getState().disconnectSession(sessionId)
   })
 
+  it('does not let a stalled background prefetch block a foreground history load', async () => {
+    vi.useFakeTimers()
+    const sessionId = 'prefetch-priority-session'
+    const getMessagesMock = vi.mocked(sessionsApi.getMessages)
+    type MessagesResponse = Awaited<ReturnType<typeof sessionsApi.getMessages>>
+    let resolvePrefetch!: (value: MessagesResponse) => void
+
+    try {
+      getMessagesMock.mockReset()
+      getMessagesMock
+        .mockImplementationOnce(() => new Promise((resolve) => { resolvePrefetch = resolve }))
+        .mockResolvedValueOnce({
+          hasMore: false,
+          messages: [{
+            id: 'foreground-user',
+            type: 'user',
+            timestamp: '2026-01-01T00:00:00.000Z',
+            content: 'foreground wins',
+          }],
+        })
+
+      const prefetch = useChatStore.getState().prefetchHistory(sessionId, '-project-priority')
+      await Promise.resolve()
+      useChatStore.getState().connectToSession(sessionId, '-project-priority', { deferSocket: true })
+      const foregroundLoad = useChatStore.getState().loadHistory(sessionId, '-project-priority')
+
+      await vi.advanceTimersByTimeAsync(100)
+      await foregroundLoad
+
+      expect(getMessagesMock).toHaveBeenCalledTimes(2)
+      expect(getMessagesMock).toHaveBeenNthCalledWith(1, sessionId, {
+        limit: 80,
+        projectPath: '-project-priority',
+      }, { timeout: 4_000 })
+      expect(getMessagesMock).toHaveBeenNthCalledWith(2, sessionId, {
+        limit: 80,
+        projectPath: '-project-priority',
+      })
+      expect(useChatStore.getState().sessions[sessionId]?.messages).toMatchObject([
+        { type: 'user_text', content: 'foreground wins' },
+      ])
+
+      resolvePrefetch({ hasMore: false, messages: [] })
+      await prefetch
+      useChatStore.getState().disconnectSession(sessionId)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('loads uncached history before opening a socket and suspends only idle old sessions', async () => {
+    const sessionId = 'socket-priority-session'
+    const getMessagesMock = vi.mocked(sessionsApi.getMessages)
+    type MessagesResponse = Awaited<ReturnType<typeof sessionsApi.getMessages>>
+    let resolveHistory!: (value: MessagesResponse) => void
+    getMessagesMock.mockReset()
+    getMessagesMock.mockImplementationOnce(() => new Promise((resolve) => { resolveHistory = resolve }))
+
+    useChatStore.setState({
+      sessions: {
+        'old-idle-session': makeSessionState({ connectionState: 'connected', chatState: 'idle' }),
+        'old-running-session': makeSessionState({ connectionState: 'connected', chatState: 'thinking' }),
+      },
+    })
+
+    const ready = useChatStore.getState().ensureSessionReady(sessionId, '-project-socket-priority')
+    const duplicateReady = useChatStore.getState().ensureSessionReady(sessionId, '-project-socket-priority')
+    await Promise.resolve()
+
+    expect(getMessagesMock).toHaveBeenCalledOnce()
+    expect(wsManager.disconnect).toHaveBeenCalledWith('old-idle-session')
+    expect(wsManager.disconnect).not.toHaveBeenCalledWith('old-running-session')
+    expect(wsManager.connect).not.toHaveBeenCalledWith(sessionId)
+    expect(useChatStore.getState().sessions['old-idle-session']?.connectionState).toBe('disconnected')
+    expect(useChatStore.getState().sessions['old-running-session']?.connectionState).toBe('connected')
+
+    resolveHistory({ hasMore: false, messages: [] })
+    await Promise.all([ready, duplicateReady])
+
+    expect(wsManager.connect).toHaveBeenCalledWith(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]?.historyLoadState).toBe('loaded')
+    useChatStore.getState().disconnectSession(sessionId)
+  })
+
+  it('does not reconnect a late history request after the user switches away', async () => {
+    const getMessagesMock = vi.mocked(sessionsApi.getMessages)
+    type MessagesResponse = Awaited<ReturnType<typeof sessionsApi.getMessages>>
+    let resolveFirst!: (value: MessagesResponse) => void
+    let resolveSecond!: (value: MessagesResponse) => void
+    getMessagesMock.mockReset()
+    getMessagesMock
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
+
+    const firstReady = useChatStore.getState().ensureSessionReady('late-session-a', '-project-a')
+    await Promise.resolve()
+    const secondReady = useChatStore.getState().ensureSessionReady('active-session-b', '-project-b')
+    await Promise.resolve()
+
+    resolveSecond({ hasMore: false, messages: [] })
+    await secondReady
+    expect(wsManager.connect).toHaveBeenCalledWith('active-session-b')
+
+    resolveFirst({ hasMore: false, messages: [] })
+    await firstReady
+    expect(wsManager.connect).not.toHaveBeenCalledWith('late-session-a')
+
+    useChatStore.getState().disconnectSession('late-session-a')
+    useChatStore.getState().disconnectSession('active-session-b')
+  })
+
   it('falls back to UUID lookup when a restored project locator is stale', async () => {
     const sessionId = 'stale-locator-session'
     const getMessagesMock = vi.mocked(sessionsApi.getMessages)
@@ -992,6 +1107,58 @@ describe('chatStore history mapping', () => {
     expect(session?.historyLoadState).toBe('loaded')
     expect(session?.allMessagesLoaded).toBe(true)
     expect(session?.messages).toEqual([])
+  })
+
+  it('ignores a stale history response after the session project locator changes', async () => {
+    type MessagesResponse = Awaited<ReturnType<typeof sessionsApi.getMessages>>
+    const getMessagesMock = vi.mocked(sessionsApi.getMessages)
+    let resolveProjectA!: (value: MessagesResponse) => void
+    let resolveProjectB!: (value: MessagesResponse) => void
+    getMessagesMock.mockReset()
+    getMessagesMock
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveProjectA = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveProjectB = resolve }))
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, '-project-a')
+    const firstLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID, '-project-a')
+    await Promise.resolve()
+
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, '-project-b')
+    const secondLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID, '-project-b')
+    await Promise.resolve()
+
+    resolveProjectA({
+      hasMore: false,
+      messages: [
+        {
+          id: 'project-a-user',
+          type: 'user',
+          timestamp: '2026-01-01T00:00:00.000Z',
+          content: 'old project history',
+        },
+      ],
+    })
+    await firstLoad
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.projectPath).toBe('-project-b')
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
+
+    resolveProjectB({
+      hasMore: false,
+      messages: [
+        {
+          id: 'project-b-user',
+          type: 'user',
+          timestamp: '2026-01-01T00:00:01.000Z',
+          content: 'current project history',
+        },
+      ],
+    })
+    await secondLoad
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
+      { type: 'user_text', content: 'current project history' },
+    ])
   })
 
   it('does not prewarm team member sessions', () => {

@@ -14,7 +14,7 @@ import { initializeDesktopServerUrl } from '../../lib/desktopRuntime'
 import { TabBar } from './TabBar'
 import { StartupErrorView } from './StartupErrorView'
 import { SettingsPanel } from './SettingsPanel'
-import { useTabStore } from '../../stores/tabStore'
+import { findActiveTab, useTabStore } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { ChatModeSidebar } from '../chat/ChatModeSidebar'
@@ -44,6 +44,7 @@ export function AppShell() {
   const settingsOpen = useUIStore((s) => s.settingsOpen)
   const closeSettings = useUIStore((s) => s.closeSettings)
   const activeTabId = useTabStore((s) => s.activeTabId)
+  const activeTabKey = useTabStore((s) => s.activeTabKey)
   const t = useTranslation()
   const [ready, setReady] = useState(false)
   const [startupError, setStartupError] = useState<string | null>(null)
@@ -57,7 +58,7 @@ export function AppShell() {
     if (settingsOpen) closeSettings()
     if (compactLayout) useUIStore.setState({ sidebarOpen: false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTabId])
+  }, [activeTabId, activeTabKey])
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -112,8 +113,8 @@ export function AppShell() {
         loadStartupSessions(),
       ])
 
-      const { activeTabId: activeId, tabs } = useTabStore.getState()
-      const activeTab = tabs.find((tab) => tab.sessionId === activeId)
+      const { activeTabId: activeId, activeTabKey: activeKey, tabs } = useTabStore.getState()
+      const activeTab = findActiveTab(tabs, activeKey, activeId)
       if (activeId && activeTab?.type === 'session') {
         try {
           await useChatStore.getState().ensureSessionReady(activeTab.sessionId, activeTab.projectPath)

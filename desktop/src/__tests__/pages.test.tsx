@@ -70,8 +70,10 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useTabStore } from '../stores/tabStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { sessionsApi } from '../api/sessions'
+import { invalidateRecentProjectsCache } from '../lib/recentProjects'
 
 beforeEach(() => {
+  invalidateRecentProjectsCache()
   useSettingsStore.setState({ locale: 'en' })
   useTabStore.setState({ tabs: [], activeTabId: null, recentSessionIds: [] })
   useSessionStore.setState({

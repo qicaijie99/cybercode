@@ -61,6 +61,10 @@ class WebSocketManager {
     this.notifyState(conn, 'connecting')
 
     ws.onopen = () => {
+      if (this.connections.get(sessionId) !== conn || conn.intentionalClose) {
+        ws.close()
+        return
+      }
       conn.reconnectAttempt = 0
       this.startPingLoop(sessionId)
       this.notifyState(conn, 'open')
@@ -71,6 +75,7 @@ class WebSocketManager {
     }
 
     ws.onmessage = (event) => {
+      if (this.connections.get(sessionId) !== conn) return
       try {
         const msg = JSON.parse(event.data as string) as ServerMessage
         for (const handler of conn.handlers) {
@@ -82,9 +87,10 @@ class WebSocketManager {
     }
 
     ws.onclose = () => {
+      if (this.connections.get(sessionId) !== conn) return
       this.stopPingLoop(sessionId)
       this.notifyState(conn, 'closed')
-      if (!conn.intentionalClose && this.connections.get(sessionId) === conn) {
+      if (!conn.intentionalClose) {
         this.scheduleReconnect(sessionId, conn)
       }
     }
@@ -106,8 +112,9 @@ class WebSocketManager {
     }
     conn.pendingMessages = []
 
-    conn.ws.close()
     this.connections.delete(sessionId)
+    this.notifyState(conn, 'closed')
+    conn.ws.close()
   }
 
   disconnectAll() {

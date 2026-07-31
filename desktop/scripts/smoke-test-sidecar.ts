@@ -25,6 +25,12 @@ if (!executable) {
 
 const temporaryHome = await mkdtemp(path.join(tmpdir(), 'cybercode-sidecar-smoke-'))
 const codeGraphAssetDir = path.join(desktopRoot, 'src-tauri', 'resources', 'codegraph')
+const computerUseRuntimeDir = path.join(
+  desktopRoot,
+  'src-tauri',
+  'resources',
+  'computer-use-runtime',
+)
 await smokeTestFreshCodeGraphIndex(executable, temporaryHome, codeGraphAssetDir)
 const port = await reserveLocalPort()
 const authToken = 'cybercode-release-smoke-test'
@@ -49,6 +55,10 @@ const child = Bun.spawn(
       CYBER_CONFIG_DIR: path.join(temporaryHome, '.cyber'),
       CLAUDE_CONFIG_DIR: path.join(temporaryHome, '.cyber'),
       SERVER_AUTH_TOKEN: authToken,
+      CYBER_COMPUTER_USE_RUNTIME_ROOT: computerUseRuntimeDir,
+      // A release smoke test must prove the bundled runtime works offline.
+      CYBERCODE_COMPUTER_USE_RUNTIME_MANIFEST_URLS:
+        'http://127.0.0.1:9/computer-use-runtime-manifest.json',
     },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -65,6 +75,7 @@ const exitPromise = child.exited.then(code => {
   return code
 })
 let healthy = false
+let computerUseFailure: string | null = null
 
 try {
   const deadline = Date.now() + 30_000
@@ -83,6 +94,14 @@ try {
     }
     await Bun.sleep(150)
   }
+
+  if (healthy) {
+    try {
+      await smokeTestBundledComputerUseRuntime(port, authToken)
+    } catch (error) {
+      computerUseFailure = error instanceof Error ? error.message : String(error)
+    }
+  }
 } finally {
   if (!exited) child.kill()
   await exitPromise
@@ -90,10 +109,16 @@ try {
 }
 
 const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise])
-if (!healthy) {
+if (!healthy || computerUseFailure) {
+  const failureSummary = healthy
+    ? '[sidecar-smoke] Bundled Computer Use runtime validation failed'
+    : `[sidecar-smoke] Server failed to become healthy (exit ${exitCode ?? 'unknown'})`
   throw new Error(
     [
-      `[sidecar-smoke] Server failed to become healthy (exit ${exitCode ?? 'unknown'})`,
+      failureSummary,
+      computerUseFailure
+        ? `[computer-use]\n${computerUseFailure}`
+        : '',
       stdout.trim() ? `[stdout]\n${stdout.trim()}` : '',
       stderr.trim() ? `[stderr]\n${stderr.trim()}` : '',
     ]
@@ -103,8 +128,94 @@ if (!healthy) {
 }
 
 console.log(
-  `[sidecar-smoke] ${targetTriple} fresh Code Graph index and /health succeeded`,
+  `[sidecar-smoke] ${targetTriple} fresh Code Graph index, /health, and offline Computer Use runtime succeeded`,
 )
+
+async function smokeTestBundledComputerUseRuntime(port: number, authToken: string) {
+  const runtimeUrl = `http://127.0.0.1:${port}/api/computer-use/runtime`
+  const statusUrl = `http://127.0.0.1:${port}/api/computer-use/status`
+  const headers = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${authToken}`,
+  }
+
+  const unauthorized = await fetch(runtimeUrl, {
+    signal: AbortSignal.timeout(5_000),
+  })
+  if (unauthorized.status !== 401) {
+    throw new Error(
+      `Computer Use runtime endpoint accepted an unauthenticated request (HTTP ${unauthorized.status})`,
+    )
+  }
+
+  const start = await fetch(runtimeUrl, {
+    method: 'POST',
+    headers,
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (!start.ok) {
+    throw new Error(
+      `Computer Use runtime preparation failed to start (HTTP ${start.status}): ${await start.text()}`,
+    )
+  }
+
+  const deadline = Date.now() + 180_000
+  let lastRuntime: {
+    phase?: string
+    ready?: boolean
+    source?: string | null
+    error?: string | null
+  } = {}
+
+  while (Date.now() < deadline) {
+    const response = await fetch(runtimeUrl, {
+      headers,
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!response.ok) {
+      throw new Error(
+        `Computer Use runtime status failed (HTTP ${response.status}): ${await response.text()}`,
+      )
+    }
+    lastRuntime = await response.json()
+    if (lastRuntime.ready) break
+    if (lastRuntime.phase === 'error') {
+      throw new Error(lastRuntime.error || 'Computer Use runtime entered the error state')
+    }
+    await Bun.sleep(250)
+  }
+
+  if (!lastRuntime.ready) {
+    throw new Error(
+      `Computer Use runtime did not become ready: ${JSON.stringify(lastRuntime)}`,
+    )
+  }
+
+  const statusResponse = await fetch(statusUrl, {
+    headers,
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!statusResponse.ok) {
+    throw new Error(
+      `Computer Use environment status failed (HTTP ${statusResponse.status}): ${await statusResponse.text()}`,
+    )
+  }
+  const status = (await statusResponse.json()) as {
+    supported?: boolean
+    runtime?: { ready?: boolean; source?: string | null }
+    python?: { installed?: boolean; version?: string | null }
+    dependencies?: { installed?: boolean }
+  }
+  if (
+    status.supported !== true ||
+    status.runtime?.ready !== true ||
+    status.python?.installed !== true ||
+    !status.python.version ||
+    status.dependencies?.installed !== true
+  ) {
+    throw new Error(`Computer Use environment is incomplete: ${JSON.stringify(status)}`)
+  }
+}
 
 async function smokeTestFreshCodeGraphIndex(
   sidecarExecutable: string,
