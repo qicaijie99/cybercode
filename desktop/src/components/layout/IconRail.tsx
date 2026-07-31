@@ -157,13 +157,6 @@ export function IconRail({ __testTopRailHeight }: IconRailProps = {}) {
       onClick: () => handlePanelView('computerUse'),
       icon: Monitor,
     },
-    {
-      key: 'ssh',
-      active: isPanelActive('ssh'),
-      label: t('settings.tab.ssh'),
-      onClick: () => handlePanelView('ssh'),
-      icon: Globe,
-    },
   ], [handlePanelView, isPanelActive, sidebarOpen, t, toggleSidebar])
 
   const pinnedMoreItems = useMemo<RailActionItem[]>(() => [
@@ -201,6 +194,13 @@ export function IconRail({ __testTopRailHeight }: IconRailProps = {}) {
       label: t('settings.tab.plugins'),
       onClick: () => handlePanelView('plugins'),
       icon: Grid,
+    },
+    {
+      key: 'ssh',
+      active: isPanelActive('ssh'),
+      label: t('settings.tab.ssh'),
+      onClick: () => handlePanelView('ssh'),
+      icon: Globe,
     },
   ], [handlePanelView, isPanelActive, t])
 
